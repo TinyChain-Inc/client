@@ -1,0 +1,22 @@
+# Workspace / OS
+.DS_Store
+
+# Env files (keep secrets out of git by default)
+.env
+.env.*
+
+# Python (repo-root venv/caches when running `pytest py/...`)
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Common build artifacts (defensive)
+target/
+node_modules/
+dist/
+build/
+coverage/

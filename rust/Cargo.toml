@@ -1,0 +1,12 @@
+[package]
+name = "tinychain-local"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "tinychain_local"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.21", features = ["macros", "extension-module"] }
+tinychain = { path = "../../tc-server", default-features = false, features = ["pyo3", "wasm"] }
