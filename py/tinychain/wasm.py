@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import pathlib
 from typing import Optional, Union
 
@@ -26,6 +27,7 @@ def install(
     *,
     kernel: Optional[object] = None,
     data_dir: Optional[pathlib.Path] = None,
+    bearer_token: Optional[str] = None,
 ) -> object:
     try:
         import tinychain_local as local  # type: ignore
@@ -34,13 +36,24 @@ def install(
             "`tc.wasm.install` requires the optional `tinychain-local` backend"
         ) from exc
 
+    schema_value = schema if isinstance(schema, dict) else _read_schema(schema)
+
     if kernel is None:
         if data_dir is None:
             raise ValueError("expected either `kernel` or `data_dir`")
-        kernel = local.KernelHandle.local(data_dir=str(data_dir))
-
-    schema_value = schema if isinstance(schema, dict) else _read_schema(schema)
-
+        token_host = os.environ.get("TC_TOKEN_HOST")
+        actor_id = os.environ.get("TC_ACTOR_ID")
+        public_key_b64 = os.environ.get("TC_PUBLIC_KEY_B64")
+        if token_host and actor_id and public_key_b64:
+            kernel = local.KernelHandle.with_library_schema_rjwt(
+                json.dumps(schema_value, separators=(",", ":")),
+                token_host,
+                actor_id,
+                public_key_b64,
+                data_dir=str(data_dir),
+            )
+        else:
+            kernel = local.KernelHandle.local(data_dir=str(data_dir))
     payload = json.dumps(
         {
             "schema": schema_value,
@@ -55,5 +68,8 @@ def install(
         separators=(",", ":"),
     )
 
-    request = local.KernelRequest("PUT", "/lib", None, local.StateHandle(payload))
+    headers = None
+    if bearer_token is not None:
+        headers = [("authorization", f"Bearer {bearer_token}")]
+    request = local.KernelRequest("PUT", "/lib", headers, local.StateHandle(payload))
     return kernel.dispatch(request)

@@ -15,6 +15,7 @@ import argparse
 import pathlib
 import tempfile
 from typing import Optional
+import os
 
 try:
     import tinychain as tc
@@ -25,7 +26,10 @@ except ImportError as exc:  # pragma: no cover
 
 REPO_ROOT = tc.testing.repo_root()
 
-BEARER_TOKEN = "test-token"
+BEARER_TOKEN = os.environ.get("TC_BEARER_TOKEN")
+TOKEN_HOST = os.environ.get("TC_TOKEN_HOST")
+ACTOR_ID = os.environ.get("TC_ACTOR_ID")
+PUBLIC_KEY_B64 = os.environ.get("TC_PUBLIC_KEY_B64")
 
 
 class RemoteB(tc.Library):
@@ -94,12 +98,26 @@ def test_local_wasm_resolves_remote_opref(authority: str, wasm_path: pathlib.Pat
         data_dir.mkdir(parents=True, exist_ok=True)
 
         a = LocalWasmA(b)
-        kernel = tc.kernel.for_library(a, data_dir=data_dir)
+        if not BEARER_TOKEN or not TOKEN_HOST or not ACTOR_ID or not PUBLIC_KEY_B64:
+            raise RuntimeError(
+                "TC_BEARER_TOKEN must be set to a bearer token with install and txn claims. "
+                "Generate one via: "
+                "cargo run --example rjwt_install_token -- "
+                "--host http://127.0.0.1:8702 --actor example-admin "
+                "--lib /lib/example-devco/a/0.1.0"
+            )
 
-        install = tc.wasm.install(a.schema(), wasm_path, kernel=kernel, data_dir=data_dir)
+        install = tc.wasm.install(
+            a.schema(),
+            wasm_path,
+            data_dir=data_dir,
+            bearer_token=BEARER_TOKEN,
+        )
         assert install.status == 204
 
-        with tc.backend(kernel, bearer_token=BEARER_TOKEN):
+        kernel = tc.kernel.for_library(a, data_dir=data_dir)
+
+        with tc.backend(kernel):
             assert tc.execute(b.hello("World")) == "Hello, World!"
 
             # Local WASM call, where the WASM export returns an OpRef pointing at B; the kernel resolves

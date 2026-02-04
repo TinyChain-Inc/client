@@ -105,6 +105,28 @@ If you want the script to spawn the remote host automatically, from the runtime 
 cargo build --manifest-path tc-server/Cargo.toml --example http_rpc_native_host
 ```
 
+Note: WASM installs now require authorization. The example expects `TC_BEARER_TOKEN` to be set
+to a bearer token which includes the `/lib/...` install claim (see the token generator below).
+When using signed tokens, also set `TC_TOKEN_HOST`, `TC_ACTOR_ID`, and `TC_PUBLIC_KEY_B64` so
+the local PyO3 kernel can verify the signature.
+
+You can generate a signed bearer token (and public key) with the Rust example:
+
+```bash
+cargo run --example rjwt_install_token -- \
+  --host http://127.0.0.1:8702 \
+  --actor example-admin \
+  --lib /lib/example-devco/a/0.1.0 \
+  --lib /lib/example-devco/example/0.1.0
+```
+
+Or run the helper script to generate a token, set the env vars, and execute the Python
+installer + integration example end-to-end:
+
+```bash
+scripts/run_python_integration_with_token.sh
+```
+
 ## WASM installer regression
 
 The `py/tests/test_install_wasm_script.py` test exercises the
@@ -126,6 +148,15 @@ cargo build --manifest-path tc-wasm/Cargo.toml --example hello_wasm --target was
 
 # from the client repo root:
 python -m pytest py/tests/test_install_wasm_script.py -vv
+```
+
+If you call `py/bin/install_wasm.py` directly, pass `--bearer-token` to authorize the install:
+
+```bash
+python py/bin/install_wasm.py tc-server/examples/library_schema_example.json \
+  tc-wasm/target/wasm32-unknown-unknown/release/examples/hello_wasm.wasm \
+  --data-dir /tmp/tc-data \
+  --bearer-token test-token
 ```
 
 Run the build by hand before invoking pytest (or set `TC_AUTO_BUILD_WASM=1` to let

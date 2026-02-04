@@ -29,9 +29,20 @@ def main() -> None:
         type=pathlib.Path,
         help="Optional data directory to persist the library",
     )
+    parser.add_argument(
+        "--bearer-token",
+        type=str,
+        default=None,
+        help="Optional bearer token for authorized installs",
+    )
     args = parser.parse_args()
 
-    response = install(args.schema, args.wasm, data_dir=args.data_dir)
+    response = install(
+        args.schema,
+        args.wasm,
+        data_dir=args.data_dir,
+        bearer_token=args.bearer_token,
+    )
     if response.status != 204:
         body = _body_text(response.body) if response.body else ""
         raise RuntimeError(
@@ -45,8 +56,15 @@ def install(
     *,
     kernel: "tc.KernelHandle | None" = None,
     data_dir: pathlib.Path | None = None,
+    bearer_token: str | None = None,
 ) -> "tc.KernelResponse":
-    return tc.wasm.install(schema_path, wasm_path, kernel=kernel, data_dir=data_dir)
+    return tc.wasm.install(
+        schema_path,
+        wasm_path,
+        kernel=kernel,
+        data_dir=data_dir,
+        bearer_token=bearer_token,
+    )
 
 
 if __name__ == "__main__":

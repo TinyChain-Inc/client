@@ -2,6 +2,7 @@ import importlib.util
 import json
 import pathlib
 
+import os
 import pytest
 
 import tinychain as tc
@@ -11,6 +12,7 @@ from .support import REPO_ROOT, ensure_wasm_example_built
 
 SCRIPT_PATH = REPO_ROOT / "client" / "py" / "bin" / "install_wasm.py"
 SCHEMA_PATH = REPO_ROOT / "tc-server" / "examples" / "library_schema_example.json"
+BEARER_TOKEN = os.environ.get("TC_BEARER_TOKEN")
 
 
 def _load_install_wasm():
@@ -29,6 +31,12 @@ def _sanitize_id(schema_id: str) -> str:
 
 
 def test_install_wasm_script_registers_routes(tmp_path):
+    if not BEARER_TOKEN:
+        pytest.skip(
+            "TC_BEARER_TOKEN not set; generate one via "
+            "`cargo run --example rjwt_install_token -- "
+            "--host http://127.0.0.1:8702 --actor example-admin --lib /lib/example-devco/a/0.1.0`"
+        )
     wasm_path = ensure_wasm_example_built("hello_wasm")
     data_dir = tmp_path / "tc-data"
     data_dir.mkdir()
@@ -37,6 +45,7 @@ def test_install_wasm_script_registers_routes(tmp_path):
         SCHEMA_PATH,
         wasm_path,
         data_dir=data_dir,
+        bearer_token=BEARER_TOKEN,
     )
     assert response.status == 204
 
