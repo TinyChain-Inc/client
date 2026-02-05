@@ -17,6 +17,18 @@ def _unwrap_scalar_value(payload: object) -> object:
     return payload
 
 
+def _unwrap_state(payload: object) -> object:
+    if isinstance(payload, dict) and len(payload) == 1:
+        (key, value), = payload.items()
+        if isinstance(key, str) and key.startswith(_SCALAR_VALUE_PREFIX):
+            return _unwrap_state(value)
+        if key == "/state/scalar/map" and isinstance(value, dict):
+            return {k: _unwrap_state(v) for k, v in value.items()}
+    if isinstance(payload, list):
+        return [_unwrap_state(item) for item in payload]
+    return payload
+
+
 def decode_json_body(response: "object"):
     body = getattr(response, "body", None)
     if body is None:
@@ -24,7 +36,7 @@ def decode_json_body(response: "object"):
 
     value = body.value()
     text = value.to_json() if hasattr(value, "to_json") else value
-    return _unwrap_scalar_value(json.loads(text))
+    return _unwrap_state(json.loads(text))
 
 
 def response_json(response: "object"):

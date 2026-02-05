@@ -168,7 +168,7 @@ workflow working end to end.
 ## How WASM libraries surface through PyO3
 
 `tinychain-local` exposes the same kernel that powers the HTTP runtime. When you install the
-optional backend and then pass `data_dir=...` to `tc.KernelHandle`/`tc.Backend`, the PyO3 layer hydrates `LibraryDir`
+optional backend and then pass `data_dir=...` to `tc.KernelHandle`/`tc.Backend`, the PyO3 layer hydrates per-library storage
 and registers every WASM library found under `<data-dir>/lib/<id>/<version>`.
 That means:
 

@@ -52,7 +52,7 @@ def test_install_wasm_script_registers_routes(tmp_path):
     hydrated_kernel = tc.KernelHandle.local(data_dir=str(data_dir))
 
     schema_response = hydrated_kernel.dispatch(
-        tc.KernelRequest("GET", "/lib", None, None)
+        tc.KernelRequest("GET", "/lib/example-devco/example/0.1.0", None, None)
     )
     assert schema_response.status == 200
     schema_json = tc.testing.decode_json_body(schema_response)
@@ -69,6 +69,7 @@ def test_install_wasm_script_registers_routes(tmp_path):
     assert route_response.status == 200
     assert tc.testing.decode_json_body(route_response) == "Hello, world!"
 
-    lib_path = data_dir / "lib" / _sanitize_id(schema_json["id"]) / schema_json["version"]
+    lib_rel = schema_json["id"].lstrip("/").split("/")
+    lib_path = data_dir.joinpath(*lib_rel)
     assert (lib_path / "schema.json").exists()
     assert (lib_path / "library.wasm").exists()

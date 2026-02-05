@@ -20,7 +20,7 @@ def test_kernel_handle_installs_library_via_rust_handlers():
     )
     kernel = tc.KernelHandle.with_library_schema(initial_schema)
 
-    get_request = tc.KernelRequest("GET", "/lib", None, None)
+    get_request = tc.KernelRequest("GET", "/lib/hello", None, None)
     response = kernel.dispatch(get_request)
     assert response.status == 200
     assert tc.testing.decode_json_body(response)["version"] == "0.1.0"
@@ -34,6 +34,6 @@ def test_kernel_handle_installs_library_via_rust_handlers():
     put_response = kernel.dispatch(put_request)
     assert put_response.status == 204
 
-    response_after = kernel.dispatch(tc.KernelRequest("GET", "/lib", None, None))
+    response_after = kernel.dispatch(tc.KernelRequest("GET", "/lib/hello", None, None))
     assert response_after.status == 200
     assert tc.testing.decode_json_body(response_after)["version"] == "0.2.0"
