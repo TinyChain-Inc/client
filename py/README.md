@@ -429,6 +429,19 @@ standard transactional guard—exactly as if the graph were authored inside the 
 keeps batched Python workloads aligned with native handlers without inventing new protocol
 semantics.
 
+### Compute graph payloads (Op-graph IR)
+
+For numerically heavy workloads (e.g. linear algebra and fixed-count training loops), the client
+also exposes an **Op-graph** builder in `tinychain.compute`. This produces a deterministic, typed
+payload intended for:
+
+- static analysis (e.g., FLOP accounting), and
+- conservative bound propagation/certification prior to execution.
+
+The builder is intentionally separate from `TCRef` graphs: it is a self-describing DAG with
+explicit type parameters (e.g., tensor shapes/dtypes) and explicit operator invocations, so a
+host-side analyzer can reject graphs it cannot analyze/certify with actionable errors.
+
 ### `TCRef` helpers
 
 Python bindings expose lightweight helpers for constructing `TCRef` graphs: every `State`,

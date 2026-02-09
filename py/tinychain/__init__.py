@@ -7,6 +7,7 @@ from .opref import OpRef
 from .ref import Ref, String, Json
 from .uri import URI
 from . import define
+from . import compute
 from . import kernel
 from . import uri
 from . import testing
@@ -28,6 +29,7 @@ __all__ = [
     "Json",
     "URI",
     "define",
+    "compute",
     "kernel",
     "get",
     "put",
