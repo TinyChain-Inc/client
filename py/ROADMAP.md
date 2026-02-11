@@ -24,12 +24,18 @@
    - Enforce the same dependency whitelist + egress gates for Python-defined libraries as for WASM-defined libraries.
    - Keep compilation deterministic at install time (no adapter-specific branching/looping; long workflows remain `While` queues).
 
-4. **Optional session ergonomics (no exposed txn IDs).**
+5. **Autograph-style opdef compilation (AST rewrite).**
+   - Add an AST transform for `@tc.get/@tc.post/@tc.put/@tc.delete` so local assignments (e.g. `n = 2`) are lowered to context bindings (`cxt.n = autobox(2)`), without requiring explicit `cxt` plumbing in user code.
+   - Restrict the supported surface to a minimal, deterministic subset (no `global`, `nonlocal`, `with`, comprehensions, `yield`, or dynamic `exec`), and surface clear errors when unsupported syntax is encountered.
+   - Preserve v1 behavior as the fallback: explicit `cxt/ctx/txn` still compiles without AST rewriting, and mixed use of implicit+explicit bindings is rejected.
+   - Keep the transform local to the Python client; emitted IR remains standard `Scalar`/`TCRef`/`OpRef` encodings so hosts see a single execution path.
+
+6. **Optional session ergonomics (no exposed txn IDs).**
    - Keep HTTP clients free of transaction handles; sessions are purely a batching convenience that can be disabled per request.
    - Document how session batching maps to server-managed transactions without surfacing `txn_id`, and ensure disabling sessions yields v1-equivalent semantics.
    - Maintain PyO3 bindings without transaction helpers so the kernel stays the sole owner of transaction state.
 
-5. **LogChain helpers (planned).**
+7. **LogChain helpers (planned).**
    - Expose a `tc.logchain` module that wraps `/logchain/topics`, `/logchain/subscribe`, `/logchain/export`, and `/logchain/publish`.
    - Provide both blocking (batch export) and async/streaming helpers (SSE/WebSocket) so TinyChain `Service`s implemented with the Python client can tail or emit logs as part of rollout guards, diagnostics, or governance workflows.
    - Reuse existing capability-token handling; LogChain access simply requires the appropriate tokens.

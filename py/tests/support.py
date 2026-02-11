@@ -11,8 +11,10 @@ REPO_ROOT = tc.testing.repo_root()
 
 
 def require_cargo() -> None:
+    if tc.testing.rjwt_install_token_bin() is not None:
+        return
     if not tc.testing.cargo_available():
-        pytest.skip("`cargo` not found; install Rust tooling to run this test")
+        pytest.skip("`cargo` not found and rjwt_install_token binary missing")
 
 
 def wasm_example_artifact(example_name: str) -> pathlib.Path:
@@ -70,3 +72,70 @@ def ensure_wasm_example_built(example_name: str) -> pathlib.Path:
         )
 
     return artifact
+
+
+def rjwt_install_token(*lib_paths: str) -> dict[str, str]:
+    require_cargo()
+    host = os.environ.get("TC_TOKEN_HOST", "http://127.0.0.1:8702")
+    actor_id = os.environ.get("TC_ACTOR_ID", "example-admin")
+
+    binary = os.environ.get("TC_RJWT_INSTALL_TOKEN_BIN")
+    if binary:
+        args = [
+            binary,
+            "--host",
+            host,
+            "--actor",
+            actor_id,
+        ]
+    else:
+        bin_path = tc.testing.rjwt_install_token_bin()
+        if bin_path is not None:
+            args = [
+                str(bin_path),
+                "--host",
+                host,
+                "--actor",
+                actor_id,
+            ]
+        else:
+            args = [
+                "cargo",
+                "run",
+                "--manifest-path",
+                str(REPO_ROOT / "tc-server" / "Cargo.toml"),
+                "--example",
+                "rjwt_install_token",
+                "--",
+                "--host",
+                host,
+                "--actor",
+                actor_id,
+            ]
+    for lib_path in lib_paths:
+        args.extend(["--lib", lib_path])
+
+    try:
+        result = subprocess.run(
+            args,
+            cwd=REPO_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as err:
+        pytest.fail(f"failed to mint install token: {err.stderr or err}")
+
+    values: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        if ": " not in line:
+            continue
+        key, value = line.split(": ", 1)
+        if key in {"host", "actor_id", "public_key_b64", "bearer_token"}:
+            values[key] = value.strip()
+
+    missing = [key for key in ("host", "actor_id", "public_key_b64", "bearer_token") if key not in values]
+    if missing:
+        pytest.fail(f"token output missing fields: {', '.join(missing)}")
+
+    return values

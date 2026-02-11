@@ -33,14 +33,10 @@ PUBLIC_KEY_B64 = os.environ.get("TC_PUBLIC_KEY_B64")
 
 
 class RemoteB(tc.Library):
-    def __init__(self, authority: tc.URI) -> None:
-        super().__init__(
-            publisher="example-devco",
-            name="example",
-            version="0.1.0",
-            dependencies=(),
-            authority=authority,
-        )
+    publisher = "example-devco"
+    name = "example"
+    version = "0.1.0"
+    dependencies = ()
 
     @tc.get
     def hello(self, name: str) -> tc.String:
@@ -48,13 +44,9 @@ class RemoteB(tc.Library):
 
 
 class LocalWasmA(tc.Library):
-    def __init__(self, b: RemoteB) -> None:
-        super().__init__(
-            publisher="example-devco",
-            name="a",
-            version="0.1.0",
-            dependencies=(b.link(),),
-        )
+    publisher = "example-devco"
+    name = "a"
+    version = "0.1.0"
 
     @tc.get
     def from_b(self, name: str) -> tc.String:
@@ -92,12 +84,12 @@ def _ensure_opref_wasm() -> pathlib.Path:
 
 
 def test_local_wasm_resolves_remote_opref(authority: str, wasm_path: pathlib.Path) -> None:
-    b = RemoteB(tc.URI.parse(authority))
+    b = RemoteB(authority=tc.URI.parse(authority))
     with tempfile.TemporaryDirectory(prefix="tinychain-data-") as temp_dir:
         data_dir = pathlib.Path(temp_dir) / "tc-data"
         data_dir.mkdir(parents=True, exist_ok=True)
 
-        a = LocalWasmA(b)
+        a = LocalWasmA(dependencies=(b.link(),))
         if not BEARER_TOKEN or not TOKEN_HOST or not ACTOR_ID or not PUBLIC_KEY_B64:
             raise RuntimeError(
                 "TC_BEARER_TOKEN must be set to a bearer token with install and txn claims. "

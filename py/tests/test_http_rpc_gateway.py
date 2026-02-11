@@ -15,16 +15,11 @@ def test_pyo3_kernel_resolves_opref_over_http_gateway():
         prefer_binary=False,
     )
     try:
-        b_root = tc.uri.library(publisher="example-devco", name="example", version="0.1.0").path
-        b_hello = tc.uri.library(
-            publisher="example-devco",
-            name="example",
-            version="0.1.0",
-            path=["hello"],
-        ).path
+        b_root = tc.uri("lib", "example-devco", "example", "0.1.0").path
+        b_hello = tc.uri("lib", "example-devco", "example", "0.1.0", "hello").path
 
         schema = json.dumps(
-            {"id": tc.uri.library(publisher="example-devco", name="local", version="0.1.0").path, "version": "0.1.0", "dependencies": [b_root]},
+            {"id": tc.uri("lib", "example-devco", "local", "0.1.0").path, "version": "0.1.0", "dependencies": [b_root]},
             separators=(",", ":"),
         )
         kernel = tc.KernelHandle.with_library_schema_and_dependency_route(
@@ -40,6 +35,6 @@ def test_pyo3_kernel_resolves_opref_over_http_gateway():
         assert tc.testing.decode_json_body(response) == "Hello, World!"
 
         with pytest.raises(ValueError):
-            kernel.resolve_get(tc.uri.service_root(), bearer_token="test-token")
+            kernel.resolve_get(tc.uri("service").path, bearer_token="test-token")
     finally:
         proc.kill()

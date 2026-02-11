@@ -18,8 +18,57 @@ def _headers_to_list(headers: Optional[Iterable[tuple[str, str]]]) -> list[tuple
 def _encode_json_body(value: Any) -> "object":
     import tinychain as tc
 
-    payload = json.dumps(value, separators=(",", ":"))
-    return tc.StateHandle(payload)
+    payload = json.dumps(_encode_payload(value), separators=(",", ":")).encode("utf-8")
+    try:
+        return tc.StateHandle(payload)
+    except ImportError:
+        return payload
+
+
+def _encode_payload(value: Any) -> Any:
+    from . import define
+    from .state import (
+        IdRef,
+        IfRef,
+        OpDef,
+        OpRef as StateOpRef,
+        Scalar,
+        TCRef,
+        While,
+        autobox,
+    )
+    from .state.value import Value
+    from .uri import URI
+
+    if hasattr(value, "__tc_route__") and hasattr(value, "__tc_instance__"):
+        return autobox(define.opdef(value)).to_json()
+
+    if isinstance(
+        value,
+        (
+            Scalar,
+            Value,
+            TCRef,
+            IfRef,
+            While,
+            IdRef,
+            OpDef,
+            StateOpRef,
+            URI,
+        ),
+    ):
+        return autobox(value).to_json()
+
+    if isinstance(value, (list, tuple)):
+        return [_encode_payload(item) for item in value]
+
+    if isinstance(value, dict):
+        return {key: _encode_payload(item) for key, item in value.items()}
+
+    if hasattr(value, "to_json"):
+        return value.to_json()
+
+    return value
 
 
 @dataclass(slots=True)

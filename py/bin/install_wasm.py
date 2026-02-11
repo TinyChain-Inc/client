@@ -33,7 +33,7 @@ def main() -> None:
         "--bearer-token",
         type=str,
         default=None,
-        help="Optional bearer token for authorized installs",
+        help="Bearer token for authorized installs",
     )
     args = parser.parse_args()
 

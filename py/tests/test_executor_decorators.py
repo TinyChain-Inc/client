@@ -55,21 +55,26 @@ def test_stub_route_dispatch(monkeypatch):
     kernel = _Kernel()
 
     class A(tc.Library):
+        publisher = "example-devco"
+        name = "a"
+        version = "0.1.0"
+
         @tc.define.get
         def hello(self):
             ...
 
-    a = A(publisher="example-devco", name="a", version="0.1.0")
+    a = A()
 
     op = a.hello()
     assert isinstance(op, tc.OpRef)
     assert op.method == "GET"
-    assert op.path == "/lib/example-devco/a/0.1.0/hello"
+    expected = tc.uri(a, "hello").path
+    assert op.path == expected
 
     with tc.backend(kernel):
         assert tc.execute(a.hello()) == "ok"
 
-    assert kernel.resolved == [("GET", "/lib/example-devco/a/0.1.0/hello", None, None)]
+    assert kernel.resolved == [("GET", expected, None, None)]
 
 
 def test_stub_route_resolve(monkeypatch):
@@ -78,27 +83,36 @@ def test_stub_route_resolve(monkeypatch):
     kernel = _Kernel()
 
     class B(tc.Library):
+        publisher = "example-devco"
+        name = "b"
+        version = "0.1.0"
+
         @tc.define.get
         def hello(self):
             ...
 
-    b = B(publisher="example-devco", name="b", version="0.1.0")
+    b = B()
 
     with tc.backend(kernel, bearer_token="t"):
         assert tc.execute(b.hello()) == "ok"
 
-    assert kernel.resolved == [("GET", "/lib/example-devco/b/0.1.0/hello", None, "t")]
+    expected = tc.uri(b, "hello").path
+    assert kernel.resolved == [("GET", expected, None, "t")]
 
 
 def test_stub_route_uses_v1_style_return_type(monkeypatch):
     monkeypatch.setattr(tc, "KernelRequest", _Request)
 
     class C(tc.Library):
+        publisher = "example-devco"
+        name = "c"
+        version = "0.1.0"
+
         @tc.define.get
         def hello(self) -> tc.String:
             ...
 
-    c = C(publisher="example-devco", name="c", version="0.1.0")
+    c = C()
     ref = c.hello()
     assert isinstance(ref, tc.String)
     assert isinstance(ref.op, tc.OpRef)
@@ -110,11 +124,15 @@ def test_stub_route_accepts_body_and_dispatches(monkeypatch):
     kernel = _Kernel()
 
     class D(tc.Library):
+        publisher = "example-devco"
+        name = "d"
+        version = "0.1.0"
+
         @tc.define.get
         def hello(self) -> tc.String:
             ...
 
-    d = D(publisher="example-devco", name="d", version="0.1.0")
+    d = D()
     ref = d.hello("World")
     assert isinstance(ref, tc.String)
     assert ref.op.body == "World"
@@ -125,5 +143,6 @@ def test_stub_route_accepts_body_and_dispatches(monkeypatch):
     assert kernel.dispatched == []
     assert len(kernel.resolved) == 1
     method, path, body, token = kernel.resolved[0]
-    assert (method, path, token) == ("GET", "/lib/example-devco/d/0.1.0/hello", None)
+    expected = tc.uri(d, "hello").path
+    assert (method, path, token) == ("GET", expected, None)
     assert body is not None

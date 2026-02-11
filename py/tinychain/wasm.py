@@ -6,6 +6,8 @@ import os
 import pathlib
 from typing import Optional, Union
 
+from .uri import uri
+
 
 Schema = Union[pathlib.Path, dict]
 
@@ -36,6 +38,9 @@ def install(
             "`tc.wasm.install` requires the optional `tinychain-local` backend"
         ) from exc
 
+    if bearer_token is None:
+        raise ValueError("expected `bearer_token` for WASM installs")
+
     schema_value = schema if isinstance(schema, dict) else _read_schema(schema)
 
     if kernel is None:
@@ -59,7 +64,7 @@ def install(
             "schema": schema_value,
             "artifacts": [
                 {
-                    "path": "/lib/wasm",
+                    "path": uri("lib", "wasm").path,
                     "content_type": "application/wasm",
                     "bytes": _read_wasm_b64(wasm_path),
                 }
@@ -68,8 +73,6 @@ def install(
         separators=(",", ":"),
     )
 
-    headers = None
-    if bearer_token is not None:
-        headers = [("authorization", f"Bearer {bearer_token}")]
-    request = local.KernelRequest("PUT", "/lib", headers, local.StateHandle(payload))
+    headers = [("authorization", f"Bearer {bearer_token}")]
+    request = local.KernelRequest("PUT", uri("lib").path, headers, local.StateHandle(payload))
     return kernel.dispatch(request)

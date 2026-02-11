@@ -4,15 +4,15 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Literal, Mapping, Optional
 
 from .opref import OpRef
-from . import uri
+from .uri import uri
 
 
 DType = Literal["i64", "u64", "f32", "f64"]
 
-TENSOR_CLASS: str = "/state/collection/tensor"
-NUMBER_CLASS: str = "/state/scalar/value/number"
+TENSOR_CLASS: str = uri("state", "collection", "tensor").path
+NUMBER_CLASS: str = uri("state", "scalar", "value", "number").path
 
-NUMERIC_OPS_CLASS_ROOT: str = "/class/tinychain/numeric/0.1.0"
+NUMERIC_OPS_CLASS_ROOT: str = uri("class", "tinychain", "numeric", "0.1.0").path
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,7 +175,7 @@ class OpGraph:
     _next_value: int = 0
     _next_node: int = 0
 
-    TYPE_TAG: str = "/state/scalar/value/op_graph"
+    TYPE_TAG: str = uri("state", "scalar", "value", "op_graph").path
 
     def _alloc_value(self, name: str) -> int:
         if name in self._values:
@@ -273,12 +273,7 @@ def analyze_opref(
     if target:
         body["target"] = target.to_json()
 
-    path = uri.library(
-        publisher=publisher,
-        name="compute",
-        version=compute_version,
-        path=("analyze",),
-    ).path
+    path = uri("lib", publisher, "compute", compute_version, "analyze").path
 
     return OpRef(method="POST", path=path, body=body)
 
@@ -294,12 +289,7 @@ def run_opref(
     publisher: str = "tinychain",
     headers: Optional[Iterable[tuple[str, str]]] = None,
 ) -> OpRef[Any]:
-    path = uri.library(
-        publisher=publisher,
-        name="compute",
-        version=compute_version,
-        path=("run",),
-    ).path
+    path = uri("lib", publisher, "compute", compute_version, "run").path
 
     op = OpRef(method="POST", path=path, body={"graph": graph.to_json(), "inputs": dict(inputs)})
     return op.with_headers(headers)

@@ -77,18 +77,6 @@ class URI:
         return self.absolute()
 
 
-def healthz() -> str:
-    return "/healthz"
-
-
-def lib_root() -> str:
-    return "/lib"
-
-
-def service_root() -> str:
-    return "/service"
-
-
 def _segment(label: str, value: str) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError(f"{label} must be a non-empty string")
@@ -108,61 +96,41 @@ def _path_segments(path: Optional[Iterable[str]]) -> list[str]:
     return segments
 
 
-def library(
-    *,
-    publisher: str,
-    name: str,
-    version: str,
-    path: Optional[Iterable[str]] = None,
-) -> URI:
-    segments = [
-        "lib",
-        _segment("publisher", publisher),
-        _segment("name", name),
-        _segment("version", version),
-        *_path_segments(path),
-    ]
-    return URI("/" + "/".join(segments))
+def _join_path(segments: Iterable[str]) -> str:
+    joined = "/".join(segments)
+    return f"/{joined}" if joined else "/"
 
 
-def library_link(
-    *,
-    publisher: str,
-    name: str,
-    version: str,
-    authority: Optional[URI] = None,
-    path: Optional[Iterable[str]] = None,
-) -> URI:
-    base = library(publisher=publisher, name=name, version=version, path=path)
-    if authority is None:
+def uri(subject: object, *path: str) -> URI | "Scalar":
+    if isinstance(subject, URI):
+        base = subject
+    elif hasattr(subject, "__uri__"):
+        base_value = subject.__uri__
+        base = base_value if isinstance(base_value, URI) else URI.parse(str(base_value))
+    elif hasattr(subject, "class_") and callable(getattr(subject, "class_")):
+        if path:
+            raise TypeError("cannot append path segments to a Scalar URI")
+        return subject.class_()
+    elif hasattr(subject, "id") and callable(getattr(subject, "id")):
+        base_value = subject.id()
+        base = base_value if isinstance(base_value, URI) else URI.parse(str(base_value))
+    elif isinstance(subject, str):
+        if subject.startswith("/") or subject.startswith("$") or "://" in subject:
+            base = URI.parse(subject)
+        else:
+            segments = [subject, *_path_segments(path)]
+            return URI(_join_path(segments))
+    else:
+        raise TypeError(f"unsupported URI subject: {type(subject).__name__}")
+
+    if not path:
         return base
-    return URI(path=base.path, scheme=authority.scheme, host=authority.host, port=authority.port)
 
+    segments = _path_segments(path)
+    if not segments:
+        return base
 
-def service(
-    *,
-    publisher: str,
-    namespace: str,
-    name: str,
-    version: str,
-    path: Optional[Iterable[str]] = None,
-) -> str:
-    segments = [
-        "service",
-        _segment("publisher", publisher),
-        _segment("namespace", namespace),
-        _segment("name", name),
-        _segment("version", version),
-        *_path_segments(path),
-    ]
-    return "/" + "/".join(segments)
+    base_path = base.path.rstrip("/")
+    new_path = _join_path([base_path.lstrip("/")] + segments) if base_path else _join_path(segments)
 
-
-def state(*, namespace: str, path: Optional[Iterable[str]] = None) -> str:
-    segments = ["state", _segment("namespace", namespace), *_path_segments(path)]
-    return "/" + "/".join(segments)
-
-
-def media(*, path: Optional[Iterable[str]] = None) -> str:
-    segments = ["state", "media", *_path_segments(path)]
-    return "/" + "/".join(segments)
+    return URI(path=new_path, scheme=base.scheme, host=base.host, port=base.port)

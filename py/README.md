@@ -227,7 +227,7 @@ deferred-execution model: calling a decorated method returns a typed reference n
 There are two distinct use cases:
 
 - `tc.Library` + `@tc.get` (stub): build an `OpRef` targeting an already-installed `/lib/...` route.
-- `tc.define.Library` + `@tc.get` (definition): define and compile a library interface in Python using v1-style type hints.
+- `tc.define.Library` + `@tc.define.get` (definition): define and compile a library interface in Python using v1-style type hints.
 
 Minimal example:
 
@@ -236,20 +236,27 @@ import tinychain as tc
 import pathlib
 
 class Echo(tc.define.Library):
+    publisher = "example-devco"
+    name = "echo"
+    version = "0.1.0"
+
     @tc.define.get
     def hello(self) -> tc.String:
         ...
 
-echo = Echo(publisher="example-devco", name="echo", version="0.1.0")
+echo = Echo()
 ref = echo.hello()   # tc.String (deferred)
 ```
 
-To install a Python-defined library into a local `data_dir`, compile it to a tiny IR manifest and submit it through `/lib`:
+To install a Python-defined library into a local `data_dir`, compile it to a tiny IR manifest and submit it through `/lib` with an authorized bearer token:
 
 ```python
-resp = tc.define.install(echo, kernel=kernel, data_dir=pathlib.Path("..."))
+resp = tc.install(echo, kernel=kernel, data_dir=pathlib.Path("..."), bearer_token=token)
 assert resp.status == 204
 ```
+
+Handlers that accept parameters (or return `tc.state.Scalar`/`tc.state.OpDef`) automatically compile to `OpDef` routes.
+No explicit flag is required on the decorators.
 
 Execution is always explicit via an executor/backend:
 

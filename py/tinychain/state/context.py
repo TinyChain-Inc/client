@@ -1,0 +1,93 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+import contextvars
+from typing import Iterable
+
+from .scalar import Scalar, autobox
+
+
+@dataclass(frozen=True, slots=True)
+class ContextResult:
+    form: list[tuple[str, Scalar]]
+    result: Scalar
+
+
+class Context:
+    def __init__(self) -> None:
+        object.__setattr__(self, "_form", [])
+        object.__setattr__(self, "_names", set())
+        object.__setattr__(self, "_bound", {})
+        object.__setattr__(self, "_counter", 0)
+
+    def bind(self, value: object, name: str) -> Scalar:
+        if name in self._names:
+            raise ValueError(f"duplicate context id {name}")
+        self._names.add(name)
+        self._form.append((name, autobox(value)))
+        bound = Scalar.id(name)
+        self._bound[name] = bound
+        return bound
+
+    def bind_auto(self, value: object, *, prefix: str = "_tmp") -> Scalar:
+        while True:
+            name = f"{prefix}{self._counter}"
+            object.__setattr__(self, "_counter", self._counter + 1)
+            if name in self._names:
+                continue
+            return self.bind(value, name)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if name.startswith("_"):
+            object.__setattr__(self, name, value)
+            return
+        self.bind(value, name)
+
+    def __getattr__(self, name: str) -> Scalar:
+        bound = self._bound.get(name)
+        if bound is None:
+            raise AttributeError(name)
+        return bound
+
+    def result(self, value: object) -> ContextResult:
+        return ContextResult(list(self._form), autobox(value))
+
+    def form(self) -> Iterable[tuple[str, Scalar]]:
+        return list(self._form)
+
+
+_current_context: contextvars.ContextVar[Context | None] = contextvars.ContextVar(
+    "tinychain_state_context",
+    default=None,
+)
+
+
+def context() -> Context:
+    ctx = _current_context.get()
+    if ctx is None:
+        ctx = Context()
+        _current_context.set(ctx)
+    return ctx
+
+
+def current_context() -> Context | None:
+    return _current_context.get()
+
+
+class _ContextScope:
+    def __init__(self) -> None:
+        self._token: contextvars.Token[Context | None] | None = None
+
+    def __enter__(self) -> Context:
+        ctx = Context()
+        self._token = _current_context.set(ctx)
+        return ctx
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if self._token is not None:
+            _current_context.reset(self._token)
+            self._token = None
+
+
+def scoped_context() -> _ContextScope:
+    return _ContextScope()

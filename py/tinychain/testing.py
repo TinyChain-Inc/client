@@ -5,8 +5,10 @@ import pathlib
 import subprocess
 from typing import Iterable, Optional, Tuple
 
+from .uri import uri
 
-_SCALAR_VALUE_PREFIX = "/state/scalar/value/"
+
+_SCALAR_VALUE_PREFIX = uri("state", "scalar", "value").path + "/"
 
 
 def _unwrap_scalar_value(payload: object) -> object:
@@ -22,8 +24,10 @@ def _unwrap_state(payload: object) -> object:
         (key, value), = payload.items()
         if isinstance(key, str) and key.startswith(_SCALAR_VALUE_PREFIX):
             return _unwrap_state(value)
-        if key == "/state/scalar/map" and isinstance(value, dict):
+        if key == uri("state", "scalar", "map").path and isinstance(value, dict):
             return {k: _unwrap_state(v) for k, v in value.items()}
+    if isinstance(payload, dict):
+        return {k: _unwrap_state(v) for k, v in payload.items()}
     if isinstance(payload, list):
         return [_unwrap_state(item) for item in payload]
     return payload
@@ -65,6 +69,20 @@ def repo_root(start: Optional[pathlib.Path] = None) -> pathlib.Path:
         if (parent / "tc-server").is_dir() and (parent / "tc-wasm").is_dir():
             return parent
     raise RuntimeError("unable to locate repo root (expected `tc-server/` and `tc-wasm/`)")
+
+
+def rjwt_install_token_bin(root: Optional[pathlib.Path] = None) -> Optional[pathlib.Path]:
+    base = repo_root(root)
+    candidates = [
+        base / "target" / "debug" / "examples" / "rjwt_install_token",
+        base / "target" / "release" / "examples" / "rjwt_install_token",
+        base / "tc-server" / "target" / "debug" / "examples" / "rjwt_install_token",
+        base / "tc-server" / "target" / "release" / "examples" / "rjwt_install_token",
+    ]
+    for path in candidates:
+        if path.exists() and path.is_file():
+            return path
+    return None
 
 
 def start_rust_example(

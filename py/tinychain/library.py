@@ -8,33 +8,51 @@ from . import uri
 
 @dataclass(frozen=True, slots=True)
 class Library:
-    publisher: str
-    name: str
-    version: str
+    publisher: str | None = None
+    name: str | None = None
+    version: str | None = None
     dependencies: tuple[uri.URI, ...] = ()
     authority: uri.URI | None = None
 
+    def __post_init__(self) -> None:
+        cls = type(self)
+        publisher = self.publisher or getattr(cls, "publisher", None)
+        name = self.name or getattr(cls, "name", None)
+        version = self.version or getattr(cls, "version", None)
+        if not publisher or not name or not version:
+            raise TypeError("Library requires publisher, name, and version")
+        object.__setattr__(self, "publisher", publisher)
+        object.__setattr__(self, "name", name)
+        object.__setattr__(self, "version", version)
+
+        if not self.dependencies:
+            deps = getattr(cls, "dependencies", ())
+            object.__setattr__(self, "dependencies", deps)
+
+        if self.authority is None:
+            object.__setattr__(self, "authority", getattr(cls, "authority", None))
+
     def id(self) -> uri.URI:
-        return uri.library(
-            publisher=self.publisher,
-            name=self.name,
-            version=self.version,
+        return uri.URI(
+            "/" + "/".join(
+                [
+                    "lib",
+                    uri._segment("publisher", self.publisher),
+                    uri._segment("name", self.name),
+                    uri._segment("version", self.version),
+                ]
+            )
         )
 
-    def route(self, *path: str) -> str:
-        return uri.library(
-            publisher=self.publisher,
-            name=self.name,
-            version=self.version,
-            path=list(path) if path else None,
-        ).path
-
     def link(self) -> uri.URI:
-        return uri.library_link(
-            publisher=self.publisher,
-            name=self.name,
-            version=self.version,
-            authority=self.authority,
+        base = self.id()
+        if self.authority is None:
+            return base
+        return uri.URI(
+            path=base.path,
+            scheme=self.authority.scheme,
+            host=self.authority.host,
+            port=self.authority.port,
         )
 
     def schema(self) -> dict:

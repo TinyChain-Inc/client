@@ -3,16 +3,13 @@ import json
 import pathlib
 
 import os
-import pytest
-
 import tinychain as tc
 
-from .support import REPO_ROOT, ensure_wasm_example_built
+from .support import REPO_ROOT, ensure_wasm_example_built, rjwt_install_token
 
 
 SCRIPT_PATH = REPO_ROOT / "client" / "py" / "bin" / "install_wasm.py"
 SCHEMA_PATH = REPO_ROOT / "tc-server" / "examples" / "library_schema_example.json"
-BEARER_TOKEN = os.environ.get("TC_BEARER_TOKEN")
 
 
 def _load_install_wasm():
@@ -31,38 +28,35 @@ def _sanitize_id(schema_id: str) -> str:
 
 
 def test_install_wasm_script_registers_routes(tmp_path):
-    if not BEARER_TOKEN:
-        pytest.skip(
-            "TC_BEARER_TOKEN not set; generate one via "
-            "`cargo run --example rjwt_install_token -- "
-            "--host http://127.0.0.1:8702 --actor example-admin --lib /lib/example-devco/a/0.1.0`"
-        )
     wasm_path = ensure_wasm_example_built("hello_wasm")
     data_dir = tmp_path / "tc-data"
     data_dir.mkdir()
+
+    token = rjwt_install_token(
+        tc.uri("lib", "example-devco", "example", "0.1.0").path
+    )
+    os.environ["TC_TOKEN_HOST"] = token["host"]
+    os.environ["TC_ACTOR_ID"] = token["actor_id"]
+    os.environ["TC_PUBLIC_KEY_B64"] = token["public_key_b64"]
 
     response = INSTALL_WASM.install(
         SCHEMA_PATH,
         wasm_path,
         data_dir=data_dir,
-        bearer_token=BEARER_TOKEN,
+        bearer_token=token["bearer_token"],
     )
     assert response.status == 204
 
     hydrated_kernel = tc.KernelHandle.local(data_dir=str(data_dir))
 
+    schema_path = tc.uri("lib", "example-devco", "example", "0.1.0").path
     schema_response = hydrated_kernel.dispatch(
-        tc.KernelRequest("GET", "/lib/example-devco/example/0.1.0", None, None)
+        tc.KernelRequest("GET", schema_path, None, None)
     )
     assert schema_response.status == 200
     schema_json = tc.testing.decode_json_body(schema_response)
 
-    hello_path = tc.uri.library(
-        publisher="example-devco",
-        name="example",
-        version="0.1.0",
-        path=["hello"],
-    ).path
+    hello_path = tc.uri("lib", "example-devco", "example", "0.1.0", "hello").path
     route_response = hydrated_kernel.dispatch(
         tc.KernelRequest("GET", hello_path, None, tc.StateHandle("world"))
     )

@@ -4,37 +4,48 @@ from .library import Library
 from .executor import Executor, backend
 from .executor import execute as _dispatch_execute
 from .opref import OpRef
+from . import opref
 from .ref import Ref, String, Json
-from .uri import URI
+from .uri import URI, uri
 from . import define
 from . import compute
+from . import state
 from . import kernel
-from . import uri
 from . import testing
 from . import wasm
+from .cond import cond
 
 # Convenience aliases: keep v1 ergonomics while keeping `tc.define.*` as the canonical home.
+self_subject = define.self_subject
+install = define.install
 get = define.get
 put = define.put
 post = define.post
 delete = define.delete
+opdef = define.opdef
 
 __all__ = [
     "Library",
     "Executor",
     "backend",
     "OpRef",
+    "opref",
     "Ref",
     "String",
     "Json",
     "URI",
     "define",
     "compute",
+    "state",
     "kernel",
+    "self_subject",
+    "install",
     "get",
     "put",
     "post",
     "delete",
+    "opdef",
+    "cond",
     "uri",
     "testing",
     "wasm",
@@ -48,6 +59,19 @@ def execute(op: "OpRef | Ref") -> object:
         return testing.decode_json_body(response)
     if status == 204:
         return None
+    message = None
+    try:
+        body = getattr(response, "body", None)
+        if body is not None:
+            value = body.value()
+            text = value.to_json() if hasattr(value, "to_json") else value
+            if isinstance(text, (bytes, bytearray)):
+                text = text.decode("utf-8", errors="replace")
+            message = text if isinstance(text, str) else str(text)
+    except Exception:
+        message = None
+    if message:
+        raise AssertionError(f"unexpected status {status}: {message}")
     raise AssertionError(f"unexpected status {status}")
 
 # Optional local (PyO3) backend. When installed, re-export its public classes at the top-level
@@ -81,6 +105,36 @@ try:  # pragma: no cover
     ]
 except Exception:  # pragma: no cover
     local = None
+
+    class _MissingBackend:
+        def __init__(self, name: str) -> None:
+            self._name = name
+
+        def __getattr__(self, _attr: str):
+            raise ImportError(
+                f"`tinychain.{self._name}` requires the optional local backend. "
+                "Install `tinychain-local` (or the equivalent extra) to enable PyO3 eager execution."
+            )
+
+        def __call__(self, *args, **kwargs):
+            raise ImportError(
+                f"`tinychain.{self._name}` requires the optional local backend. "
+                "Install `tinychain-local` (or the equivalent extra) to enable PyO3 eager execution."
+            )
+
+        def __repr__(self) -> str:
+            return f"<missing tinychain-local: {self._name}>"
+
+    KernelHandle = _MissingBackend("KernelHandle")
+    Backend = _MissingBackend("Backend")
+    KernelRequest = _MissingBackend("KernelRequest")
+    KernelResponse = _MissingBackend("KernelResponse")
+    StateHandle = _MissingBackend("StateHandle")
+    State = _MissingBackend("State")
+    Scalar = _MissingBackend("Scalar")
+    Collection = _MissingBackend("Collection")
+    Tensor = _MissingBackend("Tensor")
+    Value = _MissingBackend("Value")
 
 
 def __getattr__(name: str):  # pragma: no cover
