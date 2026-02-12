@@ -127,6 +127,30 @@ installer + integration example end-to-end:
 scripts/run_python_integration_with_token.sh
 ```
 
+### ILC helper package (minimal)
+
+The `ilc` helper module provides a minimal schema + install helper for the ILC client
+WASM library. It assumes the WASM module exports:
+
+- `POST /cipher/add`
+- `POST /cipher/mul`
+- `POST /encrypt` (returns an OpRef to `/lib/applied-physics/ilc/crypto/encrypt`)
+- `POST /decrypt` (returns an OpRef to `/lib/applied-physics/ilc/crypto/decrypt`)
+
+Install the WASM library into a local `data_dir`, routing remote OpRefs to a configured
+ILC server authority:
+
+```python
+import ilc
+
+ilc.install_wasm(
+    "/path/to/ilc_client.wasm",
+    data_dir="/tmp/tc-data",
+    server="127.0.0.1:8700",
+    bearer_token="your-token",
+)
+```
+
 ## WASM installer regression
 
 The `py/tests/test_install_wasm_script.py` test exercises the
