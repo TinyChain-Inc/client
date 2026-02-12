@@ -36,3 +36,10 @@ staying thin and well-documented for new users.
   add skip paths for `tinychain-local` availability in these tests.
 - Update `README.md` or `ROADMAP.md` in this directory when altering user-facing APIs
   or shard-routing behaviors. Keep examples concise for fast unboxing.
+
+## Python style guidance
+
+- Prefer idiomatic Python syntax in client-facing examples/tests: use `len(x)` instead of
+  `.len()`, comparison operators (`>`, `<`, `==`) instead of method calls, `+` for
+  addition/concatenation, and indexing/slicing (`x[i]`, `x[1:]`) instead of `head/tail`
+  helpers where supported.

@@ -17,18 +17,16 @@ def test_install_python_defined_library(tmp_path: pathlib.Path):
         def hello(self):
             return "hello"
 
-    defined = Defined()
-
-    token = rjwt_install_token(defined.id().path)
+    token = rjwt_install_token(Defined.class_id().path)
     kernel = tc.KernelHandle.with_library_schema_rjwt(
-        defined.schema_json(),
+        Defined.class_schema_json(),
         token["host"],
         token["actor_id"],
         token["public_key_b64"],
         data_dir=str(tmp_path),
     )
     resp = tc.define.install(
-        defined,
+        Defined,
         kernel=kernel,
         data_dir=tmp_path,
         bearer_token=token["bearer_token"],

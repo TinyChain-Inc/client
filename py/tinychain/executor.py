@@ -26,7 +26,6 @@ def _encode_json_body(value: Any) -> "object":
 
 
 def _encode_payload(value: Any) -> Any:
-    from . import define
     from .state import (
         IdRef,
         IfRef,
@@ -41,7 +40,9 @@ def _encode_payload(value: Any) -> Any:
     from .uri import URI
 
     if hasattr(value, "__tc_route__") and hasattr(value, "__tc_instance__"):
-        return autobox(define.opdef(value)).to_json()
+        route = value.__tc_route__
+        instance = value.__tc_instance__
+        return autobox(route.opdef(instance)).to_json()
 
     if isinstance(
         value,

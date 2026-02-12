@@ -24,15 +24,18 @@ def test_op_reflection_analysis(tmp_path: pathlib.Path) -> None:
         name = "b"
         version = "0.1.0"
 
-        _a: A = None  # type: ignore[assignment]
+        _a: A = A()
 
         @tc.get
         def branch(self, key: tc.String) -> tc.String:
-            return tc.cond(
-                tc.state.autobox(key).eq("x"),
-                tc.cond(tc.state.autobox(key).eq("y"), "y", "z"),
-                "w",
-            )
+            if key.eq("x"):
+                if key.eq("y"):
+                    out = "y"
+                else:
+                    out = "z"
+            else:
+                out = "w"
+            return out
 
     class C(tc.define.Library):
         publisher = "example-devco"
@@ -40,84 +43,92 @@ def test_op_reflection_analysis(tmp_path: pathlib.Path) -> None:
         version = "0.1.0"
 
         @tc.post
-        def update(self, cxt: tc.state.Context, item: tc.state.Scalar, max: tc.state.Scalar):
-            # TODO: Remove explicit `cxt.*` assignments once autograph AST rewriting lands.
-            cxt.parts = item.if_parts()
-            is_branch = cxt.parts.len().gt(0)
-            return {
-                "max": tc.cond(is_branch, 2, max),
-            }
+        def update(self, item: tc.state.Scalar, max: tc.state.Scalar):
+            parts = item.ref_parts()
+            is_branch = len(parts) > 0
+            if is_branch:
+                max_out = 2
+            else:
+                max_out = max
+            return {"max": max_out}
 
         @tc.post
-        def seed(self, item: tc.state.Scalar, state: tc.state.Scalar) -> tc.state.Scalar:
-            pair = [item[1], 0]
-            return state.concat([pair])
+        def cyclotomic_depth(self, op: tc.state.OpDef) -> tc.Json:
+            op_form = op.reflect_form()
+            state = {"items": op_form, "idx": 0, "todo": [], "max": 1}
+            while (len(state["items"]) > state["idx"]).logical_or(len(state["todo"]) > 0):
+                has_items = len(state["items"]) > state["idx"]
+                if has_items:
+                    node = state["items"][state["idx"]][1]
+                    depth = 0
+                    parts = node.ref_parts()
+                    has_children = len(parts) > 0
+                    tail = state["todo"][1:]
+                    children = []
+                    children_ok = False
+                    next_todo = state["todo"] + [[node, depth]]
+                    next_idx = state["idx"] + 1
+                    next_max = state["max"]
+                else:
+                    node = state["todo"][0][0]
+                    depth = state["todo"][0][1]
+                    parts = node.ref_parts()
+                    has_children = len(parts) > 0
+                    tail = state["todo"][1:]
+                    if has_children:
+                        children = []
+                        children_ok = False
+                        next_todo = tail + [[parts[1], depth + 1], [parts[2], depth + 1]]
+                        if depth + 1 > state["max"]:
+                            next_max = depth + 1
+                        else:
+                            next_max = state["max"]
+                    else:
+                        children = node.reflect_scalars()
+                        children_ok = len(children) > 0
+                        if children_ok:
+                            next_todo = tail
+                            if depth + 1 > state["max"]:
+                                next_max = depth + 1
+                            else:
+                                next_max = state["max"]
+                        else:
+                            next_todo = tail
+                            next_max = state["max"]
+                    next_idx = state["idx"]
+                state = {"items": state["items"], "idx": next_idx, "todo": next_todo, "max": next_max}
+            return {"max": state["max"]}
 
         @tc.post
-        def cond(self, cxt: tc.state.Context, state: tc.state.Scalar) -> tc.state.Scalar:
-            cxt.todo = state[0]
-            cxt.todo_len = cxt.todo.len()
-            return cxt.todo_len.gt(0)
-
-        @tc.post
-        def step(self, cxt: tc.state.Context, state: tc.state.Scalar) -> tc.state.Scalar:
-            cxt.todo = state[0]
-            cxt.max_depth = state[1]
-            cxt.head = cxt.todo.head()
-            cxt.tail = cxt.todo.tail()
-            cxt.node = cxt.head[0]
-            cxt.depth = cxt.head[1]
-
-            cxt.parts = cxt.node.if_parts()
-            cxt.is_branch = cxt.parts.len().gt(0)
-            cxt.inc_depth = cxt.depth.add(1)
-            cxt.branch_children = tc.cond(
-                cxt.is_branch,
-                [
-                    [cxt.parts[1], cxt.inc_depth],
-                    [cxt.parts[2], cxt.inc_depth],
-                ],
-                [],
-            )
-            cxt.next_todo = cxt.tail.concat(cxt.branch_children)
-            cxt.next_max = tc.cond(
-                cxt.is_branch,
-                tc.cond(cxt.inc_depth.gt(cxt.max_depth), cxt.inc_depth, cxt.max_depth),
-                cxt.max_depth,
-            )
-            return [cxt.next_todo, cxt.next_max]
-
-        @tc.post
-        def cyclotomic_depth(self, cxt: tc.state.Context, op: tc.state.OpDef) -> tc.Json:
-            cxt.op_form = op.reflect_form()
-            cxt.seeded = cxt.op_form.reduce(
-                item_name="item",
-                op=tc.opdef(self.seed),
-                value=[],
-            )
-            cxt.state = [cxt.seeded, 1]
-            cxt.final = tc.state.while_loop(
-                tc.opdef(self.cond),
-                tc.opdef(self.step),
-                cxt.state,
-            )
-            return {"max": cxt.final[1]}
+        def nested_if_count(self, items: tc.state.Scalar) -> tc.Json:
+            state = {"items": items, "count": 0}
+            while len(state["items"]) > 0:
+                head = state["items"][0]
+                rest = state["items"][1:]
+                if head == 0:
+                    if state["count"] > 0:
+                        next_count = state["count"] + 1
+                    else:
+                        next_count = 1
+                else:
+                    next_count = state["count"]
+                state = {"items": rest, "count": next_count}
+            return {"count": state["count"]}
 
     a = A()
-    B._a = a
     b = B()
     c = C()
 
-    token = rjwt_install_token(a.id().path, b.id().path, c.id().path)
+    token = rjwt_install_token(A.class_id().path, B.class_id().path, C.class_id().path)
     kernel = tc.KernelHandle.with_library_schema_rjwt(
-        c.schema_json(),
+        C.class_schema_json(),
         token["host"],
         token["actor_id"],
         token["public_key_b64"],
         data_dir=str(tmp_path),
     )
 
-    for library in (a, b, c):
+    for library in (A, B, C):
         resp = tc.define.install(
             library,
             kernel=kernel,
@@ -129,3 +140,4 @@ def test_op_reflection_analysis(tmp_path: pathlib.Path) -> None:
     with tc.backend(kernel):
         assert tc.execute(c.cyclotomic_depth(a.leaf))["max"] == 1
         assert tc.execute(c.cyclotomic_depth(b.branch))["max"] == 2
+        assert tc.execute(c.nested_if_count([0, 1, 0, 0]))["count"] == 3

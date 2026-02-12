@@ -10,7 +10,8 @@ from typing import Any, Callable, Optional, get_type_hints
 
 from .opref import OpRef
 from .ref import Ref
-from .state import ContextResult, OpDef, Scalar, autobox, context, current_context, scoped_context
+from . import autograph
+from .state import ContextResult, OpDef, Scalar, TCRef, autobox, context, current_context, scoped_context
 from .uri import URI, _segment, uri as _uri
 
 IR_ARTIFACT_CONTENT_TYPE = "application/tinychain+json"
@@ -26,11 +27,39 @@ def self_subject(*path: str) -> str:
         return "$self"
     return "$self/" + "/".join(path)
 
-def _route_path(instance: object, route_name: str) -> str:
+def _route_path(subject: object, route_name: str) -> str:
     for attr in ("publisher", "name", "version"):
-        if not hasattr(instance, attr):
-            raise TypeError("expected instance with publisher/name/version fields")
-    return _uri(instance, route_name).path
+        if not hasattr(subject, attr):
+            raise TypeError("expected library class with publisher/name/version fields")
+    publisher = getattr(subject, "publisher")
+    name = getattr(subject, "name")
+    version = getattr(subject, "version")
+    return URI(
+        "/" + "/".join(
+            [
+                "lib",
+                _segment("publisher", publisher),
+                _segment("name", name),
+                _segment("version", version),
+                _segment("path", route_name),
+            ]
+        )
+    ).path
+
+
+def _library_class(library: "Library | type[Library]") -> type["Library"]:
+    if isinstance(library, type) and issubclass(library, Library):
+        return library
+    if isinstance(library, Library):
+        return type(library)
+    raise TypeError("expected a Library class")
+
+
+def _validate_library_class(library: type["Library"]) -> None:
+    if "__init__" in library.__dict__:
+        raise TypeError("Library subclasses must not define __init__")
+    if not getattr(library, "publisher", None) or not getattr(library, "name", None) or not getattr(library, "version", None):
+        raise TypeError("Library requires publisher, name, and version")
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,7 +101,16 @@ class Route:
         params = list(sig.parameters.values())
         if not params or params[0].name != "self":
             raise TypeError("route form must begin with a `self` parameter")
-        return _compile_opdef_route(self, instance, params)
+        library_cls = _library_class(instance)
+        _validate_library_class(library_cls)
+        if isinstance(instance, Library):
+            if (
+                instance.publisher != getattr(library_cls, "publisher", None)
+                or instance.name != getattr(library_cls, "name", None)
+                or instance.version != getattr(library_cls, "version", None)
+            ):
+                raise TypeError("Library instance fields must match class attributes")
+        return _compile_opdef_route(self, library_cls, params)
 
     def __get__(self, instance: object, owner: type | None = None):
         if instance is None:
@@ -136,7 +174,9 @@ def _decorate(
 ):
     if form is None:
         return lambda actual: Route(method=method.upper(), form=actual, name=name)
-    return Route(method=method.upper(), form=form, name=name)
+    if _is_method(form):
+        return Route(method=method.upper(), form=form, name=name)
+    return _compile_opdef_callable(form, method=method.upper())
 
 
 def get(
@@ -170,16 +210,80 @@ def delete(
 ):
     return _decorate("DELETE", form, name=name)
 
-def opdef(route: object) -> OpDef:
-    if isinstance(route, OpDef):
-        return route
-    if isinstance(route, Route):
-        raise TypeError("expected a bound route; use route.opdef(instance)")
-    bound_route = getattr(route, "__tc_route__", None)
-    bound_instance = getattr(route, "__tc_instance__", None)
-    if isinstance(bound_route, Route) and bound_instance is not None:
-        return bound_route.opdef(bound_instance)
-    raise TypeError("expected a bound route or OpDef")
+def _compile_opdef_callable(form: Callable[..., Any], *, method: str) -> OpDef:
+    sig = inspect.signature(form)
+    params = list(sig.parameters.values())
+    if params and params[0].name == "self":
+        raise TypeError("expected a standalone callable, not a method")
+
+    injected_names = {"cxt", "ctx", "txn"}
+    arg_names = []
+    with scoped_context():
+        args: list[Scalar] = []
+        kwargs: dict[str, Scalar] = {}
+        for param in params:
+            if param.kind == param.VAR_POSITIONAL or param.kind == param.VAR_KEYWORD:
+                raise TypeError("variadic opdef callables are not supported")
+            if param.name in injected_names:
+                raise TypeError(f"reserved parameter '{param.name}' is not supported in opdef callables")
+            placeholder = Scalar.id(param.name)
+            arg_names.append(param.name)
+            if param.kind == param.KEYWORD_ONLY:
+                kwargs[param.name] = placeholder
+            else:
+                args.append(placeholder)
+
+        result = form(*args, **kwargs)
+        ctx = current_context()
+        if ctx is not None and ctx.form() and not isinstance(result, ContextResult):
+            result = ctx.result(result)
+
+    if isinstance(result, OpDef):
+        _validate_opdef_method(method, result)
+        _validate_opdef(result, set(arg_names))
+        return result
+
+    if isinstance(result, ContextResult):
+        form_items = list(result.form)
+        scalar = autobox(result.result)
+        form_items.append(("result", scalar))
+        opdef = _opdef_from_method(method, arg_names, form_items)
+        _validate_opdef(opdef, set(arg_names))
+        return opdef
+
+    if isinstance(result, dict):
+        form_items: list[tuple[str, Scalar]] = []
+        for key, value in result.items():
+            if not isinstance(key, str):
+                raise TypeError("opdef form keys must be strings")
+            form_items.append((key, autobox(value)))
+        opdef = _opdef_from_method(method, arg_names, form_items)
+        _validate_opdef(opdef, set(arg_names))
+        return opdef
+
+    if _to_opref(result) is not None:
+        raise TypeError("opdef callables must return an OpDef or Scalar, not an OpRef")
+
+    scalar = autobox(result)
+    opdef = _opdef_from_method(method, arg_names, [("result", scalar)])
+    _validate_opdef(opdef, set(arg_names))
+    return opdef
+
+
+def _opdef_from_method(method: str, arg_names: list[str], form: list[tuple[str, Scalar]]) -> OpDef:
+    if method == "GET":
+        key_name = arg_names[0] if arg_names else "key"
+        return OpDef.get(key_name, form)
+    if method == "PUT":
+        key_name = arg_names[0] if len(arg_names) > 0 else "key"
+        value_name = arg_names[1] if len(arg_names) > 1 else "value"
+        return OpDef.put(key_name, value_name, form)
+    if method == "POST":
+        return OpDef.post(form)
+    if method == "DELETE":
+        key_name = arg_names[0] if arg_names else "key"
+        return OpDef.delete(key_name, form)
+    raise ValueError(f"unsupported opdef method {method}")
 
 
 def _class_dependencies(cls: type) -> tuple[URI, ...]:
@@ -262,6 +366,37 @@ class Library:
     def schema_json(self) -> str:
         return json.dumps(self.schema(), separators=(",", ":"))
 
+    @classmethod
+    def class_id(cls) -> URI:
+        publisher = getattr(cls, "publisher", None)
+        name = getattr(cls, "name", None)
+        version = getattr(cls, "version", None)
+        if not publisher or not name or not version:
+            raise TypeError("Library requires publisher, name, and version")
+        return URI(
+            "/" + "/".join(
+                [
+                    "lib",
+                    _segment("publisher", publisher),
+                    _segment("name", name),
+                    _segment("version", version),
+                ]
+            )
+        )
+
+    @classmethod
+    def class_schema(cls) -> dict:
+        deps = _class_dependencies(cls)
+        return {
+            "id": cls.class_id().path,
+            "version": getattr(cls, "version", None),
+            "dependencies": [dep.path for dep in deps],
+        }
+
+    @classmethod
+    def class_schema_json(cls) -> str:
+        return json.dumps(cls.class_schema(), separators=(",", ":"))
+
 
 def _to_opref(value: object) -> Optional[OpRef[Any]]:
     if isinstance(value, Ref):
@@ -271,13 +406,15 @@ def _to_opref(value: object) -> Optional[OpRef[Any]]:
     return None
 
 
-def compile_ir(library: Library) -> dict:
+def compile_ir(library: Library | type[Library]) -> dict:
+    library_cls = _library_class(library)
+    _validate_library_class(library_cls)
     routes: list[dict] = []
-    for name, attr in list(library.__class__.__dict__.items()):
+    for name, attr in list(library_cls.__dict__.items()):
         if not isinstance(attr, Route):
             continue
 
-        result = _compile_route(attr, library)
+        result = _compile_route(attr, library_cls)
         op = _to_opref(result)
         if op is not None:
             routes.append(
@@ -294,10 +431,10 @@ def compile_ir(library: Library) -> dict:
 
         routes.append({"path": f"/{name}", "value": result})
 
-    return {"schema": library.schema(), "routes": routes}
+    return {"schema": library_cls.class_schema(), "routes": routes}
 
 
-def _compile_route(route: Route, library: Library) -> object:
+def _compile_route(route: Route, library: type[Library]) -> object:
     sig = inspect.signature(route.form)
     params = list(sig.parameters.values())
     if not params or params[0].name != "self":
@@ -315,11 +452,15 @@ def _compile_route(route: Route, library: Library) -> object:
 
 def _compile_opdef_route(
     route: Route,
-    library: Library,
+    library: type[Library],
     params: list[inspect.Parameter],
 ) -> OpDef:
 
     injected_names = {"cxt", "ctx", "txn"}
+    form = route.form
+    if not any(param.name in injected_names for param in params[1:]):
+        form = autograph.transform(route.form)
+
     arg_names = [
         param.name
         for param in params[1:]
@@ -349,12 +490,13 @@ def _compile_opdef_route(
                 kwargs[param.name] = placeholder
             else:
                 args.append(placeholder)
-        result = route.form(library, *args, **kwargs)
+        result = form(library, *args, **kwargs)
         ctx = current_context()
         if ctx is not None and ctx.form() and not isinstance(result, ContextResult):
             result = ctx.result(result)
 
     if isinstance(result, OpDef):
+        result = _inline_opref_refs(result)
         _validate_opdef_method(route.method, result)
         _validate_opdef(result, _allowed_inputs_from_params(route, params))
         return result
@@ -363,27 +505,10 @@ def _compile_opdef_route(
         form = list(result.form)
         scalar = autobox(result.result)
         form.append(("result", scalar))
-        if route.method == "GET":
-            key_name = arg_names[0] if arg_names else "key"
-            opdef = OpDef.get(key_name, form)
-            _validate_opdef(opdef, {key_name})
-            return opdef
-        if route.method == "PUT":
-            key_name = arg_names[0] if len(arg_names) > 0 else "key"
-            value_name = arg_names[1] if len(arg_names) > 1 else "value"
-            opdef = OpDef.put(key_name, value_name, form)
-            _validate_opdef(opdef, {key_name, value_name})
-            return opdef
-        if route.method == "POST":
-            opdef = OpDef.post(form)
-            _validate_opdef(opdef, set(arg_names))
-            return opdef
-        if route.method == "DELETE":
-            key_name = arg_names[0] if arg_names else "key"
-            opdef = OpDef.delete(key_name, form)
-            _validate_opdef(opdef, {key_name})
-            return opdef
-        raise ValueError(f"unsupported opdef method {route.method}")
+        opdef = _opdef_from_method(route.method, arg_names, form)
+        opdef = _inline_opref_refs(opdef)
+        _validate_opdef(opdef, set(arg_names))
+        return opdef
 
     if isinstance(result, dict):
         form: list[tuple[str, Scalar]] = []
@@ -391,7 +516,8 @@ def _compile_opdef_route(
             if not isinstance(key, str):
                 raise TypeError("opdef form keys must be strings")
         form.append((key, autobox(value)))
-        opdef = OpDef.post(form)
+        opdef = _opdef_from_method(route.method, arg_names, form)
+        opdef = _inline_opref_refs(opdef)
         _validate_opdef(opdef, set(arg_names))
         return opdef
 
@@ -400,29 +526,10 @@ def _compile_opdef_route(
 
     scalar = autobox(result)
     form = [("result", scalar)]
-
-    if route.method == "GET":
-        key_name = arg_names[0] if arg_names else "key"
-        opdef = OpDef.get(key_name, form)
-        _validate_opdef(opdef, {key_name})
-        return opdef
-    if route.method == "PUT":
-        key_name = arg_names[0] if len(arg_names) > 0 else "key"
-        value_name = arg_names[1] if len(arg_names) > 1 else "value"
-        opdef = OpDef.put(key_name, value_name, form)
-        _validate_opdef(opdef, {key_name, value_name})
-        return opdef
-    if route.method == "POST":
-        opdef = OpDef.post(form)
-        _validate_opdef(opdef, set(arg_names))
-        return opdef
-    if route.method == "DELETE":
-        key_name = arg_names[0] if arg_names else "key"
-        opdef = OpDef.delete(key_name, form)
-        _validate_opdef(opdef, {key_name})
-        return opdef
-
-    raise ValueError(f"unsupported opdef method {route.method}")
+    opdef = _opdef_from_method(route.method, arg_names, form)
+    opdef = _inline_opref_refs(opdef)
+    _validate_opdef(opdef, set(arg_names))
+    return opdef
 
 
 def _validate_opdef_method(method: str, opdef: OpDef) -> None:
@@ -462,21 +569,54 @@ def _validate_opdef(opdef: OpDef, allowed_inputs: set[str]) -> None:
     allowed = set(allowed_inputs)
     allowed.add("self")
     allowed |= defined
+    form_map = {name: scalar for name, scalar in opdef.form}
 
     for _, scalar in opdef.form:
         for node in _walk_scalars_with_opdef(scalar):
             if node.ref is not None:
-                _validate_tcref(node.ref, allowed)
+                _validate_tcref(node.ref, allowed, form_map)
 
 
-def _validate_tcref(tcref, allowed: set[str]) -> None:
+def _inline_opref_refs(opdef: OpDef) -> OpDef:
+    form_map = {name: scalar for name, scalar in opdef.form}
+
+    def resolve_scalar(scalar: Scalar) -> Scalar:
+        if scalar.ref is not None and scalar.ref.op is not None and isinstance(scalar.ref.op, Scalar):
+            op_scalar = scalar.ref.op
+            if op_scalar.ref is not None and op_scalar.ref.id is not None:
+                target = form_map.get(op_scalar.ref.id.name)
+                if target is not None and target.ref is not None and isinstance(target.ref.op, OpRef):
+                    return Scalar(ref=TCRef(op=target.ref.op))
+
+        if scalar.op is not None:
+            return Scalar(op=_inline_opref_refs(scalar.op))
+        if scalar.map is not None:
+            return Scalar.map_of({key: resolve_scalar(value) for key, value in scalar.map.items()})
+        if scalar.tuple is not None:
+            return Scalar.tuple_of([resolve_scalar(value) for value in scalar.tuple])
+        return scalar
+
+    return OpDef(
+        method=opdef.method,
+        form=[(name, resolve_scalar(scalar)) for name, scalar in opdef.form],
+        key=opdef.key,
+        value=opdef.value,
+    )
+
+
+def _validate_tcref(tcref, allowed: set[str], form_map: dict[str, Scalar]) -> None:
     if tcref.id is not None:
         name = tcref.id.name
         if name not in allowed:
             logging.info("OpDef depends on undefined id $%s", name)
 
     if tcref.op is not None:
-        _validate_opref(tcref.op)
+        if isinstance(tcref.op, OpRef):
+            _validate_opref(tcref.op)
+        elif isinstance(tcref.op, Scalar):
+            resolved = _resolve_opref_ref(tcref.op, form_map)
+            if resolved is not None:
+                _validate_opref(resolved)
 
 
 def _validate_opref(opref: OpRef[Any]) -> None:
@@ -494,6 +634,16 @@ def _validate_opref(opref: OpRef[Any]) -> None:
         pass
     else:
         raise ValueError(f"unsupported OpRef method {opref.method}")
+
+
+def _resolve_opref_ref(value: Scalar, form_map: dict[str, Scalar]) -> OpRef | None:
+    if value.ref is not None and isinstance(value.ref.op, OpRef):
+        return value.ref.op
+    if value.ref is not None and value.ref.id is not None:
+        target = form_map.get(value.ref.id.name)
+        if target is not None and target is not value:
+            return _resolve_opref_ref(target, form_map)
+    return None
 
 
 def _walk_scalars_with_opdef(root: Scalar):
@@ -514,7 +664,7 @@ def _walk_scalars_with_opdef(root: Scalar):
 
 
 def install(
-    library: Library,
+    library: Library | type[Library],
     *,
     kernel: Optional[object] = None,
     data_dir: Optional[pathlib.Path] = None,
@@ -533,13 +683,23 @@ def install(
             raise ValueError("expected either `kernel` or `data_dir`")
         kernel = local.KernelHandle.local(data_dir=str(data_dir))
 
-    payload = compile_ir(library)
+    library_cls = _library_class(library)
+    _validate_library_class(library_cls)
+    if isinstance(library, Library):
+        if (
+            library.publisher != getattr(library_cls, "publisher", None)
+            or library.name != getattr(library_cls, "name", None)
+            or library.version != getattr(library_cls, "version", None)
+        ):
+            raise TypeError("Library instance fields must match class attributes")
+
+    payload = compile_ir(library_cls)
     ir_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
     ir_b64 = base64.b64encode(ir_bytes).decode("ascii")
 
     install_payload = json.dumps(
         {
-            "schema": library.schema(),
+            "schema": library_cls.class_schema(),
             "artifacts": [
                 {
                     "path": _uri("lib", "ir").path,

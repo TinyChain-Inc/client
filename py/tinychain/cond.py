@@ -22,6 +22,8 @@ def cond(condition, then, or_else=None):
 
     Returns the most specific common subtype when possible; falls back to `Scalar`.
     """
+    if isinstance(condition, bool):
+        return then if condition else or_else
     if or_else is None:
         rtype = type(then) if isinstance(then, Scalar) else Scalar
     elif isinstance(then, Scalar) and isinstance(or_else, Scalar):

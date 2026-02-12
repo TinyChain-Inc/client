@@ -13,6 +13,7 @@ from . import state
 from . import kernel
 from . import testing
 from . import wasm
+from . import autograph
 from .cond import cond
 
 # Convenience aliases: keep v1 ergonomics while keeping `tc.define.*` as the canonical home.
@@ -22,7 +23,6 @@ get = define.get
 put = define.put
 post = define.post
 delete = define.delete
-opdef = define.opdef
 
 __all__ = [
     "Library",
@@ -44,11 +44,11 @@ __all__ = [
     "put",
     "post",
     "delete",
-    "opdef",
     "cond",
     "uri",
     "testing",
     "wasm",
+    "autograph",
 ]
 
 

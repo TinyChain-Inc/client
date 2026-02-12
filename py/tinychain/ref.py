@@ -13,6 +13,10 @@ T = TypeVar("T")
 class Ref(Generic[T]):
     op: OpRef[T]
 
+    def eq(self, other: object):
+        from .state import autobox
+        return autobox(self).eq(other)
+
 
 class String(Ref[str]):
     pass
@@ -20,4 +24,3 @@ class String(Ref[str]):
 
 class Json(Ref[Any]):
     pass
-

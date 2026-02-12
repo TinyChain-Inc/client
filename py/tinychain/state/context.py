@@ -21,12 +21,19 @@ class Context:
         object.__setattr__(self, "_counter", 0)
 
     def bind(self, value: object, name: str) -> Scalar:
+        original = name
         if name in self._names:
-            raise ValueError(f"duplicate context id {name}")
+            while True:
+                alias = f"{original}_{self._counter}"
+                object.__setattr__(self, "_counter", self._counter + 1)
+                if alias not in self._names:
+                    name = alias
+                    break
         self._names.add(name)
         self._form.append((name, autobox(value)))
         bound = Scalar.id(name)
         self._bound[name] = bound
+        self._bound[original] = bound
         return bound
 
     def bind_auto(self, value: object, *, prefix: str = "_tmp") -> Scalar:

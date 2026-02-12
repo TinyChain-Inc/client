@@ -10,13 +10,15 @@ Json: TypeAlias = object
 
 OPREF_DELETE_TAG: str = uri("state", "scalar", "ref", "op", "delete").path
 TCREF_IF: str = uri("state", "scalar", "ref", "if").path
+TCREF_COND: str = uri("state", "scalar", "ref", "cond").path
 TCREF_WHILE: str = uri("state", "scalar", "ref", "while").path
+TCREF_FOR_EACH: str = uri("state", "scalar", "ref", "for_each").path
 OPDEF_GET: str = uri("state", "scalar", "op", "get").path
 OPDEF_PUT: str = uri("state", "scalar", "op", "put").path
 OPDEF_POST: str = uri("state", "scalar", "op", "post").path
 OPDEF_DELETE: str = uri("state", "scalar", "op", "delete").path
 SCALAR_REFLECT_CLASS: str = uri("state", "scalar", "reflect", "class").path
-SCALAR_REFLECT_IF_PARTS: str = uri("state", "scalar", "reflect", "if_parts").path
+SCALAR_REFLECT_REF_PARTS: str = uri("state", "scalar", "reflect", "ref_parts").path
 OPDEF_REFLECT_FORM: str = uri("state", "scalar", "op", "reflect", "form").path
 OPDEF_REFLECT_LAST_ID: str = uri("state", "scalar", "op", "reflect", "last_id").path
 OPDEF_REFLECT_SCALARS: str = uri("state", "scalar", "op", "reflect", "scalars").path
@@ -146,11 +148,29 @@ class IfRef:
 
 
 @dataclass(frozen=True, slots=True)
+class CondOp:
+    cond: "TCRef"
+    then: "OpDef"
+    or_else: "OpDef"
+
+    def to_json(self) -> dict[str, Json]:
+        return {
+            TCREF_COND: [
+                self.cond.to_json(),
+                self.then.to_json(),
+                self.or_else.to_json(),
+            ]
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class TCRef:
     op: OpRef | None = None
     id: IdRef | None = None
     if_ref: IfRef | None = None
+    cond_op: CondOp | None = None
     while_loop: While | None = None
+    for_each: "ForEach | None" = None
 
     @staticmethod
     def for_id(name: str) -> "TCRef":
@@ -163,8 +183,12 @@ class TCRef:
             return {self.id.key(): []}
         if self.if_ref is not None:
             return self.if_ref.to_json()
+        if self.cond_op is not None:
+            return self.cond_op.to_json()
         if self.while_loop is not None:
             return self.while_loop.to_json()
+        if self.for_each is not None:
+            return self.for_each.to_json()
         return {}
 
     @staticmethod
@@ -195,6 +219,19 @@ class TCRef:
                 )
             )
 
+        if key == TCREF_COND:
+            if not isinstance(value, list) or len(value) != 3:
+                raise TypeError("invalid CondOp ref encoding")
+            raw_cond, raw_then, raw_or_else = value
+            cond = TCRef.from_json(raw_cond)
+            return TCRef(
+                cond_op=CondOp(
+                    cond,
+                    OpDef.from_json(raw_then),
+                    OpDef.from_json(raw_or_else),
+                )
+            )
+
         if key == TCREF_WHILE:
             if not isinstance(value, list) or len(value) != 3:
                 raise TypeError("invalid While ref encoding")
@@ -206,6 +243,19 @@ class TCRef:
                     Scalar.from_json(state),
                 )
             )
+        if key == TCREF_FOR_EACH:
+            if not isinstance(value, list) or len(value) != 3:
+                raise TypeError("invalid ForEach ref encoding")
+            items, op, item_name = value
+            if not isinstance(item_name, str):
+                raise TypeError("expected ForEach item_name to be a string")
+            return TCRef(
+                for_each=ForEach(
+                    Scalar.from_json(items),
+                    Scalar.from_json(op),
+                    item_name,
+                )
+            )
 
         if key.startswith("$") and isinstance(value, list) and not value:
             return TCRef(id=IdRef(key[1:]))
@@ -213,7 +263,9 @@ class TCRef:
         return TCRef(op=OpRef.from_json(obj))
 
 
-def autobox(obj: "Scalar | TCRef | OpRef | IdRef | OpDef | Value | IfRef | While | object") -> "Scalar":
+def autobox(
+    obj: "Scalar | TCRef | OpRef | IdRef | OpDef | Value | IfRef | CondOp | While | ForEach | object",
+) -> "Scalar":
     if isinstance(obj, Scalar):
         return obj
     if isinstance(obj, Value):
@@ -224,8 +276,12 @@ def autobox(obj: "Scalar | TCRef | OpRef | IdRef | OpDef | Value | IfRef | While
         return Scalar(ref=obj)
     if isinstance(obj, IfRef):
         return Scalar(ref=TCRef(if_ref=obj))
+    if isinstance(obj, CondOp):
+        return Scalar(ref=TCRef(cond_op=obj))
     if isinstance(obj, While):
         return Scalar(ref=TCRef(while_loop=obj))
+    if isinstance(obj, ForEach):
+        return Scalar(ref=TCRef(for_each=obj))
     if isinstance(obj, IdRef):
         return Scalar(ref=TCRef(id=obj))
     if isinstance(obj, OpDef):
@@ -258,6 +314,23 @@ def while_loop(
     state: "Scalar | Value | object",
 ) -> "Scalar":
     return Scalar.while_loop(cond, op, state)
+
+
+def cond_op(
+    cond: "TCRef | Scalar | OpRef | IdRef | object",
+    then: "OpDef",
+    or_else: "OpDef",
+) -> "Scalar":
+    return Scalar.cond_op(cond, then, or_else)
+
+
+def for_each(
+    items: "Scalar | Value | object",
+    *,
+    item_name: str,
+    op: "OpDef",
+) -> "Scalar":
+    return autobox(ForEach(autobox(items), autobox(op), item_name))
 
 
 @dataclass(frozen=True, slots=True)
@@ -321,6 +394,17 @@ class Scalar:
             )
         )
 
+    @staticmethod
+    def cond_op(
+        cond: "TCRef | Scalar | OpRef | IdRef | object",
+        then: "OpDef",
+        or_else: "OpDef",
+    ) -> "Scalar":
+        cond_ref = cond if isinstance(cond, TCRef) else autobox(cond).ref
+        if cond_ref is None:
+            raise TypeError("cond_op condition must be a ref")
+        return autobox(CondOp(cond_ref, then, or_else))
+
     def to_json(self) -> Json:
         if self.ref is not None:
             return self.ref.to_json()
@@ -338,8 +422,8 @@ class Scalar:
         opref = OpRef.post(SCALAR_REFLECT_CLASS, {"scalar": self})
         return Scalar(ref=TCRef(op=opref))
 
-    def if_parts(self) -> "Scalar":
-        opref = OpRef.post(SCALAR_REFLECT_IF_PARTS, {"scalar": self})
+    def ref_parts(self) -> "Scalar":
+        opref = OpRef.post(SCALAR_REFLECT_REF_PARTS, {"scalar": self})
         return Scalar(ref=TCRef(op=opref))
 
     def reflect_form(self) -> "Scalar":
@@ -374,6 +458,11 @@ class Scalar:
         opref = OpRef.post(subject, {"r": autobox(other)})
         return Scalar(ref=TCRef(op=opref))
 
+    def ne(self, other: "Scalar | Value | object") -> "Scalar":
+        subject = f"{self._subject()}/ne"
+        opref = OpRef.post(subject, {"r": autobox(other)})
+        return Scalar(ref=TCRef(op=opref))
+
     def add(self, other: "Scalar | Value | object") -> "Scalar":
         subject = f"{self._subject()}/add"
         opref = OpRef.post(subject, {"r": autobox(other)})
@@ -381,6 +470,41 @@ class Scalar:
 
     def gt(self, other: "Scalar | Value | object") -> "Scalar":
         subject = f"{self._subject()}/gt"
+        opref = OpRef.post(subject, {"r": autobox(other)})
+        return Scalar(ref=TCRef(op=opref))
+
+    def ge(self, other: "Scalar | Value | object") -> "Scalar":
+        subject = f"{self._subject()}/ge"
+        opref = OpRef.post(subject, {"r": autobox(other)})
+        return Scalar(ref=TCRef(op=opref))
+
+    def lt(self, other: "Scalar | Value | object") -> "Scalar":
+        subject = f"{self._subject()}/lt"
+        opref = OpRef.post(subject, {"r": autobox(other)})
+        return Scalar(ref=TCRef(op=opref))
+
+    def le(self, other: "Scalar | Value | object") -> "Scalar":
+        subject = f"{self._subject()}/le"
+        opref = OpRef.post(subject, {"r": autobox(other)})
+        return Scalar(ref=TCRef(op=opref))
+
+    def logical_and(self, other: "Scalar | Value | object") -> "Scalar":
+        subject = f"{self._subject()}/and"
+        opref = OpRef.post(subject, {"r": autobox(other)})
+        return Scalar(ref=TCRef(op=opref))
+
+    def logical_not(self) -> "Scalar":
+        subject = f"{self._subject()}/not"
+        opref = OpRef.post(subject, {})
+        return Scalar(ref=TCRef(op=opref))
+
+    def logical_or(self, other: "Scalar | Value | object") -> "Scalar":
+        subject = f"{self._subject()}/or"
+        opref = OpRef.post(subject, {"r": autobox(other)})
+        return Scalar(ref=TCRef(op=opref))
+
+    def logical_xor(self, other: "Scalar | Value | object") -> "Scalar":
+        subject = f"{self._subject()}/xor"
         opref = OpRef.post(subject, {"r": autobox(other)})
         return Scalar(ref=TCRef(op=opref))
 
@@ -409,10 +533,76 @@ class Scalar:
         opref = OpRef.post(subject, {"i": autobox(index)})
         return Scalar(ref=TCRef(op=opref))
 
+    def slice(self, start: "Scalar | Value | object", stop: "Scalar | Value | object") -> "Scalar":
+        subject = f"{self._subject()}/slice"
+        opref = OpRef.post(subject, {"start": autobox(start), "stop": autobox(stop)})
+        return Scalar(ref=TCRef(op=opref))
+
     def __getitem__(self, index: "Scalar | Value | object") -> "Scalar":
         if isinstance(index, slice):
-            raise NotImplementedError("slice indexing is not supported for Scalar")
+            if index.step is not None:
+                raise NotImplementedError(f"slice with step: {index}")
+            start = 0 if index.start is None else index.start
+            stop = self.len() if index.stop is None else index.stop
+            return self.slice(start, stop)
         return self.get(index)
+
+    def __add__(self, other: object) -> "Scalar":
+        if isinstance(other, (list, tuple)):
+            return self.concat(other)
+        if isinstance(other, Scalar) and other.tuple is not None:
+            return self.concat(other)
+        return self.add(other)
+
+    def __radd__(self, other: object) -> "Scalar":
+        if isinstance(other, (list, tuple)):
+            return autobox(other).concat(self)
+        if isinstance(other, Scalar) and other.tuple is not None:
+            return other.concat(self)
+        return autobox(other).add(self)
+
+    def __gt__(self, other: object) -> "Scalar":
+        return self.gt(other)
+
+    def __ge__(self, other: object) -> "Scalar":
+        return self.ge(other)
+
+    def __lt__(self, other: object) -> "Scalar":
+        return self.lt(other)
+
+    def __le__(self, other: object) -> "Scalar":
+        return self.le(other)
+
+    def __eq__(self, other: object) -> object:
+        try:
+            from .context import current_context  # local import to avoid cycles
+        except Exception:
+            current_context = None
+
+        if current_context is not None and current_context() is not None:
+            return self.eq(other)
+        if isinstance(other, Scalar):
+            return (
+                self.value,
+                self.ref,
+                self.op,
+                self.map,
+                self.tuple,
+            ) == (
+                other.value,
+                other.ref,
+                other.op,
+                other.map,
+                other.tuple,
+            )
+        return False
+
+    def __ne__(self, other: object) -> object:
+        result = self.__eq__(other)
+        if isinstance(result, bool):
+            return not result
+        return self.ne(other)
+
 
     def reduce(
         self,
@@ -641,6 +831,22 @@ class OpDef:
 
 class If:
     __uri__ = uri("state", "scalar", "ref", "if")
+
+
+@dataclass(frozen=True, slots=True)
+class ForEach:
+    items: "Scalar"
+    op: "Scalar"
+    item_name: str
+
+    def to_json(self) -> dict[str, Json]:
+        return {
+            TCREF_FOR_EACH: [
+                self.items.to_json(),
+                self.op.to_json(),
+                self.item_name,
+            ]
+        }
 
 
 def _encode_form(form: Sequence[tuple[str, Scalar]]) -> list[list[Json]]:

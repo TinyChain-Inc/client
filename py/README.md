@@ -466,6 +466,10 @@ host scheduler resolves them exactly once per invocation even when referenced re
 All of these helpers serialize to the canonical `Scalar` enum defined in `tc-ir`, keeping
 HTTP, PyO3, and future adapters in lockstep.
 
+For tiny, expression-only helpers, `tc.post` accepts a Python `lambda` and will compile
+it into a POST `OpDef`. This is intended for simple cases like `reduce` helpers; complex
+control flow should use named routes or full Autograph rewrites.
+
 ## Autograph-style inline control flow
 
 TinyChain’s Python client will support Autograph-like rewrites so publishers can use native
@@ -479,7 +483,8 @@ Python `if`/`while`/`for` constructs inside route definitions. Scope:
    control flow into `TCRef`/`OpRef` graphs:
    - `if` → `TCRef::If`
    - `while` → `TCRef::While`
-   - `for`/`async for` → `TCRef::ForEach`
+   - `for` → `TCRef::ForEach` (tuple iteration)
+   - `async for` → not yet implemented
    - user-defined helper calls → `OpRef` (with captured args)
    Unsupported constructs (e.g., `try/except`, dynamic attribute injection) raise
    deterministic errors with remediation tips.

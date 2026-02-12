@@ -64,3 +64,34 @@ class Library:
 
     def schema_json(self) -> str:
         return json.dumps(self.schema(), separators=(",", ":"))
+
+    @classmethod
+    def class_id(cls) -> uri.URI:
+        publisher = getattr(cls, "publisher", None)
+        name = getattr(cls, "name", None)
+        version = getattr(cls, "version", None)
+        if not publisher or not name or not version:
+            raise TypeError("Library requires publisher, name, and version")
+        return uri.URI(
+            "/" + "/".join(
+                [
+                    "lib",
+                    uri._segment("publisher", publisher),
+                    uri._segment("name", name),
+                    uri._segment("version", version),
+                ]
+            )
+        )
+
+    @classmethod
+    def class_schema(cls) -> dict:
+        deps = getattr(cls, "dependencies", ())
+        return {
+            "id": cls.class_id().path,
+            "version": getattr(cls, "version", None),
+            "dependencies": [dep.path for dep in deps],
+        }
+
+    @classmethod
+    def class_schema_json(cls) -> str:
+        return json.dumps(cls.class_schema(), separators=(",", ":"))
