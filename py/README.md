@@ -151,6 +151,17 @@ ilc.install_wasm(
 )
 ```
 
+For a full runnable example (install + call `/cipher/add` and `/cipher/mul`), use:
+
+```bash
+# from the runtime repo root:
+cargo build --manifest-path ilc-client/Cargo.toml --example cipher_wasm --target wasm32-unknown-unknown --release
+
+# token must allow /lib install + execute:
+export TC_BEARER_TOKEN='...'
+python py/examples/ilc_wasm_example.py --server 127.0.0.1:8700
+```
+
 ## WASM installer regression
 
 The `py/tests/test_install_wasm_script.py` test exercises the
