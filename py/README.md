@@ -162,6 +162,13 @@ export TC_BEARER_TOKEN='...'
 python py/examples/ilc_wasm_example.py --server 127.0.0.1:8700
 ```
 
+For an ABC-style flow using local WASM routes (`a + b - c` via `/cipher/add`), use:
+
+```bash
+export TC_BEARER_TOKEN='...'
+python py/examples/abc_wasm_example.py --server 127.0.0.1:8700 --a 7 --b 5 --c 3
+```
+
 ## WASM installer regression
 
 The `py/tests/test_install_wasm_script.py` test exercises the
