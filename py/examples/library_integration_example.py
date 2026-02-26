@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-Single-file integration example demonstrating two Python-side Library configurations:
+Single-file integration example demonstrating local + remote execution in one script:
 
-1) A local *stub* `Library` backed by a local WASM binary, invoked through the PyO3 backend.
-2) That local WASM route returns an `OpRef` (as JSON) pointing at a remote `/lib/...` dependency,
-   which the kernel resolves via HTTP RPC to a running TinyChain server on another host.
+1) A direct HTTP call executes a remote library route on a running TinyChain host.
+2) A local *stub* `Library` backed by a local WASM binary is invoked through the PyO3 backend.
+   That local WASM route returns an `OpRef` (as JSON) pointing at the same remote dependency,
+   which the kernel resolves via HTTP RPC within the current transaction.
 
 This uses the existing Rust "Hello, world!" host + WASM example artifacts.
 """
@@ -12,10 +13,11 @@ This uses the existing Rust "Hello, world!" host + WASM example artifacts.
 from __future__ import annotations
 
 import argparse
+import os
 import pathlib
+import subprocess
 import tempfile
 from typing import Optional
-import os
 
 try:
     import tinychain as tc
@@ -85,18 +87,25 @@ def _ensure_opref_wasm() -> pathlib.Path:
 
 def test_local_wasm_resolves_remote_opref(authority: str, wasm_path: pathlib.Path) -> None:
     b = RemoteB(authority=tc.URI.parse(authority))
+
+    # Remote execution via HTTP (no local kernel involved).
+    host_address = authority if "://" in authority else f"http://{authority}"
+    host = tc.Host(host_address)
+    assert host.execute(b.hello("World")) == "Hello, World!"
+
     with tempfile.TemporaryDirectory(prefix="tinychain-data-") as temp_dir:
         data_dir = pathlib.Path(temp_dir) / "tc-data"
         data_dir.mkdir(parents=True, exist_ok=True)
 
         a = LocalWasmA(dependencies=(b.link(),))
         if not BEARER_TOKEN or not TOKEN_HOST or not ACTOR_ID or not PUBLIC_KEY_B64:
+            lib_path = tc.uri(a).path
             raise RuntimeError(
                 "TC_BEARER_TOKEN must be set to a bearer token with install and txn claims. "
                 "Generate one via: "
                 "cargo run --example rjwt_install_token -- "
                 "--host http://127.0.0.1:8702 --actor example-admin "
-                "--lib /lib/example-devco/a/0.1.0"
+                f"--lib {lib_path}"
             )
 
         install = tc.wasm.install(

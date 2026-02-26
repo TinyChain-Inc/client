@@ -15,6 +15,7 @@ from . import testing
 from . import wasm
 from . import autograph
 from .cond import cond
+from .host import Host
 
 # Convenience aliases: keep v1 ergonomics while keeping `tc.define.*` as the canonical home.
 self_subject = define.self_subject
@@ -46,6 +47,7 @@ __all__ = [
     "delete",
     "cond",
     "uri",
+    "Host",
     "testing",
     "wasm",
     "autograph",
