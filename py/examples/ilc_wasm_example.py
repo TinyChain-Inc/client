@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install the ILC client WASM library and call its local cipher routes from Python."""
+"""Install the ILC client WASM library and run mixed remote + local ILC calls."""
 
 from __future__ import annotations
 
@@ -23,13 +23,15 @@ DEFAULT_WASM = (
     / "examples"
     / "cipher_wasm.wasm"
 )
+DEFAULT_KEY = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
 
 
 def _args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Install the ilc-client WASM binary into a local data_dir and call "
-            "POST /cipher/add and POST /cipher/mul via the PyO3 backend."
+            "Install the ilc-client WASM binary into a local data_dir, then run "
+            "remote POST /crypto/encrypt, local POST /cipher/add and /cipher/mul, "
+            "and remote POST /crypto/decrypt in one backend session."
         )
     )
     parser.add_argument(
@@ -57,6 +59,11 @@ def _args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         default=None,
         help="Optional persistent data_dir (defaults to a temporary directory)",
     )
+    parser.add_argument(
+        "--key",
+        default=DEFAULT_KEY,
+        help="Hex-encoded 32-byte AES key used for remote encrypt/decrypt demo calls",
+    )
     return parser.parse_args(argv)
 
 
@@ -78,11 +85,17 @@ def _require_token(token: Optional[str]) -> str:
         "missing bearer token. Set TC_BEARER_TOKEN or pass --bearer-token. "
         "For local dev, generate one with: "
         "cargo run -p ilc-server --example issue_token -- "
-        "--link /lib/applied-physics/ilc-client --mode 700 --ttl 10m"
+        "--link /lib/applied-physics/ilc --mode 700 --ttl 10m"
     )
 
 
-def _run(wasm_path: pathlib.Path, server: str, bearer_token: str, data_dir: pathlib.Path) -> None:
+def _run(
+    wasm_path: pathlib.Path,
+    server: str,
+    bearer_token: str,
+    data_dir: pathlib.Path,
+    key: str,
+) -> None:
     data_dir.mkdir(parents=True, exist_ok=True)
     install = ilc.install_wasm(
         wasm_path,
@@ -103,10 +116,36 @@ def _run(wasm_path: pathlib.Path, server: str, bearer_token: str, data_dir: path
     }
 
     with tc.backend(kernel, bearer_token=bearer_token):
+        encrypt_result = tc.execute(
+            lib.opref_encrypt(
+                {
+                    "key": key,
+                    "plain": payload["metric"],
+                }
+            )
+        )
         add_result = tc.execute(lib.opref_add(payload))
         mul_result = tc.execute(lib.opref_mul(payload))
+        decrypt_result = tc.execute(
+            lib.opref_decrypt(
+                {
+                    "key": key,
+                    "cipher": encrypt_result["cipher"],
+                }
+            )
+        )
 
-    print(json.dumps({"add": add_result, "mul": mul_result}, indent=2))
+    print(
+        json.dumps(
+            {
+                "encrypt": encrypt_result,
+                "add": add_result,
+                "mul": mul_result,
+                "decrypt": decrypt_result,
+            },
+            indent=2,
+        )
+    )
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -115,11 +154,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     token = _require_token(args.bearer_token)
 
     if args.data_dir is not None:
-        _run(wasm_path, args.server, token, args.data_dir)
+        _run(wasm_path, args.server, token, args.data_dir, args.key)
         return 0
 
     with tempfile.TemporaryDirectory(prefix="ilc-wasm-") as tmp:
-        _run(wasm_path, args.server, token, pathlib.Path(tmp) / "tc-data")
+        _run(wasm_path, args.server, token, pathlib.Path(tmp) / "tc-data", args.key)
 
     return 0
 

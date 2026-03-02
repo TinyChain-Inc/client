@@ -151,13 +151,13 @@ ilc.install_wasm(
 )
 ```
 
-For a full runnable example (install + call `/cipher/add` and `/cipher/mul`), use:
+For a full runnable example (install + remote `/crypto/encrypt` + local `/cipher/add` and `/cipher/mul` + remote `/crypto/decrypt`), use:
 
 ```bash
 # from the runtime repo root:
 cargo build --manifest-path ilc-client/Cargo.toml --example cipher_wasm --target wasm32-unknown-unknown --release
 
-# token must allow /lib install + execute:
+# token must allow install + encrypt + decrypt + execute:
 export TC_BEARER_TOKEN='...'
 python py/examples/ilc_wasm_example.py --server 127.0.0.1:8700
 ```
