@@ -127,48 +127,6 @@ installer + integration example end-to-end:
 scripts/run_python_integration_with_token.sh
 ```
 
-### ILC helper package (minimal)
-
-The `ilc` helper module provides a minimal schema + install helper for the ILC client
-WASM library. It assumes the WASM module exports:
-
-- `POST /cipher/add`
-- `POST /cipher/mul`
-- `POST /encrypt` (returns an OpRef to `/lib/applied-physics/ilc/crypto/encrypt`)
-- `POST /decrypt` (returns an OpRef to `/lib/applied-physics/ilc/crypto/decrypt`)
-
-Install the WASM library into a local `data_dir`, routing remote OpRefs to a configured
-ILC server authority:
-
-```python
-import ilc
-
-ilc.install_wasm(
-    "/path/to/ilc_client.wasm",
-    data_dir="/tmp/tc-data",
-    server="127.0.0.1:8700",
-    bearer_token="your-token",
-)
-```
-
-For a full runnable example (install + remote `/crypto/encrypt` + local `/cipher/add` and `/cipher/mul` + remote `/crypto/decrypt`), use:
-
-```bash
-# from the runtime repo root:
-cargo build --manifest-path ilc-client/Cargo.toml --example cipher_wasm --target wasm32-unknown-unknown --release
-
-# token must allow install + encrypt + decrypt + execute:
-export TC_BEARER_TOKEN='...'
-python py/examples/ilc_wasm_example.py --server 127.0.0.1:8700
-```
-
-For an ABC-style flow using local WASM routes (`a + b - c` via `/cipher/add`), use:
-
-```bash
-export TC_BEARER_TOKEN='...'
-python py/examples/abc_wasm_example.py --server 127.0.0.1:8700 --a 7 --b 5 --c 3
-```
-
 ## WASM installer regression
 
 The `py/tests/test_install_wasm_script.py` test exercises the
