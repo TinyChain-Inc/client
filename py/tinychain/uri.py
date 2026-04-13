@@ -134,3 +134,33 @@ def uri(subject: object, *path: str) -> URI | "Scalar":
     new_path = _join_path([base_path.lstrip("/")] + segments) if base_path else _join_path(segments)
 
     return URI(path=new_path, scheme=base.scheme, host=base.host, port=base.port)
+
+
+def authority(value: str | URI) -> str:
+    if isinstance(value, URI):
+        parsed = value
+    else:
+        text = value.strip()
+        if not text or text.startswith("/"):
+            raise ValueError(f"expected host[:port] or absolute URI, got: {value}")
+        parsed = URI.parse(text)
+
+    out = parsed.authority()
+    if out is None:
+        raise ValueError(f"expected URI with authority, got: {value}")
+    return out
+
+
+def origin(value: str | URI) -> str:
+    if isinstance(value, URI):
+        parsed = value
+    else:
+        text = value.strip()
+        if not text or text.startswith("/"):
+            raise ValueError(f"expected host[:port] or absolute URI, got: {value}")
+        parsed = URI.parse(text)
+
+    out = parsed.authority()
+    if out is None:
+        raise ValueError(f"expected URI with authority, got: {value}")
+    return f"{parsed.scheme}://{out}"

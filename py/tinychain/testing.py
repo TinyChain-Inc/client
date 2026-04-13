@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import json
 import pathlib
+import selectors
+import signal
 import subprocess
-from typing import Iterable, Optional, Tuple
+import time
+from typing import Callable, Iterable, Optional, Tuple, TypeVar
 
 from .uri import uri
 
 
 _SCALAR_VALUE_PREFIX = uri("state", "scalar", "value").path + "/"
+_T = TypeVar("_T")
 
 
 def _unwrap_scalar_value(payload: object) -> object:
@@ -92,6 +96,7 @@ def start_rust_example(
     root: Optional[pathlib.Path] = None,
     prefer_binary: bool = True,
     require_binary: bool = False,
+    startup_timeout_secs: float = 20.0,
 ) -> Tuple[subprocess.Popen[str], str]:
     """
     Start a Rust example which prints its bound `host:port` on stdout.
@@ -101,6 +106,36 @@ def start_rust_example(
     """
 
     root = root or repo_root()
+
+    def _read_addr_with_timeout(proc: subprocess.Popen[str]) -> str:
+        assert proc.stdout is not None
+        deadline = time.monotonic() + startup_timeout_secs
+        selector = selectors.DefaultSelector()
+        selector.register(proc.stdout, selectors.EVENT_READ)
+        try:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    stderr = proc.stderr.read() if proc.stderr is not None else ""
+                    proc.kill()
+                    raise RuntimeError(
+                        f"example {name} did not print a bound address within "
+                        f"{startup_timeout_secs:.1f}s (stderr):\n{stderr}"
+                    )
+
+                if proc.poll() is not None:
+                    stderr = proc.stderr.read() if proc.stderr is not None else ""
+                    raise RuntimeError(f"example {name} exited before startup (stderr):\n{stderr}")
+
+                ready = selector.select(timeout=remaining)
+                if not ready:
+                    continue
+
+                addr = proc.stdout.readline().strip()
+                if addr:
+                    return addr
+        finally:
+            selector.close()
 
     if prefer_binary:
         candidates = [
@@ -116,12 +151,7 @@ def start_rust_example(
                 stderr=subprocess.PIPE,
                 text=True,
             )
-            assert proc.stdout is not None
-            addr = proc.stdout.readline().strip()
-            if not addr:
-                stderr = proc.stderr.read() if proc.stderr is not None else ""
-                proc.kill()
-                raise RuntimeError(f"example {name} failed to start (stderr):\n{stderr}")
+            addr = _read_addr_with_timeout(proc)
             return proc, addr
 
         if require_binary:
@@ -151,11 +181,22 @@ def start_rust_example(
         text=True,
     )
 
-    assert proc.stdout is not None
-    addr = proc.stdout.readline().strip()
-    if not addr:
-        stderr = proc.stderr.read() if proc.stderr is not None else ""
-        proc.kill()
-        raise RuntimeError(f"example {name} failed to start (stderr):\n{stderr}")
-
+    addr = _read_addr_with_timeout(proc)
     return proc, addr
+
+
+def run_with_timeout(timeout_secs: int, fn: Callable[[], _T]) -> _T:
+    if timeout_secs <= 0:
+        raise ValueError("timeout_secs must be positive")
+
+    def _on_timeout(_signum, _frame):
+        raise TimeoutError(f"operation exceeded {timeout_secs}s timeout")
+
+    previous = signal.getsignal(signal.SIGALRM)
+    signal.signal(signal.SIGALRM, _on_timeout)
+    signal.alarm(timeout_secs)
+    try:
+        return fn()
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)

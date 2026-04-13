@@ -5,6 +5,7 @@
 1. **Eager session ergonomics with v1 compatibility.**
    - Keep graph-style reuse and batching defaults visible (session.commit), while exposing PyO3-native methods for common math and collection operations.
    - Provide migration snippets that show one-to-one v1 deferred vs v2 eager flows for collection access, transactions, and auth headers.
+   - Publish and maintain a gap rubric that distinguishes framework gaps (version-agnostic missing native capability) from parity gaps (v1-v2 differences): transport/auth parity is satisfied by framework-native `Host`/executor flows and shared envelopes; app-specific request-body helpers are out-of-scope for client parity unless reused across libraries.
 
 2. **Shard-aware collection interface.**
    - Expose client-facing helpers for `BTree`, `Table`, and `Tensor` collections that are sharded across blocks by default and can be addressed as sharded across hosts. Cross-host routing lives in this client library; the Rust host binary continues to execute shard-local handlers.
@@ -16,6 +17,7 @@
    - Maintain test coverage for WASM installs and auth propagation as the runtime stabilizes.
    - Ensure publishers can declare an explicit dependency set in the manifest (library-wide), and that the installer persists those dependency edges so runtimes can enforce egress uniformly across local and remote execution.
    - Add a reference example which runs a library `A` in-process via PyO3 (no HTTP server) whose method calls a dependency `B` served by a remote HTTP host, then invokes `A` from Python and asserts the cross-host call succeeds.
+   - Document a deprecation path for package-local HTTP shims when equivalent framework transport APIs already exist.
 
 4. **Python-defined library compilation (v1-style).**
    - Keep the client-side deferred execution model: Python methods build a typed graph spec using return type hints, without executing host-side effects.

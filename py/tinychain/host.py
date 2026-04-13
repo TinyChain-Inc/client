@@ -8,6 +8,7 @@ from typing import Iterable, Optional
 import requests
 
 from .opref import OpRef
+from .ref import Ref
 from .uri import URI, uri
 
 
@@ -46,10 +47,12 @@ class Host:
 
     def execute(
         self,
-        opref: OpRef,
+        opref: OpRef | Ref,
         *,
         bearer_token: Optional[str] = None,
     ) -> object:
+        if isinstance(opref, Ref):
+            opref = opref.op
         if not isinstance(opref, OpRef):
             raise TypeError(f"expected OpRef, got {type(opref).__name__}")
         return self.request(
@@ -119,5 +122,20 @@ def _handle_response(response: requests.Response) -> object:
     except ValueError as exc:
         raise RuntimeError(f"invalid JSON response: {response.text}") from exc
     if status == 200:
-        return payload
+        return _unwrap_state(payload)
     raise RuntimeError(f"unexpected HTTP {status}: {payload}")
+
+
+def _unwrap_state(payload: object) -> object:
+    scalar_prefix = uri("state", "scalar", "value").path + "/"
+    if isinstance(payload, dict) and len(payload) == 1:
+        (key, value), = payload.items()
+        if isinstance(key, str) and key.startswith(scalar_prefix):
+            return _unwrap_state(value)
+        if key == uri("state", "scalar", "map").path and isinstance(value, dict):
+            return {k: _unwrap_state(v) for k, v in value.items()}
+    if isinstance(payload, dict):
+        return {k: _unwrap_state(v) for k, v in payload.items()}
+    if isinstance(payload, list):
+        return [_unwrap_state(item) for item in payload]
+    return payload

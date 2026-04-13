@@ -38,6 +38,18 @@ exist yet). Mirror the structure of the Rust API (e.g., `tinychain/state.py`,
 4. **Run the Python tests** (`python -m pytest py/tests`) and the PyO3
    integration tests to ensure stubs and bindings agree.
 
+## Ergonomic usage expectations
+
+- Do not hand-roll request/response wrappers (for example custom `Request`,
+  `Response`, `Body`, or payload parser classes) in usage guides or examples.
+- Use framework-native execution surfaces:
+  - `with tc.backend(...):` for contextual execution control
+  - direct route method calls for default auto-execution
+  - `tc.execute(ref)` only when explicit deferred execution is intended
+  - `tc.Host` for explicit HTTP/RPC transport calls
+- If a guide needs decoded response content from a kernel response object,
+  use `tc.testing.decode_json_body` instead of custom status/body parsing.
+
 Keeping the stubs current is what lets the Python package advertise every Rust
 capability without re-implementing it. If you are unsure where a stub should go
 or how to describe a new endpoint, mention it in your PR so reviewers can
