@@ -6,13 +6,14 @@ from .executor import execute as _dispatch_execute
 from .opref import OpRef
 from . import opref
 from .ref import Ref, String, Json
-from .uri import URI, uri
+from .uri import URI, authority, origin, uri
 from . import define
 from . import compute
 from . import state
 from . import kernel
 from . import testing
 from . import wasm
+from . import auth
 from . import autograph
 from .cond import cond
 from .host import Host
@@ -47,16 +48,27 @@ __all__ = [
     "delete",
     "cond",
     "uri",
+    "authority",
+    "origin",
     "Host",
     "testing",
     "wasm",
+    "auth",
     "autograph",
 ]
 
 
 def execute(op: "OpRef | Ref") -> object:
+    if not isinstance(op, (OpRef, Ref)):
+        # Backward-compatible no-op for values which may already have been
+        # auto-executed in the active backend context.
+        return op
+
     response = _dispatch_execute(op)
     status = getattr(response, "status", None)
+    if status is None:
+        # HTTP-host execution paths may already return decoded JSON-like values.
+        return response
     if status == 200:
         return testing.decode_json_body(response)
     if status == 204:

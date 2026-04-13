@@ -24,3 +24,10 @@ def test_uri_state_builder():
 
 def test_uri_healthz_builder():
     assert tc.uri("healthz").path == "/healthz"
+
+
+def test_authority_and_origin_helpers():
+    assert tc.authority("127.0.0.1:8702") == "127.0.0.1:8702"
+    assert tc.authority("http://127.0.0.1:8702/lib/example-devco/x/0.1.0") == "127.0.0.1:8702"
+    assert tc.origin("127.0.0.1:8702") == "http://127.0.0.1:8702"
+    assert tc.origin("https://api.example.com:443/lib/x") == "https://api.example.com:443"

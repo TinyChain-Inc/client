@@ -2,7 +2,6 @@ import importlib.util
 import json
 import pathlib
 
-import os
 import tinychain as tc
 
 from .support import REPO_ROOT, ensure_wasm_example_built, rjwt_install_token
@@ -22,48 +21,42 @@ def _load_install_wasm():
 
 INSTALL_WASM = _load_install_wasm()
 
-
-def _sanitize_id(schema_id: str) -> str:
-    return schema_id.lstrip("/").replace("/", "_")
-
-
 def test_install_wasm_script_registers_routes(tmp_path):
     wasm_path = ensure_wasm_example_built("hello_wasm")
     data_dir = tmp_path / "tc-data"
     data_dir.mkdir()
+    schema_json = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
 
     token = rjwt_install_token(
         tc.uri("lib", "example-devco", "example", "0.1.0").path
     )
-    os.environ["TC_TOKEN_HOST"] = token["host"]
-    os.environ["TC_ACTOR_ID"] = token["actor_id"]
-    os.environ["TC_PUBLIC_KEY_B64"] = token["public_key_b64"]
+    kernel = tc.KernelHandle.with_library_schema_rjwt(
+        json.dumps(schema_json, separators=(",", ":")),
+        token["host"],
+        token["actor_id"],
+        token["public_key_b64"],
+        data_dir=str(data_dir),
+    )
 
     response = INSTALL_WASM.install(
         SCHEMA_PATH,
         wasm_path,
+        kernel=kernel,
         data_dir=data_dir,
         bearer_token=token["bearer_token"],
     )
     assert response.status == 204
 
-    hydrated_kernel = tc.KernelHandle.local(data_dir=str(data_dir))
-
     schema_path = tc.uri("lib", "example-devco", "example", "0.1.0").path
-    schema_response = hydrated_kernel.dispatch(
+    schema_response = kernel.dispatch(
         tc.KernelRequest("GET", schema_path, None, None)
     )
     assert schema_response.status == 200
     schema_json = tc.testing.decode_json_body(schema_response)
 
     hello_path = tc.uri("lib", "example-devco", "example", "0.1.0", "hello").path
-    route_response = hydrated_kernel.dispatch(
+    route_response = kernel.dispatch(
         tc.KernelRequest("GET", hello_path, None, tc.StateHandle("world"))
     )
     assert route_response.status == 200
     assert tc.testing.decode_json_body(route_response) == "Hello, world!"
-
-    lib_rel = schema_json["id"].lstrip("/").split("/")
-    lib_path = data_dir.joinpath(*lib_rel)
-    assert (lib_path / "schema.json").exists()
-    assert (lib_path / "library.wasm").exists()

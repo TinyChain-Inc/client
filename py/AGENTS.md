@@ -27,6 +27,35 @@ staying thin and well-documented for new users.
   batching, convenience helpers) must never hide long-running work; expose
   TaskQueue helpers (`enqueue`/`claim`/`ack`) so publishers push heavy workloads
   through queues instead of synchronous routes.
+- Distinguish two classes of gaps:
+  framework gaps (missing native capability we want `tinychain` to provide,
+  independent of v1/v2) and parity gaps (behavior differences versus v1).
+- Treat v1 parity claims as contract-level requirements:
+  transport parity means framework-native `Host`/executor request paths with
+  bearer-header auth and shared response/error envelopes.
+- Do not classify application-specific payload fields (for example route-specific
+  auth fields inside a request body) as Python client framework gaps unless the
+  same requirement exists across unrelated libraries.
+- Keep key/token parsing helpers package-local by default; only promote them into
+  `tinychain` when they are broadly reusable across multiple publishers and
+  transport modes.
+- Do not add custom request/response wrapper classes or hand-written payload/status
+  parsing in examples or client APIs when framework surfaces already exist
+  (`tc.backend`, `tc.execute`, `tc.Host`, `tc.testing.decode_json_body`).
+- Prefer idiomatic route calls inside `with tc.backend(...):` and reserve explicit
+  `tc.execute(...)` for deferred flows (`auto_execute=False`) or cross-scope execution.
+
+## Gap triage guardrails
+
+- Before adding a "framework gap" item, cite the missing primitive in
+  `client/py` and explain why it should be framework-native across packages.
+- For "parity gap" items, also cite the matching v1 behavior in
+  `~/Documents/tinychain/client/py`.
+- If the behavior can already be expressed with `tinychain.Host`,
+  `tinychain.Executor`, or route stubs, treat it as package integration work,
+  not a framework gap.
+- Prefer deleting package-local transport shims once equivalent framework calls
+  exist; avoid parallel request stacks.
 
 ## Testing and docs
 

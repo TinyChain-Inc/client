@@ -34,7 +34,7 @@ def _route_path(subject: object, route_name: str) -> str:
     publisher = getattr(subject, "publisher")
     name = getattr(subject, "name")
     version = getattr(subject, "version")
-    return URI(
+    route_uri = URI(
         "/" + "/".join(
             [
                 "lib",
@@ -44,7 +44,25 @@ def _route_path(subject: object, route_name: str) -> str:
                 _segment("path", route_name),
             ]
         )
-    ).path
+    )
+
+    authority = getattr(subject, "authority", None)
+    authority_uri: URI | None = None
+    if isinstance(authority, URI):
+        authority_uri = authority
+    elif isinstance(authority, str):
+        authority_uri = URI.parse(authority)
+
+    if authority_uri is not None and authority_uri.host is not None:
+        route_uri = URI(
+            path=route_uri.path,
+            scheme=authority_uri.scheme,
+            host=authority_uri.host,
+            port=authority_uri.port,
+        )
+        return route_uri.absolute()
+
+    return route_uri.path
 
 
 def _library_class(library: "Library | type[Library]") -> type["Library"]:
@@ -157,7 +175,17 @@ class Route:
             if body is not None:
                 opref = OpRef(method=opref.method, path=opref.path, headers=opref.headers, body=body)
             rtype = self._return_type()
-            return rtype(opref) if rtype is not None else opref
+            result = rtype(opref) if rtype is not None else opref
+
+            from .executor import try_current
+
+            exec_ctx = try_current()
+            if exec_ctx is not None and exec_ctx.auto_execute:
+                import tinychain as tc
+
+                return tc.execute(result)
+
+            return result
 
         bound.__name__ = self.name or self.form.__name__
         bound.__doc__ = self.form.__doc__
@@ -713,10 +741,40 @@ def install(
 
     headers = [("authorization", f"Bearer {bearer_token}")]
 
+    install_path = _uri("lib").path
     request = local.KernelRequest(
         "PUT",
-        _uri("lib").path,
+        install_path,
         headers,
         local.StateHandle(install_payload),
     )
-    return kernel.dispatch(request)
+    response = kernel.dispatch(request)
+    return _finalize_implicit_txn(local, kernel, response, install_path, bearer_token)
+
+
+def _header_value(response: object, name: str) -> str | None:
+    headers = getattr(response, "headers", None)
+    if not headers:
+        return None
+
+    needle = name.lower()
+    for key, value in headers:
+        if str(key).lower() == needle:
+            return str(value)
+    return None
+
+
+def _finalize_implicit_txn(
+    local: object,
+    kernel: object,
+    response: object,
+    path: str,
+    bearer_token: str | None,
+) -> object:
+    txn_id = _header_value(response, "x-tc-txn-id")
+    if not txn_id:
+        return response
+
+    headers = [("authorization", f"Bearer {bearer_token}")] if bearer_token else None
+    commit = local.KernelRequest("POST", f"{path}?txn_id={txn_id}", headers, None)
+    return kernel.dispatch(commit)

@@ -65,6 +65,98 @@ This keeps the URI scheme consistent across adapters and prevents bespoke routin
 you add a helper that touches remote state, ensure it calls into the same URI constructors
 so future publishers inherit the validation for free.
 
+## Framework gaps vs parity gaps
+
+When evaluating gaps, separate framework capability from v1 parity and from
+package-level contract helpers:
+
+- **Framework gap (version-agnostic):** missing behavior in `tinychain` transport/execution
+  surfaces that should be framework-native across packages.
+- **Parity gap (v1→v2 specific):** behavior in `tinychain` transport/execution
+  surfaces (for example `Host`/executor auth-header flow, request envelope handling, or
+  response/error envelope normalization) where v1 already provides that behavior.
+- **Does not count as parity by itself:** route-specific request-body fields required by one
+  package's API contract. Keep those in the package unless multiple independent libraries
+  require the same abstraction.
+- **Usually package-local:** key/token conversion utilities used to adapt one protocol.
+  Promote into `tinychain` only when they are broadly reusable across publishers and
+  both HTTP and PyO3 execution paths.
+
+Before filing a framework or parity issue, include:
+
+- The missing primitive in this repo under `client/py/tinychain`.
+- If parity is claimed, the matching v1 implementation under
+  `~/Documents/tinychain/client/py/tinychain`.
+
+If framework APIs already cover the behavior, treat the remaining work as package
+integration and remove package-local transport shims instead of duplicating stacks.
+
+## Mixed backend execution context
+
+Use one `with tc.backend(...):` block to run mixed local + remote calls:
+
+- `kernel=...` handles local PyO3 execution.
+- authority-qualified library links (`library.link()`) drive dependency routing.
+- `tc.kernel.for_library(local_library, data_dir=...)` derives egress routes from declared dependency authorities.
+- route method calls auto-execute inside the active backend.
+- without an active backend, `tc.execute(op)` still works when `op.path` is
+  authority-qualified (for example `https://host/...`); otherwise it fails as
+  ambiguous.
+- route stubs emit authority-qualified paths automatically when a `Library`
+  instance is configured with `authority=tc.URI.parse("...")`.
+
+This keeps method definitions transport-agnostic while giving explicit per-context
+execution control for local + remote calls in the same flow.
+
+### Executor auth and routing contract
+
+`tc.backend(...)` uses one remote auth rule:
+
+1. Remote calls do not implicitly forward backend `bearer_token`.
+2. If a remote call needs auth, provide an explicit `Authorization` header on that call.
+
+Remote target selection follows one routing contract:
+
+1. Authority-qualified `OpRef` paths (`https://...`) match authority entries in
+   `remotes` first; otherwise they dispatch to that authority directly.
+2. Canonical paths (`/lib/...`) match the longest-prefix entry in `remotes`.
+3. If no match exists, fallback `remote=` handles the request.
+
+See `py/examples/mixed_backend_modes.py`
+for a complete framework-native demonstration (no custom request/response wrappers) of:
+
+1. defining routes (`@tc.get`/`@tc.post`),
+2. configuring authority-driven dependency routing, and
+3. executing local+remote calls in one backend context.
+
+The mixed-backend example also demonstrates minimal-scope signed auth in the
+same script:
+
+1. mint an install token with claim scope limited to local `/lib/.../a/...`,
+2. install local WASM with `tc.wasm.install(...)`, then
+3. execute local+remote calls with
+   `tc.kernel.for_library(...)`.
+
+Framework-native helpers used by this flow:
+
+- `tc.auth.mint_rjwt_token(...)` for scoped token minting.
+- `tc.origin(...)` to normalize `scheme://host[:port]`.
+- `library.link()` + `tc.kernel.with_library(...)` for authority-driven routing/auth selection.
+
+Run it from the runtime repo root after building the Rust examples:
+
+```bash
+cargo build --manifest-path tc-server/Cargo.toml --example http_rpc_native_host --example rjwt_install_token
+cargo build --manifest-path tc-wasm/Cargo.toml --example opref_to_remote --target wasm32-unknown-unknown --release
+
+./.venv/bin/python client/py/examples/mixed_backend_modes.py \
+  --authority 127.0.0.1:8702 \
+  --actor-id example-admin
+```
+
+Optional: pass `--secret-key-b64 <base64-ed25519-secret>` to pin key material
+instead of using an ephemeral keypair.
+
 ### Example: local WASM → remote OpRef via PyO3 (single file)
 
 `py/examples/library_integration_example.py` is a single-file integration example which demonstrates:
@@ -82,16 +174,12 @@ The Python `Library` stubs use v1-style decorators (`@tc.get`, etc.) and execute
 
 ```python
 with tc.backend(kernel, bearer_token="..."):
-    # deferred graph nodes (typed):
-    a_ref = a.from_b("World")   # tc.String
-    b_ref = b.hello("World")    # tc.String
-
-    # eager execution:
-    assert tc.execute(a_ref) == "Hello, World!"
-    assert tc.execute(b_ref) == "Hello, World!"
+    # route calls auto-execute by default:
+    assert a.from_b("World") == "Hello, World!"
+    assert b.hello("World") == "Hello, World!"
 ```
 
-Outside an executor context, calling a decorated stub returns a typed `tc.Ref[...]` value (e.g. `tc.String`) which can be passed around and executed later.
+Outside an executor context, calling a decorated stub returns a typed `tc.Ref[...]` value (e.g. `tc.String`) which can be passed around and executed later. Inside an executor context, set `auto_execute=False` if you want explicit deferred control.
 
 The example assumes the WASM artifact exists. From the TinyChain runtime repo root, build it with:
 
@@ -105,12 +193,11 @@ If you want the script to spawn the remote host automatically, from the runtime 
 cargo build --manifest-path tc-server/Cargo.toml --example http_rpc_native_host
 ```
 
-Note: WASM installs now require authorization. The example expects `TC_BEARER_TOKEN` to be set
-to a bearer token which includes the `/lib/...` install claim (see the token generator below).
-When using signed tokens, also set `TC_TOKEN_HOST`, `TC_ACTOR_ID`, and `TC_PUBLIC_KEY_B64` so
-the local PyO3 kernel can verify the signature.
+WASM installs require authorization. The example mints scoped signed tokens with
+`tc.auth.mint_rjwt_token(...)` and reuses the same key material for install +
+runtime calls.
 
-You can generate a signed bearer token (and public key) with the Rust example:
+If you need to mint tokens manually, use the Rust example:
 
 ```bash
 cargo run --example rjwt_install_token -- \
@@ -120,8 +207,7 @@ cargo run --example rjwt_install_token -- \
   --lib /lib/example-devco/example/0.1.0
 ```
 
-Or run the helper script to generate a token, set the env vars, and execute the Python
-installer + integration example end-to-end:
+Or run the helper script to mint a token and execute the Python integration flow:
 
 ```bash
 scripts/run_python_integration_with_token.sh
@@ -258,10 +344,18 @@ assert resp.status == 204
 Handlers that accept parameters (or return `tc.state.Scalar`/`tc.state.OpDef`) automatically compile to `OpDef` routes.
 No explicit flag is required on the decorators.
 
-Execution is always explicit via an executor/backend:
+Execution defaults to auto-run inside an executor/backend:
 
 ```python
 with tc.backend(kernel):
+    assert echo.hello() == "hello"
+```
+
+For explicit deferred control:
+
+```python
+with tc.backend(kernel, auto_execute=False):
+    ref = echo.hello()
     assert tc.execute(ref) == "hello"
 ```
 

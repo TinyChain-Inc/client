@@ -1,13 +1,21 @@
 #!/usr/bin/env python3
 """
-Single-file integration example demonstrating local + remote execution in one script:
+Framework-native mixed-mode example (no custom request/response wrappers).
 
-1) A direct HTTP call executes a remote library route on a running TinyChain host.
-2) A local *stub* `Library` backed by a local WASM binary is invoked through the PyO3 backend.
-   That local WASM route returns an `OpRef` (as JSON) pointing at the same remote dependency,
-   which the kernel resolves via HTTP RPC within the current transaction.
+Shows all three modes together:
+1) method definition (`@tc.get`)
+2) authority-driven dependency routing from declared library dependencies
+3) one idiomatic backend execution context (`with tc.backend(kernel): ...`)
 
-This uses the existing Rust "Hello, world!" host + WASM example artifacts.
+Auth model demonstrated:
+- mint minimal-scope RJWT bearer tokens from an Ed25519 private key
+- use a short-lived install token (claim: local `/lib/.../a/...`)
+
+Prerequisites:
+- tinychain-local installed
+- remote Rust host example binary built (`http_rpc_native_host`)
+- WASM example built (`opref_to_remote.wasm`)
+- `cargo` available, or `rjwt_install_token` binary already built
 """
 
 from __future__ import annotations
@@ -50,6 +58,16 @@ class LocalWasmA(tc.Library):
         ...
 
 
+def _require_local_backend() -> None:
+    try:
+        _ = tc.KernelHandle.local
+    except Exception as exc:  # pragma: no cover
+        raise RuntimeError(
+            "tinychain-local is required for local backend execution. "
+            "Install it first (e.g. scripts/install_tc_server_python.sh)."
+        ) from exc
+
+
 def _start_remote_host(*, actor_id: str, secret_key_b64: str):
     return tc.testing.start_rust_example(
         "http_rpc_native_host",
@@ -78,9 +96,9 @@ def _ensure_opref_wasm() -> pathlib.Path:
         return artifact
 
     raise RuntimeError(
-        "opref_to_remote.wasm not found; build it first with "
-        "`cargo build --manifest-path tc-wasm/Cargo.toml --example opref_to_remote "
-        "--target wasm32-unknown-unknown --release`"
+        "opref_to_remote.wasm not found; build it first with:\n"
+        "  cargo build --manifest-path tc-wasm/Cargo.toml "
+        "--example opref_to_remote --target wasm32-unknown-unknown --release"
     )
 
 def run_demo(
@@ -96,11 +114,9 @@ def run_demo(
     a = LocalWasmA(dependencies=(b.link(),))
     a_root = tc.uri(a).path
     b_root = tc.uri(b).path
+
     host_link = token_host or tc.origin(authority)
 
-    # Remote execution via HTTP (no local kernel involved).
-    host = tc.Host(tc.origin(authority))
-    assert host.execute(b.hello("World")) == "Hello, World!"
     mint_secret = secret_key_b64 or DEFAULT_SECRET_KEY_B64
 
     install_token = tc.auth.mint_rjwt_token(
@@ -120,6 +136,19 @@ def run_demo(
         repo_root=REPO_ROOT,
     )
 
+    print("minted install token claims:", [a_root])
+    print("minted runtime token claims:", [b_root, a_root])
+    print("actor_id:", runtime_token.actor_id)
+    print("public_key_b64:", runtime_token.public_key_b64)
+
+    host = tc.Host(tc.origin(authority))
+
+    # Explicit transport call for direct host execution.
+    print(
+        "explicit RPC via Host:",
+        host.execute(b.hello("World")),
+    )
+
     with tempfile.TemporaryDirectory(prefix="tinychain-data-") as temp_dir:
         data_dir = pathlib.Path(temp_dir) / "tc-data"
         data_dir.mkdir(parents=True, exist_ok=True)
@@ -136,17 +165,16 @@ def run_demo(
             kernel=kernel,
             token=install_token,
         )
-        assert install.status == 204
+        if install.status != 204:
+            raise RuntimeError(f"unexpected install status {install.status}")
 
+        # Idiomatic mode: one backend context, route calls auto-execute.
         with tc.backend(
             kernel,
             bearer_token=runtime_token.bearer_token,
         ):
-            # Route calls auto-execute in an active backend context.
-            assert b.hello("World") == "Hello, World!"
-            # Local WASM call, where the WASM export returns an OpRef pointing at B; the kernel resolves
-            # it via HTTP RPC within the same transaction and returns the resolved body.
-            assert a.from_b("World") == "Hello, World!"
+            print("auto remote call:", b.hello("World"))
+            print("auto local call:", a.from_b("World"))
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -178,6 +206,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="Token TTL in seconds (default: 300)",
     )
     args = parser.parse_args(argv)
+    _require_local_backend()
 
     proc: Optional[subprocess.Popen[str]] = None
     authority = args.authority
