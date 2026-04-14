@@ -180,7 +180,7 @@ class Route:
             from .executor import try_current
 
             exec_ctx = try_current()
-            if exec_ctx is not None and exec_ctx.auto_execute:
+            if exec_ctx is not None and exec_ctx.should_auto_execute():
                 import tinychain as tc
 
                 return tc.execute(result)

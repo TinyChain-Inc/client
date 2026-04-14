@@ -175,6 +175,19 @@ def run_demo(
         with tc.backend(
             kernel,
             bearer_token=runtime_token.bearer_token,
+            mode="deferred",
+        ):
+            planned_remote = b.hello("World")
+            planned_local = a.from_b("World")
+            assert isinstance(planned_remote, tc.String)
+            assert isinstance(planned_local, tc.String)
+            assert tc.execute(planned_remote) == "Hello, World!"
+            assert tc.execute(planned_local) == "Hello, World!"
+
+        with tc.backend(
+            kernel,
+            bearer_token=runtime_token.bearer_token,
+            mode="eager",
         ):
             print("route auth context:", a.auth_context())
             print("auto remote call:", b.hello("World"))

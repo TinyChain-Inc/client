@@ -222,7 +222,7 @@ with tc.backend(kernel, bearer_token="..."):
     assert b.hello("World") == "Hello, World!"
 ```
 
-Outside an executor context, calling a decorated stub returns a typed `tc.Ref[...]` value (e.g. `tc.String`) which can be passed around and executed later. Inside an executor context, set `auto_execute=False` if you want explicit deferred control.
+Outside an executor context, calling a decorated stub returns a typed `tc.Ref[...]` value (e.g. `tc.String`) which can be passed around and executed later. Inside an executor context, set `mode="deferred"` if you want explicit deferred control.
 
 The example assumes the WASM artifact exists. From the TinyChain runtime repo root, build it with:
 
@@ -394,11 +394,12 @@ with tc.backend(kernel):
     assert echo.hello() == "hello"
 ```
 
-For explicit deferred control:
+For explicit deferred control at call-site scope (without per-method kwargs):
 
 ```python
-with tc.backend(kernel, auto_execute=False):
+with tc.backend(kernel, mode="deferred"):
     ref = echo.hello()
+    assert isinstance(ref, tc.String)
     assert tc.execute(ref) == "hello"
 ```
 
@@ -520,6 +521,35 @@ handles as a public API. The server still interprets every request, assigns
 cues.
 
 Carry forward the v1 ergonomics—graph-style reuse, batching by default, and predictable error envelopes—when expanding the eager client surface.
+
+## Migration note: route-level `deferred` kwargs
+
+Framework execution mode is now controlled at call-site scope, not per route method.
+
+- Do not add `deferred=False` (or similar) kwargs to package route method signatures.
+- Use `with tc.backend(..., mode="deferred"):` for deferred planning.
+- Use `with tc.backend(..., mode="eager"):` for normal eager execution.
+
+Before:
+
+```python
+def add(self, x, y, deferred=False):
+    op = self._add_route(x, y)
+    return op if deferred else tc.execute(op)
+```
+
+After:
+
+```python
+def add(self, x, y):
+    return self._add_route(x, y)
+
+with tc.backend(kernel):
+    value = client.add(1, 2)
+
+with tc.backend(kernel, mode="deferred"):
+    plan = client.add(1, 2)
+```
 
 ## Standard library surface (planned): generated vs Python-authored
 
