@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import pathlib
 import subprocess
 from dataclasses import dataclass
@@ -26,7 +25,7 @@ def context():
     """
     import tinychain as tc
 
-    return tc.Json(tc.OpRef("GET", tc.uri("host", "auth", "context").path))
+    return tc.Ref(tc.OpRef("GET", tc.uri("host", "auth", "context").path))
 
 
 def _resolve_minter_command(
@@ -36,10 +35,6 @@ def _resolve_minter_command(
 ) -> list[str]:
     if binary is not None:
         return [str(binary)]
-
-    binary_override = os.environ.get("TC_RJWT_INSTALL_TOKEN_BIN")
-    if binary_override:
-        return [binary_override]
 
     built = testing.rjwt_install_token_bin(repo_root)
     if built is not None:

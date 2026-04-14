@@ -5,7 +5,7 @@ import inspect
 import json
 import logging
 import pathlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Optional, get_type_hints
 
 from .opref import OpRef
@@ -84,7 +84,7 @@ def _validate_library_class(library: type["Library"]) -> None:
 class Route:
     method: str
     form: Callable[..., Any]
-    name: Optional[str] = None
+    name: Optional[str] = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         if not callable(self.form):
@@ -197,46 +197,36 @@ class Route:
 def _decorate(
     method: str,
     form: Optional[Callable[..., Any]] = None,
-    *,
-    name: Optional[str] = None,
 ):
     if form is None:
-        return lambda actual: Route(method=method.upper(), form=actual, name=name)
+        return lambda actual: Route(method=method.upper(), form=actual)
     if _is_method(form):
-        return Route(method=method.upper(), form=form, name=name)
+        return Route(method=method.upper(), form=form)
     return _compile_opdef_callable(form, method=method.upper())
 
 
 def get(
     form: Optional[Callable[..., Any]] = None,
-    *,
-    name: Optional[str] = None,
 ):
-    return _decorate("GET", form, name=name)
+    return _decorate("GET", form)
 
 
 def put(
     form: Optional[Callable[..., Any]] = None,
-    *,
-    name: Optional[str] = None,
 ):
-    return _decorate("PUT", form, name=name)
+    return _decorate("PUT", form)
 
 
 def post(
     form: Optional[Callable[..., Any]] = None,
-    *,
-    name: Optional[str] = None,
 ):
-    return _decorate("POST", form, name=name)
+    return _decorate("POST", form)
 
 
 def delete(
     form: Optional[Callable[..., Any]] = None,
-    *,
-    name: Optional[str] = None,
 ):
-    return _decorate("DELETE", form, name=name)
+    return _decorate("DELETE", form)
 
 def _compile_opdef_callable(form: Callable[..., Any], *, method: str) -> OpDef:
     sig = inspect.signature(form)

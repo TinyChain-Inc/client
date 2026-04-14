@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 import tinychain as tc
 
 
@@ -62,3 +63,16 @@ def test_define_library_allows_local_opref_subjects():
     a = A()
     ir = tc.define.compile_ir(a)
     assert "routes" in ir
+
+
+def test_route_decorators_do_not_accept_name_override():
+    with pytest.raises(TypeError, match="unexpected keyword argument 'name'"):
+
+        class A(tc.define.Library):
+            publisher = "example-devco"
+            name = "a"
+            version = "0.1.0"
+
+            @tc.define.get(name="hello")
+            def hello(self):
+                ...

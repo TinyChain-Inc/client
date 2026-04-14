@@ -5,7 +5,7 @@ from .executor import Executor, backend
 from .executor import execute as _dispatch_execute
 from .opref import OpRef
 from . import opref
-from .ref import Ref, String, Json
+from .ref import Ref, String
 from .uri import URI, authority, origin, uri
 from . import define
 from . import compute
@@ -34,7 +34,6 @@ __all__ = [
     "opref",
     "Ref",
     "String",
-    "Json",
     "URI",
     "define",
     "compute",

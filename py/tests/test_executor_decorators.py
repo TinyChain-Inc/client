@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 import tinychain as tc
 import tinychain.executor as tc_executor
 
@@ -331,25 +332,15 @@ def test_backend_requires_local_or_remote():
             assert "no local kernel configured and no remote route matched" in str(err)
 
 
-def test_execute_without_backend_uses_authority_qualified_path(monkeypatch):
-    remote = _Remote()
-    monkeypatch.setattr(tc_executor, "_as_request_target", lambda _value: remote)
-
+def test_execute_without_backend_requires_executor():
     op = tc.opref.post(
         "http://example.test/lib/example-devco/remote/0.1.0/ping",
         body={"name": "World"},
         headers=[("x-trace-id", "abc123")],
     )
 
-    assert tc.execute(op) == {"remote": "ok"}
-    assert remote.calls == [
-        (
-            "POST",
-            "http://example.test/lib/example-devco/remote/0.1.0/ping",
-            {"name": "World"},
-            [("x-trace-id", "abc123")],
-        )
-    ]
+    with pytest.raises(RuntimeError, match="no active TinyChain executor"):
+        tc.execute(op)
 
 
 def test_stub_route_emits_authority_qualified_path():
@@ -369,10 +360,7 @@ def test_stub_route_emits_authority_qualified_path():
     assert ref.op.path == "https://api.example.test:443/lib/example-devco/remote/0.1.0/ping"
 
 
-def test_execute_without_backend_uses_stub_authority(monkeypatch):
-    remote_target = _Remote()
-    monkeypatch.setattr(tc_executor, "_as_request_target", lambda _value: remote_target)
-
+def test_execute_without_backend_rejects_authority_qualified_stub():
     class Remote(tc.Library):
         publisher = "example-devco"
         name = "remote"
@@ -384,15 +372,8 @@ def test_execute_without_backend_uses_stub_authority(monkeypatch):
             ...
 
     remote = Remote()
-    assert tc.execute(remote.ping("World")) == {"remote": "ok"}
-    assert remote_target.calls == [
-        (
-            "GET",
-            "https://api.example.test/lib/example-devco/remote/0.1.0/ping",
-            "World",
-            [],
-        )
-    ]
+    with pytest.raises(RuntimeError, match="no active TinyChain executor"):
+        tc.execute(remote.ping("World"))
 
 
 def test_backend_remote_op_header_overrides_forwarded_bearer_token():

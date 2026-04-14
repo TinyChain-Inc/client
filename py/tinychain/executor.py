@@ -424,22 +424,8 @@ def execute(opref: "object", *, executor: "Executor | None" = None) -> object:
     path = _path_from_opref(opref.path)
     exec_ctx = executor or try_current()
     if exec_ctx is None:
-        if "://" in path:
-            parsed = URI.parse(path)
-            authority = parsed.authority()
-            assert authority is not None
-            remote_target = _as_request_target(f"{parsed.scheme}://{authority}")
-            return remote_target.request(
-                opref.method,
-                path,
-                body=opref.body,
-                headers=list(opref.headers),
-                bearer_token=None,
-            )
-
         raise RuntimeError(
-            "no active TinyChain executor and OpRef path has no authority; "
-            "use `with tc.backend(...)` or provide an authority-qualified route"
+            "no active TinyChain executor; use `with tc.backend(...)` to run requests"
         )
 
     headers = exec_ctx._merge_headers(opref.headers)
