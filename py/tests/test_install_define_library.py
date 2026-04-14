@@ -43,7 +43,7 @@ def test_install_python_defined_library(tmp_path: pathlib.Path):
             ...
 
     stub = Stub()
-    with tc.backend(kernel, auto_execute=False):
+    with tc.backend(kernel, mode="deferred"):
         op = stub.hello()
         response = kernel.dispatch(tc.KernelRequest("GET", op.op.path, None, None))
         assert response.status == 200

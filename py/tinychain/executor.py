@@ -180,7 +180,7 @@ class Executor:
     headers: Optional[Iterable[tuple[str, str]]] = None
     remote: str | RequestTarget | None = None
     remotes: Mapping[object, str | RequestTarget] | None = None
-    auto_execute: bool = True
+    mode: str = "eager"
     _token: Optional[contextvars.Token["Executor | None"]] = None
 
     def __enter__(self) -> "Executor":
@@ -191,6 +191,9 @@ class Executor:
         if self._token is not None:
             _current_executor.reset(self._token)
             self._token = None
+
+    def should_auto_execute(self) -> bool:
+        return self.mode == "eager"
 
     def _merge_headers(self, extra: Optional[Iterable[tuple[str, str]]]) -> list[tuple[str, str]]:
         merged = _headers_to_list(self.headers)
@@ -308,7 +311,6 @@ def current() -> "Executor":
 def try_current() -> "Executor | None":
     return _current_executor.get()
 
-
 def backend(
     kernel: object | None = None,
     *,
@@ -316,15 +318,25 @@ def backend(
     headers: Optional[Iterable[tuple[str, str]]] = None,
     remote: str | RequestTarget | None = None,
     remotes: Mapping[object, str | RequestTarget] | None = None,
-    auto_execute: bool = True,
+    mode: str = "eager",
+    auto_execute: Optional[bool] = None,
 ) -> Executor:
+    if mode not in {"eager", "deferred"}:
+        raise ValueError("backend mode must be 'eager' or 'deferred'")
+
+    if auto_execute is not None:
+        compat_mode = "eager" if auto_execute else "deferred"
+        if mode != "eager" and mode != compat_mode:
+            raise ValueError("conflicting backend mode and auto_execute arguments")
+        mode = compat_mode
+
     return Executor(
         kernel=kernel,
         bearer_token=bearer_token,
         headers=headers,
         remote=remote,
         remotes=remotes,
-        auto_execute=auto_execute,
+        mode=mode,
     )
 
 

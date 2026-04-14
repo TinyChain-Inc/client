@@ -194,7 +194,7 @@ def test_backend_auto_executes_stub_calls_by_default(monkeypatch):
     assert ("authorization", "Bearer token-auto") in list(headers)
 
 
-def test_backend_can_disable_auto_execute(monkeypatch):
+def test_backend_mode_deferred_returns_plan(monkeypatch):
     monkeypatch.setattr(tc, "KernelRequest", _Request)
 
     kernel = _Kernel()
@@ -209,7 +209,7 @@ def test_backend_can_disable_auto_execute(monkeypatch):
             ...
 
     f = F()
-    with tc.backend(kernel, auto_execute=False):
+    with tc.backend(kernel, mode="deferred"):
         deferred = f.hello()
         assert isinstance(deferred, tc.String)
         assert tc.execute(deferred) == "ok"
@@ -219,6 +219,116 @@ def test_backend_can_disable_auto_execute(monkeypatch):
     assert len(kernel.dispatched) == 1
     method, path, _headers, _body = kernel.dispatched[0]
     assert (method, path) == ("GET", expected)
+
+
+def test_backend_mode_can_be_switched_by_nested_backend_context(monkeypatch):
+    monkeypatch.setattr(tc, "KernelRequest", _Request)
+
+    kernel = _Kernel()
+
+    class G(tc.Library):
+        publisher = "example-devco"
+        name = "g"
+        version = "0.1.0"
+
+        @tc.define.get
+        def hello(self) -> tc.String:
+            ...
+
+    g = G()
+    with tc.backend(kernel, bearer_token="token-auto", mode="eager"):
+        eager = g.hello()
+        assert eager == "ok"
+
+        with tc.backend(kernel, bearer_token="token-auto", mode="deferred"):
+            deferred = g.hello()
+            assert isinstance(deferred, tc.String)
+
+        assert tc.execute(deferred) == "ok"
+        eager_again = g.hello()
+        assert eager_again == "ok"
+
+    expected = tc.uri(g, "hello").path
+    assert kernel.resolved == []
+    assert len(kernel.dispatched) == 3
+    for method, path, headers, _body in kernel.dispatched:
+        assert (method, path) == ("GET", expected)
+        assert ("authorization", "Bearer token-auto") in list(headers)
+
+
+def test_backend_mode_deferred_remains_deferred_when_nested(monkeypatch):
+    monkeypatch.setattr(tc, "KernelRequest", _Request)
+    kernel = _Kernel()
+
+    class H(tc.Library):
+        publisher = "example-devco"
+        name = "h"
+        version = "0.1.0"
+
+        @tc.define.get
+        def hello(self) -> tc.String:
+            ...
+
+    h = H()
+    with tc.backend(kernel, mode="deferred"):
+        plain = h.hello()
+        assert isinstance(plain, tc.String)
+        with tc.backend(kernel, mode="deferred"):
+            nested = h.hello()
+            assert isinstance(nested, tc.String)
+        assert tc.execute(plain) == "ok"
+        assert tc.execute(nested) == "ok"
+
+
+def test_backend_mode_deferred_preserves_cross_library_dependency_paths(monkeypatch):
+    monkeypatch.setattr(tc, "KernelRequest", _Request)
+    kernel = _Kernel()
+    remote = _Remote()
+    monkeypatch.setattr(
+        tc_executor,
+        "_as_request_target",
+        lambda value: value if isinstance(value, _Remote) else remote,
+    )
+
+    class Local(tc.Library):
+        publisher = "example-devco"
+        name = "local"
+        version = "0.1.0"
+
+        @tc.define.get
+        def hello(self) -> tc.String:
+            ...
+
+    class Remote(tc.Library):
+        publisher = "example-devco"
+        name = "remote"
+        version = "0.1.0"
+        authority = tc.URI.parse("https://api.example.test")
+
+        @tc.define.get
+        def ping(self, name: str) -> tc.String:
+            ...
+
+    local = Local()
+    remote_lib = Remote()
+
+    with tc.backend(
+        kernel=kernel,
+        remotes={"https://api.example.test": remote},
+        bearer_token="token-123",
+        mode="deferred",
+    ):
+        local_plan = local.hello()
+        remote_plan = remote_lib.ping("World")
+        assert isinstance(local_plan, tc.String)
+        assert isinstance(remote_plan, tc.String)
+
+        assert tc.execute(local_plan) == "ok"
+        assert tc.execute(remote_plan) == {"remote": "ok"}
+
+    local_path = tc.uri(local, "hello").path
+    assert any(path == local_path for _, path, _, _ in kernel.dispatched)
+    assert any(path.startswith("https://api.example.test/") for _, path, _, _ in remote.calls)
 
 
 def test_backend_routes_remote_by_path_prefix(monkeypatch):

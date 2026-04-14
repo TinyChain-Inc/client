@@ -42,8 +42,9 @@ staying thin and well-documented for new users.
 - Do not add custom request/response wrapper classes or hand-written payload/status
   parsing in examples or client APIs when framework surfaces already exist
   (`tc.backend`, `tc.execute`, `tc.Host`, `tc.testing.decode_json_body`).
-- Prefer idiomatic route calls inside `with tc.backend(...):` and reserve explicit
-  `tc.execute(...)` for deferred flows (`auto_execute=False`) or cross-scope execution.
+- Prefer idiomatic route calls inside `with tc.backend(..., mode="eager")` and use
+  `with tc.backend(..., mode="deferred")` for planning flows. Reserve explicit
+  `tc.execute(...)` for executing deferred refs or cross-scope execution.
 
 ## Gap triage guardrails
 
