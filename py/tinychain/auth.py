@@ -18,6 +18,17 @@ class SignedBearerToken:
     bearer_token: str
 
 
+def context():
+    """
+    Return the framework-authenticated route context for the current request/transaction.
+
+    This is evaluated by the kernel from validated bearer auth, not caller-provided payload.
+    """
+    import tinychain as tc
+
+    return tc.Json(tc.OpRef("GET", tc.uri("host", "auth", "context").path))
+
+
 def _resolve_minter_command(
     *,
     repo_root: pathlib.Path,

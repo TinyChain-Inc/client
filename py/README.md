@@ -140,8 +140,42 @@ same script:
 Framework-native helpers used by this flow:
 
 - `tc.auth.mint_rjwt_token(...)` for scoped token minting.
+- `tc.auth.context()` to read authenticated route context (principal/claims/timing)
+  from the framework instead of request payload fields.
 - `tc.origin(...)` to normalize `scheme://host[:port]`.
 - `library.link()` + `tc.kernel.with_library(...)` for authority-driven routing/auth selection.
+
+### Framework-native authenticated route context
+
+Library handlers should not accept auth payload fields such as `auth_token`,
+`auth_public_key_hex`, or `auth_host`. Use framework context instead.
+
+In Python route definitions:
+
+```python
+@tc.get
+def evaluate(self, request: tc.Json) -> tc.Json:
+    auth = tc.auth.context()
+    # authorize against auth["principal"], auth["claims"], auth timing envelope, etc.
+    return request
+```
+
+For Rust/native handlers, use `txn.auth_context()` from `TxnHandle`.
+For WASM handlers, return an OpRef to `/host/auth/context` (see the
+`opref_to_remote` example route `auth_context`).
+
+Replay/time-window semantics are framework-owned:
+
+1. bearer token verification is performed by the configured token verifier,
+2. route context includes verifier time (`token_verified_at_nanos`) and transaction
+   time (`txn_timestamp_nanos`), and
+3. cross-host calls stay in transaction flow (no anonymous fallback).
+
+Migration for ILC-style routes:
+
+1. remove `auth_*` fields from request payload schema,
+2. replace body-based auth parsing with `tc.auth.context()` (or `txn.auth_context()` in Rust),
+3. keep route signatures focused on domain inputs only.
 
 Run it from the runtime repo root after building the Rust examples:
 
