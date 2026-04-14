@@ -57,6 +57,10 @@ class LocalWasmA(tc.Library):
     def from_b(self, name: str) -> tc.String:
         ...
 
+    @tc.get
+    def auth_context(self) -> tc.Json:
+        ...
+
 
 def _require_local_backend() -> None:
     try:
@@ -173,6 +177,7 @@ def run_demo(
             kernel,
             bearer_token=runtime_token.bearer_token,
         ):
+            print("route auth context:", a.auth_context())
             print("auto remote call:", b.hello("World"))
             print("auto local call:", a.from_b("World"))
 

@@ -60,3 +60,9 @@ def test_mint_rjwt_token_parses_output_and_builds_cmd(monkeypatch, tmp_path):
 def test_mint_rjwt_token_requires_claims():
     with pytest.raises(ValueError):
         tc.auth.mint_rjwt_token(host="http://127.0.0.1:8702", actor_id="a", libs=[])
+
+
+def test_auth_context_helper_uses_host_route():
+    context_ref = tc.auth.context()
+    assert isinstance(context_ref, tc.Ref)
+    assert context_ref.op.path == tc.uri("host", "auth", "context").path

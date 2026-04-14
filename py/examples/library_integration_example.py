@@ -49,6 +49,10 @@ class LocalWasmA(tc.Library):
     def from_b(self, name: str) -> tc.String:
         ...
 
+    @tc.get
+    def auth_context(self) -> tc.Json:
+        ...
+
 
 def _start_remote_host(*, actor_id: str, secret_key_b64: str):
     return tc.testing.start_rust_example(
@@ -144,6 +148,9 @@ def run_demo(
         ):
             # Route calls auto-execute in an active backend context.
             assert b.hello("World") == "Hello, World!"
+            ctx = a.auth_context()
+            assert isinstance(ctx, dict)
+            assert ctx["principal"].endswith(f"::{actor_id}")
             # Local WASM call, where the WASM export returns an OpRef pointing at B; the kernel resolves
             # it via HTTP RPC within the same transaction and returns the resolved body.
             assert a.from_b("World") == "Hello, World!"

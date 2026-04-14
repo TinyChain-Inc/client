@@ -1,0 +1,131 @@
+from __future__ import annotations
+
+import pathlib
+import subprocess
+
+import pytest
+
+import tinychain as tc
+
+from .support import REPO_ROOT, ensure_wasm_example_built
+
+
+DEFAULT_SECRET_KEY_B64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+ACTOR_ID = "example-admin"
+
+
+class RemoteB(tc.Library):
+    publisher = "example-devco"
+    name = "example"
+    version = "0.1.0"
+    dependencies = ()
+
+    @tc.get
+    def hello(self, name: str) -> tc.String:
+        ...
+
+
+class LocalWasmA(tc.Library):
+    publisher = "example-devco"
+    name = "a"
+    version = "0.1.0"
+
+    @tc.get
+    def from_b(self, name: str) -> tc.String:
+        ...
+
+    @tc.get
+    def auth_context(self) -> tc.Json:
+        ...
+
+
+def test_framework_auth_context_available_in_local_and_wasm_routes(tmp_path: pathlib.Path):
+    if not tc.testing.cargo_available():
+        pytest.skip("`cargo` not found; install Rust tooling to run auth context integration")
+    try:
+        _ = tc.KernelHandle.local
+    except (ImportError, AttributeError):
+        pytest.skip("`tinychain-local` not installed")
+
+    subprocess.run(
+        [
+            "cargo",
+            "build",
+            "--manifest-path",
+            str(REPO_ROOT / "tc-wasm" / "Cargo.toml"),
+            "--example",
+            "opref_to_remote",
+            "--target",
+            "wasm32-unknown-unknown",
+            "--release",
+        ],
+        cwd=REPO_ROOT,
+        check=True,
+    )
+    wasm_path = ensure_wasm_example_built("opref_to_remote")
+    proc, authority = tc.testing.start_rust_example(
+        "http_rpc_native_host",
+        args=(
+            "--bind=127.0.0.1:0",
+            f"--actor-id={ACTOR_ID}",
+            f"--secret-key-b64={DEFAULT_SECRET_KEY_B64}",
+        ),
+        root=REPO_ROOT,
+        prefer_binary=True,
+        require_binary=True,
+    )
+
+    try:
+        b = RemoteB(authority=tc.URI.parse(authority))
+        a = LocalWasmA(dependencies=(b.link(),))
+        a_root = tc.uri(a).path
+        b_root = tc.uri(b).path
+        host_link = tc.origin(authority)
+
+        install_token = tc.auth.mint_rjwt_token(
+            host=host_link,
+            actor_id=ACTOR_ID,
+            libs=[a_root],
+            ttl_secs=300,
+            secret_key_b64=DEFAULT_SECRET_KEY_B64,
+            repo_root=REPO_ROOT,
+        )
+        runtime_token = tc.auth.mint_rjwt_token(
+            host=host_link,
+            actor_id=ACTOR_ID,
+            libs=[b_root, a_root],
+            ttl_secs=300,
+            secret_key_b64=DEFAULT_SECRET_KEY_B64,
+            repo_root=REPO_ROOT,
+        )
+
+        data_dir = tmp_path / "tc-data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+
+        kernel = tc.kernel.with_library(
+            a,
+            data_dir=data_dir,
+            token=runtime_token,
+        )
+        install = tc.wasm.install(
+            a.schema(),
+            wasm_path,
+            kernel=kernel,
+            token=install_token,
+        )
+        assert install.status == 204
+
+        with tc.backend(kernel, bearer_token=runtime_token.bearer_token):
+            direct_ctx = tc.execute(tc.auth.context())
+            wasm_ctx = a.auth_context()
+            assert isinstance(direct_ctx, dict)
+            assert isinstance(wasm_ctx, dict)
+            assert direct_ctx["principal"].endswith(f"::{ACTOR_ID}")
+            assert wasm_ctx["principal"].endswith(f"::{ACTOR_ID}")
+            assert a.from_b("World") == "Hello, World!"
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=2)
+        except Exception:
+            proc.kill()
