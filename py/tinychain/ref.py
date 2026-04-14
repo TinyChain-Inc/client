@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Generic, TypeVar
+from typing import Generic, TypeVar
 
 from .opref import OpRef
 
@@ -19,8 +19,4 @@ class Ref(Generic[T]):
 
 
 class String(Ref[str]):
-    pass
-
-
-class Json(Ref[Any]):
     pass

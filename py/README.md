@@ -97,11 +97,9 @@ Use one `with tc.backend(...):` block to run mixed local + remote calls:
 
 - `kernel=...` handles local PyO3 execution.
 - authority-qualified library links (`library.link()`) drive dependency routing.
-- `tc.kernel.for_library(local_library, data_dir=...)` derives egress routes from declared dependency authorities.
+- `tc.kernel.with_library(local_library, data_dir=...)` derives egress routes from declared dependency authorities.
 - route method calls auto-execute inside the active backend.
-- without an active backend, `tc.execute(op)` still works when `op.path` is
-  authority-qualified (for example `https://host/...`); otherwise it fails as
-  ambiguous.
+- `tc.execute(op)` requires an active backend context (`with tc.backend(...):`).
 - route stubs emit authority-qualified paths automatically when a `Library`
   instance is configured with `authority=tc.URI.parse("...")`.
 
@@ -135,7 +133,7 @@ same script:
 1. mint an install token with claim scope limited to local `/lib/.../a/...`,
 2. install local WASM with `tc.wasm.install(...)`, then
 3. execute local+remote calls with
-   `tc.kernel.for_library(...)`.
+   `tc.kernel.with_library(...)`.
 
 Framework-native helpers used by this flow:
 
@@ -154,11 +152,22 @@ In Python route definitions:
 
 ```python
 @tc.get
-def evaluate(self, request: tc.Json) -> tc.Json:
+def evaluate(self, request: tc.Ref) -> tc.Ref:
     auth = tc.auth.context()
     # authorize against auth["principal"], auth["claims"], auth timing envelope, etc.
     return request
 ```
+
+### Response typing contract
+
+`tc.execute(...)` decodes canonical TinyChain state envelopes into typed Python values:
+
+- `/state/scalar/value/*` -> Python primitive (`str`, `int`, `float`, `bool`, `None`)
+- `/state/scalar/map` -> `dict`
+- `/state/scalar/tuple` -> `tuple`
+- `/state/collection/tensor` -> `tc.Tensor` (when local backend types are available)
+
+This means callers should expect typed responses by default, not ad-hoc JSON/status parsing.
 
 For Rust/native handlers, use `txn.auth_context()` from `TxnHandle`.
 For WASM handlers, return an OpRef to `/host/auth/context` (see the

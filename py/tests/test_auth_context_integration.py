@@ -35,7 +35,7 @@ class LocalWasmA(tc.Library):
         ...
 
     @tc.get
-    def auth_context(self) -> tc.Json:
+    def auth_context(self) -> tc.Ref:
         ...
 
 
@@ -46,6 +46,11 @@ def test_framework_auth_context_available_in_local_and_wasm_routes(tmp_path: pat
         _ = tc.KernelHandle.local
     except (ImportError, AttributeError):
         pytest.skip("`tinychain-local` not installed")
+    if not (
+        hasattr(tc.KernelHandle, "local_with_dependency_route")
+        or hasattr(tc.KernelHandle, "local_with_dependency_routes")
+    ):
+        pytest.skip("tinychain-local does not support dependency route constructors")
 
     subprocess.run(
         [

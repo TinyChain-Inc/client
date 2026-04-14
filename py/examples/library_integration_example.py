@@ -50,7 +50,7 @@ class LocalWasmA(tc.Library):
         ...
 
     @tc.get
-    def auth_context(self) -> tc.Json:
+    def auth_context(self) -> tc.Ref:
         ...
 
 
@@ -92,7 +92,6 @@ def run_demo(
     wasm_path: pathlib.Path,
     *,
     actor_id: str,
-    token_host: str | None,
     secret_key_b64: str | None,
     ttl_secs: int,
 ) -> None:
@@ -100,7 +99,7 @@ def run_demo(
     a = LocalWasmA(dependencies=(b.link(),))
     a_root = tc.uri(a).path
     b_root = tc.uri(b).path
-    host_link = token_host or tc.origin(authority)
+    host_link = tc.origin(authority)
 
     # Remote execution via HTTP (no local kernel involved).
     host = tc.Host(tc.origin(authority))
@@ -169,11 +168,6 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="Actor ID used when minting scoped tokens",
     )
     parser.add_argument(
-        "--token-host",
-        default=None,
-        help="Optional token host used when minting tokens (defaults to --authority)",
-    )
-    parser.add_argument(
         "--secret-key-b64",
         default=None,
         help="Optional Ed25519 secret key (base64). If omitted, an ephemeral keypair is generated.",
@@ -201,7 +195,6 @@ def main(argv: Optional[list[str]] = None) -> int:
             authority,
             wasm_path,
             actor_id=args.actor_id,
-            token_host=args.token_host,
             secret_key_b64=args.secret_key_b64,
             ttl_secs=args.ttl_secs,
         )

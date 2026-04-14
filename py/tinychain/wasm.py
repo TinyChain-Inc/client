@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import json
-import os
 import pathlib
 from typing import Optional, Union
 
@@ -68,13 +67,9 @@ def install(
     if kernel is None:
         if data_dir is None:
             raise ValueError("expected either `kernel` or `data_dir`")
-        token_host = token_host or token_host_from_token or os.environ.get("TC_TOKEN_HOST")
-        actor_id = actor_id or actor_id_from_token or os.environ.get("TC_ACTOR_ID")
-        public_key_b64 = (
-            public_key_b64
-            or public_key_b64_from_token
-            or os.environ.get("TC_PUBLIC_KEY_B64")
-        )
+        token_host = token_host or token_host_from_token
+        actor_id = actor_id or actor_id_from_token
+        public_key_b64 = public_key_b64 or public_key_b64_from_token
         if token_host and actor_id and public_key_b64:
             kernel = local.KernelHandle.with_library_schema_rjwt(
                 json.dumps(schema_value, separators=(",", ":")),

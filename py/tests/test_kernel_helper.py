@@ -48,7 +48,7 @@ def test_with_library_infers_route_from_declared_dependency_authority(tmp_path, 
     ]
 
 
-def test_with_library_dependency_argument_remains_compatible(tmp_path, monkeypatch):
+def test_with_library_rejects_dependency_override_argument(tmp_path, monkeypatch):
     _clear_token_env(monkeypatch)
 
     class FakeKernelHandle:
@@ -68,11 +68,10 @@ def test_with_library_dependency_argument_remains_compatible(tmp_path, monkeypat
         dependencies=(tc.uri("lib", "example-devco", "b", "0.1.0"),),
     )
     dependency = tc.URI.parse("http://deps.example.test:8702/lib/example-devco/c/0.1.0")
+    with pytest.raises(TypeError, match="dependency"):
+        tc.kernel.with_library(library, data_dir=tmp_path, dependency=dependency)
 
-    tc.kernel.with_library(library, data_dir=tmp_path, dependency=dependency)
-
-    assert FakeKernelHandle.calls[0][0] == "/lib/example-devco/c/0.1.0"
-    assert FakeKernelHandle.calls[0][1] == "deps.example.test:8702"
+    assert FakeKernelHandle.calls == []
 
 
 def test_with_library_uses_multi_route_constructor_when_available(tmp_path, monkeypatch):
@@ -260,8 +259,14 @@ def test_with_library_rejects_ambiguous_runtime_binding_authority(tmp_path, monk
         tc.kernel.with_library(Local(), data_dir=tmp_path)
 
 
-def test_for_library_aliases_with_library(tmp_path, monkeypatch):
-    _clear_token_env(monkeypatch)
+def test_for_library_alias_is_removed():
+    assert not hasattr(tc.kernel, "for_library")
+
+
+def test_with_library_ignores_env_auth_fallback(tmp_path, monkeypatch):
+    monkeypatch.setenv("TC_TOKEN_HOST", "https://tokens.example.test")
+    monkeypatch.setenv("TC_ACTOR_ID", "example-admin")
+    monkeypatch.setenv("TC_PUBLIC_KEY_B64", "pubkey")
 
     class FakeKernelHandle:
         calls: list[tuple[str, str, dict]] = []
@@ -281,8 +286,19 @@ def test_for_library_aliases_with_library(tmp_path, monkeypatch):
         dependencies=(dep,),
     )
 
-    assert tc.kernel.for_library(library, data_dir=tmp_path) == "kernel"
-    assert tc.kernel.with_library(library, data_dir=tmp_path) == "kernel"
+    tc.kernel.with_library(library, data_dir=tmp_path)
+    assert FakeKernelHandle.calls == [
+        (
+            "/lib/example-devco/b/0.1.0",
+            "deps.example.test:9443",
+            {
+                "token_host": None,
+                "actor_id": None,
+                "public_key_b64": None,
+                "data_dir": str(tmp_path),
+            },
+        )
+    ]
 
 
 def test_with_library_accepts_single_token_object(tmp_path, monkeypatch):

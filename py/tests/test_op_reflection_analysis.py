@@ -58,7 +58,7 @@ def test_op_reflection_analysis(tmp_path: pathlib.Path) -> None:
                 return {"max": max_out}
 
             @tc.post
-            def cyclotomic_depth(self, op: tc.state.OpDef) -> tc.Json:
+            def cyclotomic_depth(self, op: tc.state.OpDef) -> tc.Ref:
                 op_form = op.reflect_form()
                 state = {"items": op_form, "idx": 0, "todo": [], "max": 1}
                 while (len(state["items"]) > state["idx"]).logical_or(len(state["todo"]) > 0):
@@ -105,7 +105,7 @@ def test_op_reflection_analysis(tmp_path: pathlib.Path) -> None:
                 return {"max": state["max"]}
 
             @tc.post
-            def nested_if_count(self, items: tc.state.Scalar) -> tc.Json:
+            def nested_if_count(self, items: tc.state.Scalar) -> tc.Ref:
                 state = {"items": items, "count": 0}
                 while len(state["items"]) > 0:
                     head = state["items"][0]

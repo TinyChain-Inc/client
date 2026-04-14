@@ -42,7 +42,7 @@ def test_pyo3_kernel_resolves_opref_over_http_gateway():
         proc.kill()
 
 
-def test_kernel_with_library_uses_dependency_authority_and_auth_env(monkeypatch, tmp_path):
+def test_kernel_with_library_does_not_read_auth_env(monkeypatch, tmp_path):
     calls: list[tuple[str, str, str | None, str | None, str | None, str | None]] = []
 
     class _KernelHandle:
@@ -88,9 +88,9 @@ def test_kernel_with_library_uses_dependency_authority_and_auth_env(monkeypatch,
         (
             "/lib/example-devco/example/0.1.0",
             "api.example.test",
-            "https://tokens.example.test",
-            "example-admin",
-            "pubkey",
+            None,
+            None,
+            None,
             str(tmp_path),
         )
     ]
