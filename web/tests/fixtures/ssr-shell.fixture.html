@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>TinyChain Web Example</title>
+  </head>
+  <body>
+    <div id="app">
+      <main>
+        <h1>TinyChain Web Example</h1>
+      </main>
+    </div>
+    <script id="tc-web-initial-state" type="application/json">
+      {
+        "tinychain": {
+          "endpoint": "http://127.0.0.1:8702",
+          "publisher": "example-devco",
+          "service": "hello-web",
+          "version": "0.17.0"
+        },
+        "view": {
+          "title": "TinyChain Web Example",
+          "message": "Hello from SSR"
+        }
+      }
+    </script>
+    <script type="module" src="/assets/client-entry.js"></script>
+  </body>
+</html>

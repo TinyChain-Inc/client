@@ -14,6 +14,16 @@ The Node.js client gives JavaScript and TypeScript publishers the same ergonomic
 - **Packaging.** Distributed as an npm package for Node.js. No global installer or system service is required.
 - **Execution context.** Ships pure JavaScript/TypeScript APIs first; native acceleration is opt-in via user-provided handlers rather than bundled by default.
 
+## Local package entrypoint
+
+This repo now includes a local npm package descriptor at `client/js/package.json`
+with the package name `@tinychain/js` and entrypoint `client/js/src/index.mts`.
+`client/web` consumes this package directly via a local file dependency
+(`file:../js`).
+
+Version policy: keep `@tinychain/js` aligned with the `tinychain` crate version
+in `tc-server` (currently `0.17.0`).
+
 ## Browser and edge integration
 
 - **WASM runtime option.** Packages a WASM runtime so publishers can target browsers or edge workers while reusing the same IR manifests. Proprietary modules stay encapsulated in WASM with fetch-based transports (HTTP/WebSocket/WebTransport).

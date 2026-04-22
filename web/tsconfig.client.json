@@ -1,0 +1,29 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "composite": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "jsx": "preserve",
+    "tsBuildInfoFile": "./dist/.tsbuildinfo.client"
+  },
+  "include": [
+    "src/client/**/*.ts",
+    "src/client/**/*.tsx",
+    "src/client/**/*.cts",
+    "src/client/**/*.mts",
+    "src/shared/**/*.ts",
+    "src/shared/**/*.tsx",
+    "src/shared/**/*.cts",
+    "src/shared/**/*.mts"
+  ],
+  "exclude": [
+    "dist",
+    "node_modules"
+  ]
+}
