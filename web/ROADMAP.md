@@ -1,121 +1,202 @@
 # TinyChain web client roadmap
 
-This document plans the `client/web` package that will sit alongside `py/`,
-`js/`, and `rust/`.
+This roadmap evolves `client/web` from the current Express + React Native Web
+integration into a production UI toolkit for TinyChain applications.
 
-## Goal
+## Scope
 
-Deliver a minimal, production-usable web integration that demonstrates:
+The roadmap covers three layers:
 
-1. A Node.js server using Express.
-2. A templated webpage flow (server-rendered HTML shell + injected app state).
-3. React Native component rendering on both:
-   - the server (SSR), and
-   - the browser (hydrate/takeover).
-4. TinyChain JS client usage on both:
-   - server-side request handlers, and
-   - browser-side UI interactions.
+1. Integration layer: SSR + hydration + TinyChain JS usage across server/browser.
+2. UI layer: full React Native widget library (Material-like scope).
+3. App utilities: auth/session and state-management helpers for production apps.
 
-## Design constraints
+## Core constraints
 
-- Reuse `client/js` as the protocol/runtime source of truth; `client/web` is an
-  integration layer, not a second TinyChain client implementation.
-- Keep the runtime single-threaded and event-loop friendly in Node.
-- Keep transports aligned with TinyChain invariants (HTTP/WebSocket/WebTransport
-  only; no WebRTC/STUN/TURN scope).
-- Keep browser code dependency-minimal and avoid bundling server secrets.
-- Keep URI/path construction in code via shared builders/helpers, not string
-  concatenation in examples.
+- `client/js` remains the TinyChain protocol/runtime source of truth.
+- Web transport scope remains TinyChain-native (HTTP/WebSocket/WebTransport).
+- No browser exposure of server-only credentials.
+- One obvious path per feature; no legacy fallback branches.
 
-## Non-goals
+## Milestone plan
 
-- Building a general-purpose UI component library.
-- Introducing new kernel verbs or adapter-specific semantics.
-- Shipping a framework-specific monolith (for example, tightly coupled Next.js
-  internals) in v1 of `client/web`.
+### W0: Integration baseline lock (current scaffold hardening)
 
-## Proposed package layout
+Deliverables:
+- Keep canonical Express + RN SSR/hydration example stable.
+- Maintain explicit server/browser config boundaries and startup validation.
+- Preserve single TinyChain JS call path and Node 20-only runtime policy.
 
-`client/web/`
+Dependencies:
+- Stable `@tinychain/js` package contract.
 
-- `README.md`: quickstart + architecture notes.
-- `ROADMAP.md`: this plan.
-- `examples/express-rn-ssr/`: canonical reference app.
-- `packages/server/`: Express + SSR wiring helpers.
-- `packages/browser/`: hydration/bootstrap helpers.
-- `packages/shared/`: isomorphic view and TinyChain access helpers.
+Exit criteria:
+- Example runs and tests pass (`unit`, `integration`, `browser`) on Node 20.
+- Docs accurately describe runtime/environment/test workflows.
 
-The `packages/*` split is optional for MVP; a single example-first layout is
-acceptable as long as the server/browser/shared boundaries are explicit.
+Validation:
+- `npm run test:all` in `client/web`.
+- CI workflow runs same suite.
 
-## Implementation phases
+### W1: Widget system foundation
 
-1. **Phase 0: contract and scaffolding**
-   - Create `client/web` docs and skeleton.
-   - Define environment contract for TinyChain endpoints/auth:
-     - server env (full credentials/capability context),
-     - browser env (public-safe config only).
-   - Decide bundling path for dual targets (Node + browser) with one shared UI.
+Deliverables:
+- Define design tokens (typography, spacing, color, elevation, radius, motion).
+- Implement base primitives for RN web rendering:
+  `Box`, `Text`, `Button`, `Input`, `Select`, `Checkbox`, `Radio`, `Switch`,
+  `FormField`, `Card`, `List`, `Table/Grid`, `Modal`, `Toast`, `Tabs`, `Nav`.
+- Add theming and dark/light mode support with SSR-safe defaults.
 
-2. **Phase 1: Express + template shell**
-   - Add an Express server with:
-     - HTML template rendering,
-     - route-level state injection for hydration,
-     - static asset serving for browser bundle.
-   - Add one example route (`/`) proving template + state wiring.
+Dependencies:
+- W0 baseline lock.
 
-3. **Phase 2: React Native SSR and hydration**
-   - Render shared React Native (via `react-native-web`) components on the server.
-   - Hydrate the same component tree in the browser.
-   - Verify no SSR/client markup divergence for the starter page.
+Exit criteria:
+- Widget primitives documented with examples and accessibility notes.
+- SSR and hydration produce stable markup without mismatch warnings.
 
-4. **Phase 3: TinyChain JS isomorphic usage**
-   - Server side:
-     - call TinyChain via `client/js` inside Express handlers,
-     - render fetched data into SSR output.
-   - Browser side:
-     - initialize browser-safe TinyChain client config,
-     - perform a user-triggered call and update UI state.
-   - Document auth boundary explicitly (never expose server secrets).
+Validation:
+- Unit tests for primitive behavior.
+- Visual/regression snapshots for core components.
+- Browser functional tests for interaction and focus behavior.
 
-5. **Phase 4: hardening and docs**
-   - Add minimal tests for:
-     - SSR response shape,
-     - hydration bootstrap success,
-     - one server-side and one client-side TinyChain call path.
-   - Add a lightweight browser functional smoke test and document prerequisites.
-   - Document local run workflow and expected outputs.
-   - Add explicit testing guidance (`TESTING.md`) for unit/integration/browser tiers.
-   - Add planned blog draft in `docs/blog/0.17` for this surface area.
+Decision gates:
+- Freeze naming and token model before adding large widget families.
 
-## MVP acceptance criteria
+### W2: Composite widgets and app-shell patterns
 
-The first deliverable is complete when:
+Deliverables:
+- Add higher-level composites:
+  data panels, filter bars, paginated lists/tables, form layouts, nav shells.
+- Provide layout templates for dashboard/detail/edit flows.
+- Define extension points for app-specific theming and iconography.
 
-1. `client/web/examples/express-rn-ssr` runs locally and serves one page.
-2. The page is server-rendered from React Native components and then hydrated in
-   the browser without runtime mismatch errors.
-3. Server-side TinyChain call succeeds and renders data in initial HTML.
-4. Browser-side TinyChain call succeeds from a user action and updates the page.
-5. Example docs explain env vars, run commands, and the server/browser security
-   boundary.
+Dependencies:
+- W1 primitive set complete.
+
+Exit criteria:
+- At least one complete app-shell example composed only from widget library APIs.
+- Composite widgets include keyboard/accessibility behavior docs.
+
+Validation:
+- Integration tests for composite interactions.
+- Browser smoke flows for common app-shell navigation.
+
+### W3: TinyChain `State` widget coverage
+
+Deliverables:
+- Provide canonical renderers/editors for common TinyChain state surfaces:
+  scalars, tuples/maps, typed values, `Table`, `BTree`, and `Tensor` views.
+- Define a shared data-binding contract for SSR-injected + browser-refreshed
+  state updates.
+- Add reusable data ops utilities (sort/filter/paginate/select/edit) for state
+  widgets.
+
+Dependencies:
+- W2 app-shell patterns.
+- Stable JS client data access surfaces.
+
+Exit criteria:
+- State widget catalog covers prioritized TinyChain state types.
+- Example app demonstrates state inspect and update loops using shared widgets.
+
+Validation:
+- Unit tests for state rendering and edit serialization.
+- Integration tests for server fetch + browser refresh consistency.
+- Browser tests for end-user state operations.
+
+Migration notes:
+- Document recommended replacement path for hand-rolled state displays.
+
+### W4: Auth/session utility layer
+
+Deliverables:
+- Add auth helpers for login/logout/session establishment.
+- Provide secure cookie utilities:
+  HTTP-only cookie setup, same-site policy defaults, secure flag guidance.
+- Add authorized request helpers for SSR and browser flows:
+  cookie forwarding, session continuity, auth failure handling.
+
+Dependencies:
+- W0 runtime boundary enforcement.
+- Host-side auth/token policies required by target deployments.
+
+Exit criteria:
+- Auth/session utilities documented and exercised in example app flows.
+- Security boundary documentation includes cookie and credential handling rules.
+
+Validation:
+- Integration tests for login/session lifecycle.
+- Browser functional tests for authenticated navigation and expiry handling.
+- Negative tests for unauthorized and CSRF-sensitive scenarios.
+
+Decision gates:
+- If auth requirements vary by deployment model, provide explicit policy adapters
+  rather than implicit fallback behavior.
+
+### W5: Client state-management utilities
+
+Deliverables:
+- Ship minimal app state utilities for:
+  auth/session state, request lifecycle state, optimistic update state,
+  cache invalidation hooks.
+- Ensure utilities compose with state widgets and TinyChain request helpers.
+
+Dependencies:
+- W3 state widget contract.
+- W4 auth/session utilities.
+
+Exit criteria:
+- Example app uses shared state-management utilities instead of local ad-hoc
+  state wiring.
+- Utility APIs documented with anti-pattern guidance.
+
+Validation:
+- Unit tests for state transitions and error states.
+- Integration tests for optimistic update and rollback behavior.
+
+### W6: Production readiness and ecosystem packaging
+
+Deliverables:
+- Publish packaging/versioning strategy for `client/web` widget and utility
+  surfaces.
+- Add upgrade notes, deprecation policy, and compatibility matrix with
+  `@tinychain/js`.
+- Provide domain starter templates built from the widget/state/auth foundations.
+
+Dependencies:
+- W0-W5 complete.
+
+Exit criteria:
+- Release checklist exists and is reproducible.
+- Documentation supports onboarding without internal context.
+
+Validation:
+- Full CI matrix for unit/integration/browser tests.
+- Smoke validation of starter templates.
+
+## Cross-cutting acceptance criteria
+
+Across all milestones:
+
+1. No server-secret leakage to browser bundles.
+2. SSR/hydration consistency holds for supported components.
+3. TinyChain JS usage remains through shared, documented contracts.
+4. Test coverage includes positive and negative auth/data/update flows.
+5. Docs stay aligned with shipped behavior and runtime requirements.
 
 ## Risks and mitigations
 
-- **Risk:** SSR/hydration mismatch from React Native Web config drift.
-  - **Mitigation:** lock one canonical Babel/runtime config shared by server and
-    browser bundles.
-- **Risk:** accidental credential leakage to browser bundle.
-  - **Mitigation:** strict split of server-only env vars vs public config, with
-    explicit validation at startup.
-- **Risk:** duplicated TinyChain client wrappers across server/browser.
-  - **Mitigation:** keep protocol calls in shared helpers that import `client/js`
-    primitives and specialize only transport/bootstrap edges.
+- Risk: component sprawl without consistent UX contract.
+  - Mitigation: freeze token system and primitive API before composites.
+- Risk: auth/session helpers become framework-specific.
+  - Mitigation: keep helpers transport- and framework-agnostic; expose adapters
+    only at integration boundaries.
+- Risk: state widgets drift from TinyChain data semantics.
+  - Mitigation: require shared serializer/binding contracts and fixture-based
+    tests for all supported state types.
 
-## Follow-on milestones (post-MVP)
+## Non-goals
 
-1. Queue-aware examples for long-running workflows that exceed synchronous
-   request budgets.
-2. Optional websocket streaming demo once the JS client websocket helper lands.
-3. Framework adapters (for example, Vite or Next integration) after the Express
-   reference path is stable.
+- Building a framework-specific monolith tied to one web framework internals.
+- Adding non-TinyChain transport orchestration (WebRTC/STUN/TURN).
+- Duplicating TinyChain protocol logic already owned by `client/js`.
