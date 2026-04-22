@@ -10,6 +10,9 @@ The Python package `tinychain` will import `tinychain_local` when installed and 
 Today, `tinychain-local` depends on the TinyChain runtime crate via a workspace-relative
 path, so building the extension assumes this repo is vendored into a runtime checkout.
 
+See [`ROADMAP.md`](/home/haydn/Documents/tcv2/client/rust/ROADMAP.md) for planned
+Rust client milestones.
+
 If you are developing without that parent checkout, you will need to either:
 
 - check out the TinyChain runtime repository so the relative dependency paths in
