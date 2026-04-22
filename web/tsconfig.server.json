@@ -1,0 +1,26 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "composite": true,
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": [
+      "ES2022"
+    ],
+    "tsBuildInfoFile": "./dist/.tsbuildinfo.server"
+  },
+  "include": [
+    "src/server/**/*.ts",
+    "src/server/**/*.tsx",
+    "src/server/**/*.cts",
+    "src/server/**/*.mts",
+    "src/shared/**/*.ts",
+    "src/shared/**/*.tsx",
+    "src/shared/**/*.cts",
+    "src/shared/**/*.mts"
+  ],
+  "exclude": [
+    "dist",
+    "node_modules"
+  ]
+}
