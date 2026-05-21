@@ -162,12 +162,16 @@ def evaluate(self, request: tc.Ref) -> tc.Ref:
 
 `tc.execute(...)` decodes canonical TinyChain state envelopes into typed Python values:
 
-- `/state/scalar/value/*` -> Python primitive (`str`, `int`, `float`, `bool`, `None`)
-- `/state/scalar/map` -> `dict`
-- `/state/scalar/tuple` -> `tuple`
+- self-describing scalar values (`"hello"`, `7`, `true`, `null`) -> Python primitives
+- legacy tagged scalar values (`/state/scalar/value/*`) -> same Python primitives (accepted for compatibility)
+- self-describing state maps/objects (`{"k": ...}`) -> `dict`
+- self-describing state tuples/arrays (`[...]`) -> `list`/`tuple` as appropriate
+- legacy tagged `/state/scalar/map` and `/state/scalar/tuple` payloads are still accepted for compatibility
 - `/state/collection/tensor` -> `tc.Tensor` (when local backend types are available)
+- `/state/scalar/op/*` -> `tc.state.OpDef` (decoded transparently)
 
-This means callers should expect typed responses by default, not ad-hoc JSON/status parsing.
+This means callers should expect typed responses by default, not ad-hoc JSON/status parsing
+or custom payload/status wrappers.
 
 For Rust/native handlers, use `txn.auth_context()` from `TxnHandle`.
 For WASM handlers, return an OpRef to `/host/auth/context` (see the

@@ -38,6 +38,14 @@ def test_execute_decodes_string_ref_to_python_str(monkeypatch):
     assert result == "hello"
 
 
+def test_execute_decodes_number_to_python_int(monkeypatch):
+    monkeypatch.setattr(tc, "_dispatch_execute", lambda _op: _Response(7))
+
+    result = tc.execute(tc.opref.get("/lib/example-devco/a/0.1.0/count"))
+    assert isinstance(result, int)
+    assert result == 7
+
+
 def test_execute_keeps_json_map_payload_structured(monkeypatch):
     payload = {
         "status": "ok",
@@ -83,7 +91,12 @@ def test_execute_decodes_typed_scalar_tuple(monkeypatch):
 
 
 def test_execute_decodes_typed_tensor_when_available(monkeypatch):
-    if not hasattr(tc, "Tensor") or not hasattr(tc.Tensor, "dense_u64"):
+    try:
+        has_tensor = hasattr(tc, "Tensor") and hasattr(tc.Tensor, "dense_u64")
+    except ImportError:
+        has_tensor = False
+
+    if not has_tensor:
         pytest.skip("local Tensor type unavailable")
 
     payload = {
@@ -99,3 +112,13 @@ def test_execute_decodes_typed_tensor_when_available(monkeypatch):
     assert result.dtype() == "u64"
     assert result.shape() == [2]
     assert result.values() == [10, 11]
+
+
+def test_execute_decodes_opdef_map_to_python_opdef(monkeypatch):
+    payload = tc.state.OpDef.post([("result", 1)]).to_json()
+    monkeypatch.setattr(tc, "_dispatch_execute", lambda _op: _Response(payload, status=200))
+
+    result = tc.execute(tc.opref.get("/state/opdef"))
+    assert isinstance(result, tc.state.OpDef)
+    assert result.method == "POST"
+    assert result.form[-1][0] == "result"
