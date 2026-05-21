@@ -82,6 +82,43 @@ def _unwrap_state(payload: object) -> object:
     return payload
 
 
+def _decode_tinychain_payload(payload: object) -> object:
+    from .state import OpDef, TCRef
+    from .state.value import Value
+
+    unwrapped = _unwrap_state(payload)
+    if unwrapped is None or isinstance(unwrapped, (bool, int, float, str)):
+        return unwrapped
+
+    if isinstance(unwrapped, dict):
+        if len(unwrapped) == 1:
+            (key, _value), = unwrapped.items()
+            if isinstance(key, str) and key.startswith(uri("state", "scalar", "op").path):
+                try:
+                    return OpDef.from_json(unwrapped)
+                except Exception:
+                    pass
+
+            if isinstance(key, str) and (key.startswith("/") or key.startswith("$")):
+                try:
+                    return TCRef.from_json(unwrapped)
+                except Exception:
+                    pass
+
+            try:
+                value = Value.from_json(unwrapped)
+                return value.value
+            except Exception:
+                pass
+
+        return {k: _decode_tinychain_payload(v) for k, v in unwrapped.items()}
+
+    if isinstance(unwrapped, list):
+        return [_decode_tinychain_payload(item) for item in unwrapped]
+
+    return unwrapped
+
+
 def decode_json_body(response: "object"):
     body = getattr(response, "body", None)
     if body is None:
@@ -95,7 +132,7 @@ def decode_json_body(response: "object"):
         payload = json.loads(text)
     else:
         payload = text
-    return _unwrap_state(payload)
+    return _decode_tinychain_payload(payload)
 
 
 def response_json(response: "object"):
