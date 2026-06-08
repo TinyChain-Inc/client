@@ -42,9 +42,27 @@ staying thin and well-documented for new users.
 - Do not add custom request/response wrapper classes or hand-written payload/status
   parsing in examples or client APIs when framework surfaces already exist
   (`tc.backend`, `tc.execute`, `tc.Host`, `tc.testing.decode_json_body`).
-- Prefer idiomatic route calls inside `with tc.backend(..., mode="eager")` and use
-  `with tc.backend(..., mode="deferred")` for planning flows. Reserve explicit
-  `tc.execute(...)` for executing deferred refs or cross-scope execution.
+- Treat execution mode as contextual framework behavior: reflection/definition
+  contexts are deferred, imperative runtime calls are eager by default, and
+  `with tc.backend(..., mode="deferred")` is the explicit planning override.
+  Do not add package-level `deferred` kwargs, `*_op` helpers, or extra execution
+  wrappers.
+- Keep route type hints aligned with runtime TinyChain value types. Authoring
+  conveniences such as `str` are allowed in route signatures, but bound route
+  stubs must normalize annotations to the greatest common runtime TinyChain type
+  (`str` -> `tc.String`, numeric/bool primitives -> `tc.state.Value`,
+  mixed unions -> their common ancestor) so deferred plans preserve useful IDE
+  and documentation types. Do not reintroduce placeholder wrappers like
+  `Ref[str]`.
+- Preserve `tc.String` as the value-module `String(Value)` type. String
+  templating belongs on `String.render(...)` only; do not add render methods to
+  generic `Value` or unrelated scalar types.
+- Derive library/service/class names from Python class names and route names from
+  method names. Do not reintroduce decorator or subclass `name` overrides; rename
+  the class/method when a different URI is needed.
+- Path-only library/service/class URIs target the active/default local PyO3 host;
+  authority-qualified URIs target HTTP(S). Preserve `with tc.backend(...)` as an
+  override, not as a requirement for ordinary package calls.
 
 ## Gap triage guardrails
 

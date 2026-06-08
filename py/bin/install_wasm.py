@@ -58,9 +58,9 @@ def install(
     data_dir: pathlib.Path | None = None,
     bearer_token: str | None = None,
 ) -> "tc.KernelResponse":
-    return tc.wasm.install(
+    return tc.install(
         schema_path,
-        wasm_path,
+        wasm=wasm_path,
         kernel=kernel,
         data_dir=data_dir,
         bearer_token=bearer_token,

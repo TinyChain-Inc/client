@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Iterator, Mapping, Sequence, TypeAlias
+from typing import Any, Iterator, Mapping, Sequence
 
 from ..uri import URI, uri
 from .value import Value
-
-Json: TypeAlias = object
 
 OPREF_DELETE_TAG: str = uri("state", "scalar", "ref", "op", "delete").path
 TCREF_IF: str = uri("state", "scalar", "ref", "if").path
@@ -31,7 +29,7 @@ def _sorted_items(obj: Mapping[str, Any]) -> list[tuple[str, Any]]:
 @dataclass(frozen=True, slots=True)
 class OpRef:
     """
-    A v1-shaped OpRef encoding used by `tc-ir` and op-graph payloads.
+    An IR-shaped OpRef encoding used by `tc-ir` and op-graph payloads.
 
     This is distinct from the runtime `tinychain.OpRef` request stub (HTTP method/path/body).
     """
@@ -57,7 +55,7 @@ class OpRef:
 
     @staticmethod
     def post(subject: str, params: Mapping[str, "Scalar | Value | object"]) -> "OpRef":
-        encoded: dict[str, Json] = {}
+        encoded: dict[str, object] = {}
         for key, value in _sorted_items(params):
             encoded[key] = autobox(value).to_json()
         return OpRef(method="POST", subject=subject, args=encoded)
@@ -66,7 +64,7 @@ class OpRef:
     def delete(subject: str, key: "Scalar | Value | object" = None) -> "OpRef":
         return OpRef(method="DELETE", subject=subject, args=autobox(key).to_json())
 
-    def to_json(self) -> dict[str, Json]:
+    def to_json(self) -> dict[str, object]:
         if self.method == "GET":
             return {self.subject: self.args}
         if self.method == "PUT":
@@ -121,7 +119,7 @@ class While:
     op: "Scalar"
     state: "Scalar"
 
-    def to_json(self) -> dict[str, Json]:
+    def to_json(self) -> dict[str, object]:
         return {
             TCREF_WHILE: [
                 self.cond.to_json(),
@@ -137,7 +135,7 @@ class IfRef:
     then: "Scalar"
     or_else: "Scalar"
 
-    def to_json(self) -> dict[str, Json]:
+    def to_json(self) -> dict[str, object]:
         return {
             TCREF_IF: [
                 self.cond.to_json(),
@@ -153,7 +151,7 @@ class CondOp:
     then: "OpDef"
     or_else: "OpDef"
 
-    def to_json(self) -> dict[str, Json]:
+    def to_json(self) -> dict[str, object]:
         return {
             TCREF_COND: [
                 self.cond.to_json(),
@@ -176,7 +174,7 @@ class TCRef:
     def for_id(name: str) -> "TCRef":
         return TCRef(id=IdRef(name))
 
-    def to_json(self) -> dict[str, Json]:
+    def to_json(self) -> dict[str, object]:
         if self.op is not None:
             return self.op.to_json()
         if self.id is not None:
@@ -269,6 +267,9 @@ def autobox(
     if isinstance(obj, Scalar):
         return obj
     if isinstance(obj, Value):
+        op = getattr(obj, "op", None)
+        if isinstance(op, OpRef):
+            return Scalar(ref=TCRef(op=op))
         return Scalar(value=obj)
     if isinstance(obj, URI):
         return Scalar(value=Value.link(obj))
@@ -294,6 +295,15 @@ def autobox(
         return Scalar.tuple_of([autobox(v) for v in obj])
 
     return Scalar(value=Value.from_json(obj))
+
+
+def _is_string_scalar(obj: object) -> bool:
+    return (
+        isinstance(obj, str)
+        or (isinstance(obj, Value) and obj.kind == "string")
+        or (isinstance(obj, Scalar) and obj.value is not None and obj.value.kind == "string")
+    )
+
 
 def _coerce_form(form: Sequence[tuple[str, object]]) -> list[tuple[str, "Scalar"]]:
     out: list[tuple[str, Scalar]] = []
@@ -339,7 +349,7 @@ class Scalar:
     Minimal v2 Scalar mirror for Python-side reflection and static analysis.
 
     Encodes/decodes to the same JSON shapes understood by `tc-ir`:
-    - scalar values (typed `/state/scalar/value/*` maps or plain JSON literals)
+    - scalar values (plain JSON literals)
     - scalar maps/tuples (plain JSON objects/arrays)
     - scalar refs (an OpRef/TCRef single-entry map)
     - scalar op defs (typed `/state/scalar/op/*` maps)
@@ -405,7 +415,7 @@ class Scalar:
             raise TypeError("cond_op condition must be a ref")
         return autobox(CondOp(cond_ref, then, or_else))
 
-    def to_json(self) -> Json:
+    def to_json(self) -> object:
         if self.ref is not None:
             return self.ref.to_json()
         if self.op is not None:
@@ -528,6 +538,11 @@ class Scalar:
         opref = OpRef.post(subject, {"r": autobox(other)})
         return Scalar(ref=TCRef(op=opref))
 
+    def _string_render(self, params: Mapping[str, object]) -> "Scalar":
+        subject = f"{self._subject()}/render"
+        opref = OpRef.post(subject, params)
+        return Scalar(ref=TCRef(op=opref))
+
     def get(self, index: "Scalar | Value | object") -> "Scalar":
         subject = f"{self._subject()}/get"
         opref = OpRef.post(subject, {"i": autobox(index)})
@@ -548,6 +563,8 @@ class Scalar:
         return self.get(index)
 
     def __add__(self, other: object) -> "Scalar":
+        if _is_string_scalar(self) or _is_string_scalar(other):
+            return self.concat(other)
         if isinstance(other, (list, tuple)):
             return self.concat(other)
         if isinstance(other, Scalar) and other.tuple is not None:
@@ -555,6 +572,8 @@ class Scalar:
         return self.add(other)
 
     def __radd__(self, other: object) -> "Scalar":
+        if _is_string_scalar(other) or _is_string_scalar(self):
+            return autobox(other).concat(self)
         if isinstance(other, (list, tuple)):
             return autobox(other).concat(self)
         if isinstance(other, Scalar) and other.tuple is not None:
@@ -646,7 +665,7 @@ class Scalar:
                 pass
 
             # Try to decode as a TCRef/OpRef map.
-            # Only applies to v1-shaped op maps (subject keys start with '/' or '$', or DELETE tag).
+            # Only applies to IR op maps (subject keys start with '/' or '$', or DELETE tag).
             if len(obj) == 1:
                 try:
                     return Scalar(ref=TCRef.from_json(obj))
@@ -681,7 +700,7 @@ class Op:
     """
     A callable op identity which can be invoked via GET/PUT/POST/DELETE.
 
-    This mirrors the v1 Python client ergonomics, but emits v2-compatible `Scalar`/`TCRef`/`OpRef`
+    This provides Python client ergonomics while emitting canonical `Scalar`/`TCRef`/`OpRef`
     encodings.
     """
 
@@ -779,7 +798,7 @@ class OpDef:
     def class_(self) -> "Scalar":
         return Scalar(op=self).class_()
 
-    def to_json(self) -> dict[str, Json]:
+    def to_json(self) -> dict[str, object]:
         if self.method == "GET":
             return {OPDEF_GET: [self.key, _encode_form(self.form)]}
         if self.method == "PUT":
@@ -839,7 +858,7 @@ class ForEach:
     op: "Scalar"
     item_name: str
 
-    def to_json(self) -> dict[str, Json]:
+    def to_json(self) -> dict[str, object]:
         return {
             TCREF_FOR_EACH: [
                 self.items.to_json(),
@@ -849,7 +868,7 @@ class ForEach:
         }
 
 
-def _encode_form(form: Sequence[tuple[str, Scalar]]) -> list[list[Json]]:
+def _encode_form(form: Sequence[tuple[str, Scalar]]) -> list[list[object]]:
     return [[name, scalar.to_json()] for name, scalar in form]
 
 

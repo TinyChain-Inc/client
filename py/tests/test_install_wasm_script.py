@@ -3,6 +3,7 @@ import json
 import pathlib
 
 import tinychain as tc
+import tinychain.testing as tc_testing
 
 from .support import REPO_ROOT, ensure_wasm_example_built, rjwt_install_token
 
@@ -52,11 +53,11 @@ def test_install_wasm_script_registers_routes(tmp_path):
         tc.KernelRequest("GET", schema_path, None, None)
     )
     assert schema_response.status == 200
-    schema_json = tc.testing.decode_json_body(schema_response)
+    schema_json = tc_testing.decode_json_body(schema_response)
 
     hello_path = tc.uri("lib", "example-devco", "example", "0.1.0", "hello").path
     route_response = kernel.dispatch(
         tc.KernelRequest("GET", hello_path, None, tc.StateHandle("world"))
     )
     assert route_response.status == 200
-    assert tc.testing.decode_json_body(route_response) == "Hello, world!"
+    assert tc_testing.decode_json_body(route_response) == "Hello, world!"

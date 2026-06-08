@@ -76,18 +76,13 @@ def test_execute_regression_local_style_response_decode(monkeypatch):
     assert result == payload
 
 
-def test_execute_decodes_typed_scalar_tuple(monkeypatch):
-    payload = {
-        tc.uri("state", "scalar", "tuple").path: [
-            {tc.uri("state", "scalar", "value", "number").path: 1},
-            {tc.uri("state", "scalar", "value", "string").path: "x"},
-        ]
-    }
+def test_execute_decodes_canonical_scalar_array(monkeypatch):
+    payload = [1, "x"]
     monkeypatch.setattr(tc, "_dispatch_execute", lambda _op: _Response(payload, status=200))
 
     result = tc.execute(tc.opref.get("/state/example"))
-    assert isinstance(result, tuple)
-    assert result == (1, "x")
+    assert isinstance(result, list)
+    assert result == [1, "x"]
 
 
 def test_execute_decodes_typed_tensor_when_available(monkeypatch):

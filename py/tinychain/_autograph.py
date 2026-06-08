@@ -719,7 +719,7 @@ def _opdef_post(items: list[tuple[str, ast.expr]]) -> ast.Call:
         )
     return ast.Call(
         func=ast.Attribute(
-            value=ast.Attribute(value=ast.Name(id="_tc_autograph", ctx=ast.Load()), attr="autograph", ctx=ast.Load()),
+            value=ast.Attribute(value=ast.Name(id="_tc_autograph", ctx=ast.Load()), attr="_autograph", ctx=ast.Load()),
             attr="_autograph_opdef_post",
             ctx=ast.Load(),
         ),

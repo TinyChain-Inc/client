@@ -1,156 +1,108 @@
 # Python client roadmap
 
-## Scope
+## Purpose
 
-This roadmap drives full feature parity between this client and the v1 Python
-client at `~/Documents/tinychain/client/py`, then hardens the v2 implementation
-for long-term maintenance.
+The Python client should make the ordinary TinyChain workflow obvious enough to
+show in a short demo: define a `Library`, call a route locally, install the same
+library on any authorized remote host, then call the remote route from normal
+Python or a browser URL. The framework should hide transport, payload,
+serialization, auth-context, and execution-mode mechanics unless the developer
+explicitly asks for advanced control.
 
-## Parity contract
+## Current invariants
 
-Parity is complete only when all of the following are true:
+- `tc.Library` plus `@tc.get`/`@tc.post` is the public route declaration path.
+- Library identity is canonical: class metadata defines publisher and version;
+  class and method names derive resource and route names.
+- Route declarations do not accept path/name overrides.
+- Dependencies are manifest metadata; callers do not pass ad hoc dependency or
+  remote-routing tables to kernels.
+- Reflection is deferred by default; imperative runtime calls execute eagerly by
+  default.
+- `tc.backend(..., mode="deferred")` is the single call-site switch for explicit
+  planning in runtime code.
+- `tc.install(...)` is the canonical install helper for Python libraries and WASM
+  implementations.
+- Auth context is framework-owned and derived from validated transport/auth state,
+  never from application request bodies.
+- Response encoding and decoding is framework-owned; application code should not
+  implement payload/status wrappers or TinyChain state parsing.
+- Transaction lifecycle ownership stays inside the kernel/host. Client helpers may
+  compose plans but never mint or manage transaction handles.
+- Advanced/internal helpers stay out of top-level `import tinychain as tc` unless
+  they are part of the ordinary user path.
 
-1. API parity: supported v1 user-facing modules and flows have an equivalent v2
-   path.
-2. Behavioral parity: equivalent operations produce equivalent request shapes,
-   response handling, and error semantics.
-3. Documentation parity: migration guidance exists for each changed v1 surface.
-4. Test parity: coverage proves equivalent behavior for the same fixture cases.
+## Next milestone: remote install and browser-link ergonomics
 
-## Milestone plan
-
-### M0: Parity inventory and rubric
-
-Deliverables:
-- Build an explicit parity matrix using `~/Documents/tinychain/client/py` as the
-  reference by module and feature area.
-- Label each gap as either `parity_gap` or `framework_gap`.
-- Define target behavior for each parity gap and identify owner files/tests.
-
-Dependencies:
-- Stable local checkout of the v1 reference client.
-
-Exit criteria:
-- Every v1 public surface is marked `matched`, `gap`, or `explicitly_out_of_scope`.
-- Each `gap` entry has a planned milestone and validation case.
-
-Validation:
-- Static comparison of module exports, docs, and key examples.
-- Tracking doc committed in `client/py`.
-
-Decision gates:
-- If a v1 surface conflicts with v2 invariants, document the mismatch and
-  require an explicit design decision before implementation.
-
-### M1: Core runtime parity (transport/auth/session/collections)
+Motivation:
+- Enable a 60-second Greeter demo with no testnet-specific API and no boilerplate
+  payload/auth plumbing:
+  1. generate a simple `Hello, {name}!` `Library`,
+  2. call `hello` locally,
+  3. install the same library on a configured remote host with an auth token, and
+  4. open a browser-callable remote `hello` URL.
 
 Deliverables:
-- Close parity gaps for host transport/auth ergonomics and eager/deferred session
-  expectations.
-- Align collection and scalar workflows for common operations (`Table`, `BTree`,
-  `Tensor`, scalar ops) with v1 user expectations.
-- Preserve the no-exposed-`txn_id` contract while matching v1 workflow outcomes.
-
-Dependencies:
-- M0 parity matrix.
-- Stable kernel-side request/response envelopes.
-
-Exit criteria:
-- Core parity matrix rows move to `matched`.
-- Existing docs include equivalent v1-to-v2 snippets for each major flow.
-
-Validation:
-- Unit tests for API behavior and envelope shaping.
-- Integration tests against local TinyChain hosts.
-- Side-by-side fixture assertions comparing v1 and v2 outcomes.
-
-Migration notes:
-- Publish one canonical migration guide for session and auth behavior changes.
-
-### M2: Library/runtime install parity and cross-host behavior
-
-Deliverables:
-- Mirror `/lib` installer contract and dependency edge persistence.
-- Verify cross-host dependency execution semantics in Python in-process and
-  remote-host combinations.
-- Keep telemetry/billing/auth propagation aligned with host expectations.
-
-Dependencies:
-- M1 transport/auth parity.
-
-Exit criteria:
-- Reference example demonstrates local library `A` invoking remote dependency
-  `B` with correct auth and transaction behavior.
-- Installer and dependency graph behavior validated end-to-end.
+- Extend `tc.install(...)` to accept a remote TinyChain host:
+  ```python
+  tc.install(greeter, remote=tc.Host("https://host.example"), token=install_token)
+  ```
+- Let `tc.Host` carry default auth for install and route calls:
+  ```python
+  host = tc.Host("https://host.example", token=install_token)
+  ```
+- Keep host targeting generic. Do not introduce `tc.testnet` or any network-name
+  specific API.
+- Accept pre-generated short-lived tokens. If key material is provided, allow
+  framework token minting with a seconds-scale TTL, but do not require keypair
+  handling in the demo script.
+- Add a canonical browser URL builder for route calls:
+  ```python
+  host.url(greeter, "hello", name="Ada")
+  ```
+- Ensure generated route URLs use canonical `/lib/{publisher}/{class-derived-name}/{version}/{route}`
+  paths and standard query encoding.
+- Keep plain route method calls as the normal Python path. `tc.execute(...)` remains
+  advanced plan execution, not the demo path.
 
 Validation:
-- Integration tests for install, dependency calls, auth propagation.
-- Negative tests for egress restrictions and missing capability failures.
+- Unit test `tc.install(..., remote=host, token=...)` builds the same canonical
+  install payload as local install and sends it to remote `/lib` with auth.
+- Unit test `tc.Host(..., token=...)` applies auth to install and route requests
+  without per-method auth kwargs.
+- Unit test browser URL generation for route paths, query encoding, and authority.
+- Mocked remote-host test proving Python-defined `Library` install and route call
+  use framework request/response decoding, not custom payload/status parsing.
+- Example script for the Greeter demo which contains only user-facing code and can
+  be shown without revisions or setup detours.
 
-Migration notes:
-- Document deprecation path for legacy package-local HTTP shims.
+Documentation:
+- Add a concise README section: "60-second Greeter demo".
+- Document that the remote may be any authorized TinyChain host, including a
+  testnet host, without changing API shape.
+- Document token expectations: pre-generated bearer token is acceptable; optional
+  short-lived minting is framework-provided when key material is available.
 
-### M3: Python-defined library compilation and opdef transforms
+Guardrails:
+- Do not add `tc.testnet`.
+- Do not add another install helper.
+- Do not expose raw install payloads, schemas, transaction IDs, or status wrappers
+  in the demo path.
+- Do not require per-method auth kwargs.
+- Do not reintroduce `tc.Json`, `tc.define`, `tc.deferred`, `tc.wasm.install`,
+  top-level `tc.testing`, or top-level IR compiler helpers.
 
-Deliverables:
-- Implement `tc.define` compilation into standard v2 IR (`TCRef`, `OpRef`,
-  `Scalar`, `LibrarySchema`).
-- Implement Autograph-style AST rewrite for supported decorator flows.
-- Keep unsupported syntax handling deterministic with explicit error messages.
+## Maintenance backlog
 
-Dependencies:
-- M2 installer/runtime parity.
-
-Exit criteria:
-- Python-defined libraries install and execute through the same host dispatch path
-  as WASM/HTTP/PyO3.
-- AST transform acceptance tests cover supported and rejected syntax.
-
-Validation:
-- Compiler unit tests for emitted IR determinism.
-- Integration tests for install + execute + rollback/error paths.
-
-Decision gates:
-- If transform complexity grows beyond the supported subset, freeze scope and
-  require explicit expansion approval before adding syntax classes.
-
-### M4: LogChain and parity hardening
-
-Deliverables:
-- Add `tc.logchain` helper surfaces for publish/subscribe/export/topic flows.
-- Finalize parity matrix with remaining items moved to `matched` or documented
-  `out_of_scope`.
-- Tighten docs and examples to remove stale compatibility ambiguity.
-
-Dependencies:
-- M1 core runtime parity.
-
-Exit criteria:
-- LogChain helper API is documented and tested.
-- Parity matrix has no unresolved `gap` entries without a decision record.
-
-Validation:
-- Integration tests for batch and streaming log flows.
-- Documentation review for migration completeness and accuracy.
-
-## Cross-cutting validation requirements
-
-- Maintain separate test tiers: unit, integration, and migration/parity fixtures.
-- Keep a runnable parity regression suite that compares representative v1/v2
-  workflows.
-- Include negative tests for auth, dependency egress, and transaction boundaries.
-
-## Risks and mitigations
-
-- Risk: parity scope expands indefinitely.
-  - Mitigation: freeze parity matrix definitions in M0 and require change control
-    for new parity targets.
-- Risk: compiler/AST features introduce hidden semantic drift.
-  - Mitigation: enforce deterministic IR snapshots and reject unsupported syntax.
-- Risk: docs drift from behavior.
-  - Mitigation: bind migration examples to tested fixtures.
-
-## Deferred explorations
-
-- Peer-assisted discovery (`tc://`, overlay hints) for partially disconnected
-  deployments, after core parity milestones close.
+- Keep `tinychain._autograph` internal until the transformer is validated as a
+  public API.
+- Keep `tc.Host.request` as a low-level primitive but avoid presenting it as the
+  normal application path.
+- Keep framework behavior out of `tinychain.testing`; that module should contain
+  harness helpers only and remain an explicit import.
+- Split large test modules by invariant when they become difficult to review,
+  especially executor mode/routing behavior and kernel dependency-routing helpers.
+- Remove generated artifacts such as `__pycache__` from commits and keep them
+  ignored.
+- Keep root and submodule docs aligned whenever public route, auth, execution, or
+  serialization behavior changes.

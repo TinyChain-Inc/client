@@ -1,30 +1,20 @@
 from __future__ import annotations
 
-from .library import Library
+from .library import Library, delete, get, install, post, put
+from .codec import decode_response_body
 from .executor import Executor, backend
 from .executor import execute as _dispatch_execute
 from .opref import OpRef
 from . import opref
-from .ref import Ref, String
+from .ref import Ref
+from .state.value import String
 from .uri import URI, authority, origin, uri
-from . import define
 from . import compute
 from . import state
 from . import kernel
-from . import testing
-from . import wasm
 from . import auth
-from . import autograph
 from .cond import cond
 from .host import Host
-
-# Convenience aliases: keep v1 ergonomics while keeping `tc.define.*` as the canonical home.
-self_subject = define.self_subject
-install = define.install
-get = define.get
-put = define.put
-post = define.post
-delete = define.delete
 
 __all__ = [
     "Library",
@@ -35,11 +25,9 @@ __all__ = [
     "Ref",
     "String",
     "URI",
-    "define",
     "compute",
     "state",
     "kernel",
-    "self_subject",
     "install",
     "get",
     "put",
@@ -50,18 +38,18 @@ __all__ = [
     "authority",
     "origin",
     "Host",
-    "testing",
-    "wasm",
     "auth",
-    "autograph",
 ]
+
+globals().pop("testing", None)
+globals().pop("wasm", None)
 
 
 def execute(op: "OpRef | Ref") -> object:
+    if hasattr(op, "op"):
+        op = op.op
     if not isinstance(op, (OpRef, Ref)):
-        # Backward-compatible no-op for values which may already have been
-        # auto-executed in the active backend context.
-        return op
+        raise TypeError(f"expected OpRef or Ref, got {type(op).__name__}")
 
     response = _dispatch_execute(op)
     status = getattr(response, "status", None)
@@ -69,7 +57,7 @@ def execute(op: "OpRef | Ref") -> object:
         # HTTP-host execution paths may already return decoded JSON-like values.
         return response
     if status == 200:
-        return testing.decode_json_body(response)
+        return decode_response_body(response)
     if status == 204:
         return None
     message = None
@@ -87,8 +75,8 @@ def execute(op: "OpRef | Ref") -> object:
         raise AssertionError(f"unexpected status {status}: {message}")
     raise AssertionError(f"unexpected status {status}")
 
-# Optional local (PyO3) backend. When installed, re-export its public classes at the top-level
-# so user code can keep `import tinychain as tc` (v1 ergonomics) while opting into in-process speed.
+# Optional local (PyO3) backend. When installed, re-export its public classes at the top level
+# so `import tinychain as tc` works for both HTTP and in-process execution.
 try:  # pragma: no cover
     import tinychain_local as local  # type: ignore
 

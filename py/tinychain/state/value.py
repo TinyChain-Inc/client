@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal, TypeAlias
+from typing import Any, Literal
 
 from ..uri import URI, uri
-
-Json: TypeAlias = object
 
 VALUE_NONE: str = uri("state", "scalar", "value", "none").path
 VALUE_NUMBER: str = uri("state", "scalar", "value", "number").path
@@ -27,14 +25,14 @@ class Value:
         return Value(kind="number", value=value)
 
     @staticmethod
-    def string(value: str) -> "Value":
-        return Value(kind="string", value=value)
+    def string(value: str) -> "String":
+        return String(value)
 
     @staticmethod
     def link(value: URI | str) -> "Value":
         return Value(kind="link", value=str(value))
 
-    def to_json(self) -> Json:
+    def to_json(self) -> object:
         if self.kind == "none":
             return None
         if self.kind == "number":
@@ -76,3 +74,37 @@ class Value:
                 return Value.link(key)
 
         raise TypeError(f"cannot decode Value from {type(obj).__name__}")
+
+
+class String(Value):
+    __slots__ = ("op",)
+
+    def __init__(self, value: str | object):
+        from ..opref import OpRef as RuntimeOpRef
+        from .scalar import OpRef as StateOpRef
+
+        if isinstance(value, (RuntimeOpRef, StateOpRef)):
+            super().__init__(kind="string", value=None)
+            object.__setattr__(self, "op", value)
+        else:
+            super().__init__(kind="string", value=value)
+            object.__setattr__(self, "op", None)
+
+    def render(self, params: dict[str, object] | None = None, **kwargs: object) -> "String":
+        if params is not None and kwargs:
+            raise ValueError("String.render accepts a dict or kwargs, not both")
+
+        from .scalar import autobox
+
+        render_params = kwargs if params is None else params
+        if self.op is None and all(_is_literal_render_value(value) for value in render_params.values()):
+            rendered = str(self.value)
+            for key, value in render_params.items():
+                rendered = rendered.replace(f"{{{{{key}}}}}", str(value))
+            return String(rendered)
+
+        return String(autobox(self)._string_render(render_params).ref.op)
+
+
+def _is_literal_render_value(value: object) -> bool:
+    return isinstance(value, (str, bool, int, float, URI))

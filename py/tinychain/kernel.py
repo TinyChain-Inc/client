@@ -124,29 +124,6 @@ def _dependency_routes_for_library(library: Library) -> list[tuple[str, str]]:
     return routes
 
 
-def _shared_path_prefix(paths: list[str]) -> str:
-    if not paths:
-        raise ValueError("expected at least one dependency path")
-    if len(paths) == 1:
-        return paths[0]
-
-    split = [path.strip("/").split("/") for path in paths]
-    shared = split[0]
-    for segments in split[1:]:
-        limit = min(len(shared), len(segments))
-        idx = 0
-        while idx < limit and shared[idx] == segments[idx]:
-            idx += 1
-        shared = shared[:idx]
-        if not shared:
-            break
-
-    if not shared:
-        return "/"
-
-    return "/" + "/".join(shared)
-
-
 def with_library(
     library: Library,
     *,
@@ -193,35 +170,11 @@ def with_library(
             public_key_b64=public_key_b64,
         )
 
-    multi_route_ctor = getattr(tc.KernelHandle, "local_with_dependency_routes", None)
-    if callable(multi_route_ctor) and len(routes) > 1:
-        try:
-            return multi_route_ctor(routes, **call_kwargs)
-        except TypeError:
-            return multi_route_ctor(dependency_routes=routes, **call_kwargs)
-
-    route_root, route_authority = routes[0]
-    if len(routes) > 1:
-        authorities = {authority for _, authority in routes}
-        if len(authorities) != 1:
-            raise ValueError(
-                "multiple dependency authorities require a backend with "
-                "`KernelHandle.local_with_dependency_routes` support"
-            )
-
-        route_root = _shared_path_prefix([path for path, _ in routes])
-        route_authority = next(iter(authorities))
-
-    local_with_route = getattr(tc.KernelHandle, "local_with_dependency_route", None)
-    if callable(local_with_route):
-        return local_with_route(
-            route_root,
-            route_authority,
-            **call_kwargs,
-        )
+    local_with_routes = getattr(tc.KernelHandle, "local_with_dependency_routes", None)
+    if callable(local_with_routes):
+        return local_with_routes(routes, **call_kwargs)
 
     raise RuntimeError(
         "tinychain-local backend does not support dependency route configuration; "
-        "expected `KernelHandle.local_with_dependency_route` or "
-        "`KernelHandle.local_with_dependency_routes`"
+        "expected `KernelHandle.local_with_dependency_routes`"
     )

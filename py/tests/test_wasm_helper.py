@@ -56,9 +56,9 @@ def test_wasm_install_accepts_single_token_object(tmp_path, monkeypatch):
         bearer_token="token",
     )
 
-    response = tc.wasm.install(
+    response = tc.install(
         {"id": "/lib/example-devco/example/0.1.0", "version": "0.1.0", "dependencies": []},
-        wasm_path,
+        wasm=wasm_path,
         data_dir=tmp_path,
         token=token,
     )
