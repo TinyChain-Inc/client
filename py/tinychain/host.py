@@ -4,18 +4,27 @@ from __future__ import annotations
 
 import json
 from typing import Iterable, Optional
+from urllib.parse import urlencode
 
 import requests
 
+from ._install import token_bearer
 from .opref import OpRef
 from .ref import Ref
+from .codec import decode_payload
 from .uri import URI, uri
 
 
 class Host:
     """A TinyChain HTTP host."""
 
-    def __init__(self, address: str):
+    def __init__(
+        self,
+        address: str,
+        *,
+        token: object | None = None,
+        bearer_token: Optional[str] = None,
+    ):
         if "://" not in address:
             raise ValueError(f"host address missing protocol: {address}")
         self.__uri__ = URI.parse(address)
@@ -23,6 +32,7 @@ class Host:
             raise ValueError(
                 f"Host address should not include a path: {self.__uri__.path}"
             )
+        self._bearer_token = token_bearer(token, bearer_token)
 
     def __repr__(self) -> str:
         return f"host at {self.__uri__}"
@@ -51,7 +61,7 @@ class Host:
         *,
         bearer_token: Optional[str] = None,
     ) -> object:
-        if isinstance(opref, Ref):
+        if hasattr(opref, "op"):
             opref = opref.op
         if not isinstance(opref, OpRef):
             raise TypeError(f"expected OpRef, got {type(opref).__name__}")
@@ -60,8 +70,15 @@ class Host:
             opref.path,
             body=opref.body,
             headers=opref.headers,
-            bearer_token=bearer_token,
+            bearer_token=bearer_token or self._bearer_token,
         )
+
+    def url(self, target: object, route: str | None = None, **query: object) -> str:
+        path = self.link(uri(target, *([route] if route else []))).absolute()
+        if not query:
+            return path
+        encoded = urlencode(_url_query(query), doseq=True)
+        return f"{path}?{encoded}"
 
     def request(
         self,
@@ -74,7 +91,7 @@ class Host:
     ) -> object:
         target = self.link(path)
         payload = None if body is None else _encode_body(body)
-        merged_headers = _merge_headers(headers, bearer_token, payload is not None)
+        merged_headers = _merge_headers(headers, bearer_token or self._bearer_token, payload is not None)
         response = requests.request(
             method.upper(),
             target.absolute(),
@@ -94,6 +111,25 @@ def _encode_body(value: object) -> bytes:
     if isinstance(value, (bytes, bytearray)):
         return bytes(value)
     return json.dumps(_encode_payload(value), separators=(",", ":")).encode("utf-8")
+
+
+def _url_query(query: dict[str, object]) -> dict[str, object]:
+    if len(query) == 1 and "key" in query:
+        return {"key": _url_value(query["key"])}
+    return {
+        "key": json.dumps(
+            {key: _encode_payload(value) for key, value in query.items()},
+            separators=(",", ":"),
+        )
+    }
+
+
+def _url_value(value: object) -> object:
+    if isinstance(value, URI):
+        return value.absolute()
+    if isinstance(value, (list, tuple)):
+        return [_url_value(item) for item in value]
+    return value
 
 
 def _merge_headers(
@@ -122,20 +158,5 @@ def _handle_response(response: requests.Response) -> object:
     except ValueError as exc:
         raise RuntimeError(f"invalid JSON response: {response.text}") from exc
     if status == 200:
-        return _unwrap_state(payload)
+        return decode_payload(payload)
     raise RuntimeError(f"unexpected HTTP {status}: {payload}")
-
-
-def _unwrap_state(payload: object) -> object:
-    scalar_prefix = uri("state", "scalar", "value").path + "/"
-    if isinstance(payload, dict) and len(payload) == 1:
-        (key, value), = payload.items()
-        if isinstance(key, str) and key.startswith(scalar_prefix):
-            return _unwrap_state(value)
-        if key == uri("state", "scalar", "map").path and isinstance(value, dict):
-            return {k: _unwrap_state(v) for k, v in value.items()}
-    if isinstance(payload, dict):
-        return {k: _unwrap_state(v) for k, v in payload.items()}
-    if isinstance(payload, list):
-        return [_unwrap_state(item) for item in payload]
-    return payload

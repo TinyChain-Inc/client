@@ -16,7 +16,3 @@ class Ref(Generic[T]):
     def eq(self, other: object):
         from .state import autobox
         return autobox(self).eq(other)
-
-
-class String(Ref[str]):
-    pass

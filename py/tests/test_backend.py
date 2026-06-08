@@ -1,6 +1,7 @@
 import json
 
 import tinychain as tc
+import tinychain.testing as tc_testing
 
 from .support import rjwt_install_token
 
@@ -31,7 +32,7 @@ def test_kernel_handle_installs_library_via_rust_handlers():
     get_request = tc.KernelRequest("GET", tc.uri("lib", "hello").path, None, None)
     response = kernel.dispatch(get_request)
     assert response.status == 200
-    assert tc.testing.decode_json_body(response)["version"] == "0.1.0"
+    assert tc_testing.decode_json_body(response)["version"] == "0.1.0"
 
     updated_schema = json.dumps(
         {"id": f"{tc.uri('lib', 'hello').path}", "version": "0.2.0", "dependencies": []}
@@ -47,7 +48,7 @@ def test_kernel_handle_installs_library_via_rust_handlers():
         tc.KernelRequest("GET", tc.uri("lib", "hello").path, None, None)
     )
     assert response_after.status == 200
-    assert tc.testing.decode_json_body(response_after)["version"] == "0.2.0"
+    assert tc_testing.decode_json_body(response_after)["version"] == "0.2.0"
 
 
 def test_kernel_handle_rejects_unauthorized_library_install():

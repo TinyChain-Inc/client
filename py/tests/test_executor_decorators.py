@@ -32,14 +32,9 @@ class _Response:
 class _Kernel:
     def __init__(self):
         self.dispatched: list[tuple[str, str, object, object | None]] = []
-        self.resolved: list[tuple[str, str, object | None, str | None]] = []
 
     def dispatch(self, request):
         self.dispatched.append((request.method, request.path, request.headers, request.body))
-        return _Response("ok")
-
-    def resolve_get(self, path: str, body=None, bearer_token=None):
-        self.resolved.append(("GET", path, body, bearer_token))
         return _Response("ok")
 
 
@@ -69,71 +64,67 @@ def test_stub_route_dispatch(monkeypatch):
 
     class A(tc.Library):
         publisher = "example-devco"
-        name = "a"
         version = "0.1.0"
 
-        @tc.define.get
+        @tc.get
         def hello(self):
             ...
 
     a = A()
 
-    op = a.hello()
-    assert isinstance(op, tc.OpRef)
-    assert op.method == "GET"
-    expected = tc.uri(a, "hello").path
-    assert op.path == expected
+    with tc.backend(mode="deferred"):
+        op = a.hello()
+        assert isinstance(op, tc.OpRef)
+        assert op.method == "GET"
+        expected = tc.uri(a, "hello").path
+        assert op.path == expected
 
     with tc.backend(kernel):
-        assert tc.execute(a.hello()) == "ok"
-
-    assert kernel.resolved == []
+        assert a.hello() == "ok"
     assert len(kernel.dispatched) == 1
     method, path, _headers, _body = kernel.dispatched[0]
     assert (method, path) == ("GET", expected)
 
 
-def test_stub_route_resolve(monkeypatch):
+def test_stub_route_dispatch_forwards_bearer(monkeypatch):
     monkeypatch.setattr(tc, "KernelRequest", _Request)
 
     kernel = _Kernel()
 
     class B(tc.Library):
         publisher = "example-devco"
-        name = "b"
         version = "0.1.0"
 
-        @tc.define.get
+        @tc.get
         def hello(self):
             ...
 
     b = B()
 
     with tc.backend(kernel, bearer_token="t"):
-        assert tc.execute(b.hello()) == "ok"
+        assert b.hello() == "ok"
 
     expected = tc.uri(b, "hello").path
-    assert kernel.resolved == []
     assert len(kernel.dispatched) == 1
     method, path, headers, _body = kernel.dispatched[0]
     assert (method, path) == ("GET", expected)
     assert ("authorization", "Bearer t") in list(headers)
 
 
-def test_stub_route_uses_v1_style_return_type(monkeypatch):
+def test_stub_route_uses_annotated_return_type(monkeypatch):
     monkeypatch.setattr(tc, "KernelRequest", _Request)
 
     class C(tc.Library):
         publisher = "example-devco"
-        name = "c"
         version = "0.1.0"
 
-        @tc.define.get
+        @tc.get
         def hello(self) -> tc.String:
             ...
 
     c = C()
-    ref = c.hello()
+    with tc.backend(mode="deferred"):
+        ref = c.hello()
     assert isinstance(ref, tc.String)
     assert isinstance(ref.op, tc.OpRef)
 
@@ -145,22 +136,20 @@ def test_stub_route_accepts_body_and_dispatches(monkeypatch):
 
     class D(tc.Library):
         publisher = "example-devco"
-        name = "d"
         version = "0.1.0"
 
-        @tc.define.get
+        @tc.get
         def hello(self) -> tc.String:
             ...
 
     d = D()
-    ref = d.hello("World")
+    with tc.backend(mode="deferred"):
+        ref = d.hello("World")
     assert isinstance(ref, tc.String)
     assert ref.op.body == "World"
 
     with tc.backend(kernel):
-        assert tc.execute(d.hello("World")) == "ok"
-
-    assert kernel.resolved == []
+        assert d.hello("World") == "ok"
     expected = tc.uri(d, "hello").path
     assert len(kernel.dispatched) == 1
     method, path, _headers, body = kernel.dispatched[0]
@@ -168,17 +157,16 @@ def test_stub_route_accepts_body_and_dispatches(monkeypatch):
     assert body is not None
 
 
-def test_backend_auto_executes_stub_calls_by_default(monkeypatch):
+def test_backend_eager_mode_executes_stub_calls_by_default(monkeypatch):
     monkeypatch.setattr(tc, "KernelRequest", _Request)
 
     kernel = _Kernel()
 
     class E(tc.Library):
         publisher = "example-devco"
-        name = "e"
         version = "0.1.0"
 
-        @tc.define.get
+        @tc.get
         def hello(self) -> tc.String:
             ...
 
@@ -187,7 +175,6 @@ def test_backend_auto_executes_stub_calls_by_default(monkeypatch):
         assert e.hello() == "ok"
 
     expected = tc.uri(e, "hello").path
-    assert kernel.resolved == []
     assert len(kernel.dispatched) == 1
     method, path, headers, _body = kernel.dispatched[0]
     assert (method, path) == ("GET", expected)
@@ -201,10 +188,9 @@ def test_backend_mode_deferred_returns_plan(monkeypatch):
 
     class F(tc.Library):
         publisher = "example-devco"
-        name = "f"
         version = "0.1.0"
 
-        @tc.define.get
+        @tc.get
         def hello(self) -> tc.String:
             ...
 
@@ -215,7 +201,6 @@ def test_backend_mode_deferred_returns_plan(monkeypatch):
         assert tc.execute(deferred) == "ok"
 
     expected = tc.uri(f, "hello").path
-    assert kernel.resolved == []
     assert len(kernel.dispatched) == 1
     method, path, _headers, _body = kernel.dispatched[0]
     assert (method, path) == ("GET", expected)
@@ -228,15 +213,14 @@ def test_backend_mode_can_be_switched_by_nested_backend_context(monkeypatch):
 
     class G(tc.Library):
         publisher = "example-devco"
-        name = "g"
         version = "0.1.0"
 
-        @tc.define.get
+        @tc.get
         def hello(self) -> tc.String:
             ...
 
     g = G()
-    with tc.backend(kernel, bearer_token="token-auto", mode="eager"):
+    with tc.backend(kernel, bearer_token="token-auto"):
         eager = g.hello()
         assert eager == "ok"
 
@@ -249,7 +233,6 @@ def test_backend_mode_can_be_switched_by_nested_backend_context(monkeypatch):
         assert eager_again == "ok"
 
     expected = tc.uri(g, "hello").path
-    assert kernel.resolved == []
     assert len(kernel.dispatched) == 3
     for method, path, headers, _body in kernel.dispatched:
         assert (method, path) == ("GET", expected)
@@ -262,10 +245,9 @@ def test_backend_mode_deferred_remains_deferred_when_nested(monkeypatch):
 
     class H(tc.Library):
         publisher = "example-devco"
-        name = "h"
         version = "0.1.0"
 
-        @tc.define.get
+        @tc.get
         def hello(self) -> tc.String:
             ...
 
@@ -292,20 +274,18 @@ def test_backend_mode_deferred_preserves_cross_library_dependency_paths(monkeypa
 
     class Local(tc.Library):
         publisher = "example-devco"
-        name = "local"
         version = "0.1.0"
 
-        @tc.define.get
+        @tc.get
         def hello(self) -> tc.String:
             ...
 
     class Remote(tc.Library):
         publisher = "example-devco"
-        name = "remote"
         version = "0.1.0"
         authority = tc.URI.parse("https://api.example.test")
 
-        @tc.define.get
+        @tc.get
         def ping(self, name: str) -> tc.String:
             ...
 
@@ -314,7 +294,6 @@ def test_backend_mode_deferred_preserves_cross_library_dependency_paths(monkeypa
 
     with tc.backend(
         kernel=kernel,
-        remotes={"https://api.example.test": remote},
         bearer_token="token-123",
         mode="deferred",
     ):
@@ -331,101 +310,20 @@ def test_backend_mode_deferred_preserves_cross_library_dependency_paths(monkeypa
     assert any(path.startswith("https://api.example.test/") for _, path, _, _ in remote.calls)
 
 
-def test_backend_routes_remote_by_path_prefix(monkeypatch):
-    monkeypatch.setattr(tc, "KernelRequest", _Request)
-
-    kernel = _Kernel()
+def test_backend_routes_authority_qualified_paths(monkeypatch):
     remote = _Remote()
-
-    class Local(tc.Library):
-        publisher = "example-devco"
-        name = "local"
-        version = "0.1.0"
-
-        @tc.define.get
-        def ping(self) -> tc.String:
-            ...
-
-    class Remote(tc.Library):
-        publisher = "example-devco"
-        name = "remote"
-        version = "0.1.0"
-
-        @tc.define.get
-        def ping(self, name: str) -> tc.String:
-            ...
-
-    local = Local()
-    remote_lib = Remote()
-    remote_prefix = tc.uri(remote_lib).path
-    remote_path = tc.uri(remote_lib, "ping").path
-    local_path = tc.uri(local, "ping").path
-
-    with tc.backend(
-        kernel,
-        bearer_token="token-123",
-        remotes={remote_prefix: remote},
-    ):
-        assert remote_lib.ping("World") == {"remote": "ok"}
-        assert local.ping() == "ok"
-
-    assert remote.calls == [
-        (
-            "GET",
-            remote_path,
-            "World",
-            [],
-        )
-    ]
-    assert kernel.resolved == []
-    assert len(kernel.dispatched) == 1
-    method, path, headers, _body = kernel.dispatched[0]
-    assert (method, path) == ("GET", local_path)
-    assert ("authorization", "Bearer token-123") in list(headers)
-
-
-def test_backend_prefers_authority_remote_target(monkeypatch):
-    remote_primary = _Remote()
-    remote_fallback = _Remote()
-    monkeypatch.setattr(
-        tc_executor,
-        "_as_request_target",
-        lambda value: value if isinstance(value, _Remote) else remote_fallback,
-    )
+    monkeypatch.setattr(tc_executor, "_as_request_target", lambda _value: remote)
 
     op = tc.opref.get("https://api.example.test/lib/example-devco/remote/0.1.0/ping")
 
-    with tc.backend(
-        bearer_token="token-xyz",
-        remotes={
-            "https://api.example.test": remote_primary,
-        },
-    ):
+    with tc.backend(bearer_token="token-xyz"):
         assert tc.execute(op) == {"remote": "ok"}
 
-    assert remote_primary.calls == [
+    assert remote.calls == [
         (
             "GET",
             "https://api.example.test/lib/example-devco/remote/0.1.0/ping",
             None,
-            [],
-        )
-    ]
-    assert remote_fallback.calls == []
-
-
-def test_backend_remote_only_mode():
-    remote = _Remote()
-    op = tc.opref.post("/lib/example-devco/remote/0.1.0/ping", body={"name": "World"})
-
-    with tc.backend(remote=remote, bearer_token="token-xyz"):
-        assert tc.execute(op) == {"remote": "ok"}
-
-    assert remote.calls == [
-        (
-            "POST",
-            "/lib/example-devco/remote/0.1.0/ping",
-            {"name": "World"},
             [],
         )
     ]
@@ -442,68 +340,98 @@ def test_backend_requires_local_or_remote():
             assert "no local kernel configured and no remote route matched" in str(err)
 
 
-def test_execute_without_backend_requires_executor():
+def test_execute_path_only_without_backend_requires_default_local_host(monkeypatch):
+    monkeypatch.setattr(tc, "local", None, raising=False)
+    monkeypatch.setattr(tc, "KernelHandle", object(), raising=False)
+    op = tc.opref.get("/lib/example-devco/local/0.1.0/ping")
+
+    with pytest.raises(RuntimeError, match="no default local TinyChain host"):
+        tc.execute(op)
+
+
+def test_execute_rejects_already_resolved_values():
+    with pytest.raises(TypeError, match="expected OpRef or Ref"):
+        tc.execute("ok")
+
+
+def test_execute_without_backend_runs_authority_qualified_op(monkeypatch):
+    remote = _Remote()
+    monkeypatch.setattr(tc_executor, "_as_request_target", lambda _value: remote)
     op = tc.opref.post(
         "http://example.test/lib/example-devco/remote/0.1.0/ping",
         body={"name": "World"},
         headers=[("x-trace-id", "abc123")],
     )
 
-    with pytest.raises(RuntimeError, match="no active TinyChain executor"):
-        tc.execute(op)
+    assert tc.execute(op) == {"remote": "ok"}
+    assert remote.calls == [
+        (
+            "POST",
+            "http://example.test/lib/example-devco/remote/0.1.0/ping",
+            {"name": "World"},
+            [("x-trace-id", "abc123")],
+        )
+    ]
 
 
 def test_stub_route_emits_authority_qualified_path():
     class Remote(tc.Library):
         publisher = "example-devco"
-        name = "remote"
         version = "0.1.0"
         authority = tc.URI.parse("https://api.example.test:443")
 
-        @tc.define.get
+        @tc.get
         def ping(self) -> tc.String:
             ...
 
     remote = Remote()
-    ref = remote.ping()
+    with tc.backend(mode="deferred"):
+        ref = remote.ping()
     assert isinstance(ref, tc.String)
     assert ref.op.path == "https://api.example.test:443/lib/example-devco/remote/0.1.0/ping"
 
 
-def test_execute_without_backend_rejects_authority_qualified_stub():
+def test_execute_without_backend_runs_authority_qualified_stub(monkeypatch):
+    remote_target = _Remote()
+    monkeypatch.setattr(tc_executor, "_as_request_target", lambda _value: remote_target)
+
     class Remote(tc.Library):
         publisher = "example-devco"
-        name = "remote"
         version = "0.1.0"
         authority = tc.URI.parse("https://api.example.test")
 
-        @tc.define.get
+        @tc.get
         def ping(self, name: str) -> tc.String:
             ...
 
     remote = Remote()
-    with pytest.raises(RuntimeError, match="no active TinyChain executor"):
-        tc.execute(remote.ping("World"))
+    assert remote.ping("World") == {"remote": "ok"}
+    assert remote_target.calls == [
+        (
+            "GET",
+            "https://api.example.test/lib/example-devco/remote/0.1.0/ping",
+            "World",
+            [],
+        )
+    ]
 
 
-def test_backend_remote_op_header_overrides_forwarded_bearer_token():
+def test_backend_authority_op_header_overrides_forwarded_bearer_token(monkeypatch):
     remote = _Remote()
+    monkeypatch.setattr(tc_executor, "_as_request_target", lambda _value: remote)
     op = tc.opref.post(
-        "/lib/example-devco/remote/0.1.0/ping",
+        "https://api.example.test/lib/example-devco/remote/0.1.0/ping",
         body={"name": "World"},
         headers=[("authorization", "Bearer op-token")],
     )
 
-    with tc.backend(
-        remote=remote,
-        bearer_token="token-xyz",
-    ):
+    with tc.backend(bearer_token="token-xyz"):
         assert tc.execute(op) == {"remote": "ok"}
 
     assert remote.calls == [
         (
             "POST",
-            "/lib/example-devco/remote/0.1.0/ping",
+            "https://api.example.test/lib/example-devco/remote/0.1.0/ping",
             {"name": "World"},
             [("authorization", "Bearer op-token")],
         )

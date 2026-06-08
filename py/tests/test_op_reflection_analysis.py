@@ -2,31 +2,26 @@ from __future__ import annotations
 
 import pathlib
 
-import pytest
 import tinychain as tc
+import tinychain.testing as tc_testing
 
 from .support import rjwt_install_token, require_cargo
 
 
 def test_op_reflection_analysis(tmp_path: pathlib.Path) -> None:
-    pytest.skip(
-        "temporarily disabled: local backend op-reflection flow can hang; run with an external timeout harness"
-    )
     require_cargo()
 
     def _run():
-        class A(tc.define.Library):
+        class A(tc.Library):
             publisher = "example-devco"
-            name = "a"
             version = "0.1.0"
 
             @tc.get
             def leaf(self, key: tc.String) -> tc.String:
                 return key
 
-        class B(tc.define.Library):
+        class B(tc.Library):
             publisher = "example-devco"
-            name = "b"
             version = "0.1.0"
 
             _a: A = A()
@@ -42,9 +37,8 @@ def test_op_reflection_analysis(tmp_path: pathlib.Path) -> None:
                     out = "w"
                 return out
 
-        class C(tc.define.Library):
+        class C(tc.Library):
             publisher = "example-devco"
-            name = "c"
             version = "0.1.0"
 
             @tc.post
@@ -134,7 +128,7 @@ def test_op_reflection_analysis(tmp_path: pathlib.Path) -> None:
         )
 
         for library in (A, B, C):
-            resp = tc.define.install(
+            resp = tc.install(
                 library,
                 kernel=kernel,
                 data_dir=tmp_path,
@@ -143,11 +137,11 @@ def test_op_reflection_analysis(tmp_path: pathlib.Path) -> None:
             assert resp.status == 204
 
         with tc.backend(kernel):
-            depth_leaf = tc.testing.run_with_timeout(20, lambda: tc.execute(c.cyclotomic_depth(a.leaf)))
+            depth_leaf = tc_testing.run_with_timeout(20, lambda: c.cyclotomic_depth(a.leaf))
             assert depth_leaf["max"] == 1
-            depth_branch = tc.testing.run_with_timeout(20, lambda: tc.execute(c.cyclotomic_depth(b.branch)))
+            depth_branch = tc_testing.run_with_timeout(20, lambda: c.cyclotomic_depth(b.branch))
             assert depth_branch["max"] == 2
-            nested = tc.testing.run_with_timeout(20, lambda: tc.execute(c.nested_if_count([0, 1, 0, 0])))
+            nested = tc_testing.run_with_timeout(20, lambda: c.nested_if_count([0, 1, 0, 0]))
             assert nested["count"] == 3
 
-    tc.testing.run_with_timeout(45, _run)
+    tc_testing.run_with_timeout(45, _run)

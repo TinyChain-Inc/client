@@ -42,7 +42,6 @@ class _Kernel:
 
 class Echo(tc.Library):
     publisher = "example-devco"
-    name = "echo"
     version = "0.1.0"
 
     @tc.get
@@ -54,7 +53,7 @@ def main() -> int:
     kernel = _Kernel()
     echo = Echo()
 
-    with tc.backend(kernel, mode="eager"):
+    with tc.backend(kernel):
         eager_value = echo.hello()
         print("eager:", eager_value)  # "hello"
 
@@ -62,7 +61,7 @@ def main() -> int:
         plan = echo.hello()
         print("deferred plan type:", type(plan).__name__)
 
-    with tc.backend(kernel, mode="eager"):
+    with tc.backend(kernel):
         resolved = tc.execute(plan)
     print("resolved:", resolved)  # "hello"
 

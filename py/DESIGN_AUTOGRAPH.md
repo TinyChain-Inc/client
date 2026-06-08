@@ -23,7 +23,7 @@ single, transport-agnostic code path.
    - Parse the function body to an AST.
    - Rewrite local assignments/reads into context bindings.
    - Emit a new function which, when executed, populates a fresh `Context` and returns the result.
-4. Compile the rewritten function using the existing `tc.define` opdef compiler.
+4. Compile the rewritten function using the unified `tc.Library` opdef compiler.
 
 ## Design notes (lessons from v1 reflection)
 
@@ -236,7 +236,7 @@ state = tc.state.while_loop(cond_opdef, step_opdef, init_state)
 ### Return
 
 - `return expr` remains a plain `return` after binding rewrite.
-- The existing `tc.define` compiler wraps a non-`ContextResult` return value using the
+- The unified `tc.Library` compiler wraps a non-`ContextResult` return value using the
   current scoped context form (equivalent to `tc.state.context().result(expr)`), so
   the OpDef captures both the bound form and a final `result`.
 
@@ -286,7 +286,7 @@ All errors should be deterministic and descriptive:
 
 ## Integration points
 
-- `client/py/tinychain/define.py::_compile_opdef_route`:
+- `client/py/tinychain/library.py::_compile_opdef_route`:
   - Detect explicit `cxt/ctx/txn`.
   - If absent, call `autograph.transform(form)` to produce a compiled callable.
   - Execute the transformed callable inside `scoped_context()` and compile as today.

@@ -39,18 +39,16 @@ Python surface.
 
 ### Implicit URI construction
 
-Following the reference v1 Python client, the refreshed client
-derives URIs implicitly from structured inputs instead of asking users to concatenate
-strings. Helpers such as `client.service(...)`, `client.library(...)`, the Autograph
-decorators, and the `tc.uri.*` utilities accept `(publisher, namespace, name, version)` (plus
+The Python client derives URIs implicitly from structured inputs instead of asking users to concatenate
+strings. Helpers such as `tc.Library`, route decorators, and the `tc.uri.*`
+utilities accept structured publisher/version metadata and optional subpaths, then
 optional subpaths) and emit canonical URIs. Never hard-code strings like
 `"/service/foo/bar/1.0"`—even in tests or documentation. The builder enforces:
 
-- **Namespace + version required.** Missing publisher namespaces or semantic versions are a
+- **Publisher + version required.** Missing publisher IDs or semantic versions are a
   programmer error; the helper raises early so manifests stay deterministic.
 - **Path normalization.** Mixed separators, repeated slashes, or `.`/`..` segments are
-  rejected before requests are issued, mirroring the `service_uri` helpers in the legacy
-  client.
+  rejected before requests are issued.
 - **Prefix safety.** The builder prepends `/service`, `/lib`, `/class`, etc., so callers
   cannot accidentally escape the canonical directories—even when composing URIs dynamically.
 
@@ -65,32 +63,6 @@ This keeps the URI scheme consistent across adapters and prevents bespoke routin
 you add a helper that touches remote state, ensure it calls into the same URI constructors
 so future publishers inherit the validation for free.
 
-## Framework gaps vs parity gaps
-
-When evaluating gaps, separate framework capability from v1 parity and from
-package-level contract helpers:
-
-- **Framework gap (version-agnostic):** missing behavior in `tinychain` transport/execution
-  surfaces that should be framework-native across packages.
-- **Parity gap (v1→v2 specific):** behavior in `tinychain` transport/execution
-  surfaces (for example `Host`/executor auth-header flow, request envelope handling, or
-  response/error envelope normalization) where v1 already provides that behavior.
-- **Does not count as parity by itself:** route-specific request-body fields required by one
-  package's API contract. Keep those in the package unless multiple independent libraries
-  require the same abstraction.
-- **Usually package-local:** key/token conversion utilities used to adapt one protocol.
-  Promote into `tinychain` only when they are broadly reusable across publishers and
-  both HTTP and PyO3 execution paths.
-
-Before filing a framework or parity issue, include:
-
-- The missing primitive in this repo under `client/py/tinychain`.
-- If parity is claimed, the matching v1 implementation under
-  `~/Documents/tinychain/client/py/tinychain`.
-
-If framework APIs already cover the behavior, treat the remaining work as package
-integration and remove package-local transport shims instead of duplicating stacks.
-
 ## Mixed backend execution context
 
 Use one `with tc.backend(...):` block to run mixed local + remote calls:
@@ -99,12 +71,73 @@ Use one `with tc.backend(...):` block to run mixed local + remote calls:
 - authority-qualified library links (`library.link()`) drive dependency routing.
 - `tc.kernel.with_library(local_library, data_dir=...)` derives egress routes from declared dependency authorities.
 - route method calls auto-execute inside the active backend.
-- `tc.execute(op)` requires an active backend context (`with tc.backend(...):`).
+- `tc.execute(op)` is available for explicit plan execution; ordinary application
+  code should prefer route method calls.
 - route stubs emit authority-qualified paths automatically when a `Library`
   instance is configured with `authority=tc.URI.parse("...")`.
 
 This keeps method definitions transport-agnostic while giving explicit per-context
 execution control for local + remote calls in the same flow.
+
+## 60-second Greeter demo shape
+
+The ordinary demo path should stay host-generic: define a `Library`, call it
+locally, install it on any authorized remote host, then open a browser-callable
+route URL. A testnet host is just a host URL; no `tc.testnet` API is required.
+
+```python
+import tinychain as tc
+
+class Greeter(tc.Library):
+    publisher = "demo"
+    version = "0.1.0"
+
+    @tc.get
+    def hello(self, name: str) -> tc.String:
+        return tc.String("Hello, {{name}}!").render(name=name)
+
+greeter = Greeter()
+host = tc.Host("https://host.example", token=install_token)
+
+tc.install(greeter, remote=host)
+print(host.url(greeter, "hello", name="Ada"))
+```
+
+The token can be pre-generated for a short video, or minted from key material
+with `tc.auth.mint_rjwt_token(..., ttl_secs=3)`. The install helper sends the
+same canonical `/lib` payload used by local installs, and the URL helper builds
+the canonical `/lib/{publisher}/{library}/{version}/{route}` path with standard
+query encoding.
+
+### Route Type Hints
+
+Route signatures may use ordinary Python primitives for readability, but the
+framework normalizes bound route stubs to TinyChain runtime value types. This
+keeps deferred plans useful in IDEs and generated documentation.
+
+```python
+class Greeter(tc.Library):
+    publisher = "demo"
+    version = "0.1.0"
+
+    @tc.get
+    def hello(self, name: str) -> str:
+        return tc.String("Hello, {{name}}!").render(name=name)
+
+with tc.backend(mode="deferred"):
+    plan = Greeter().hello("Ada")  # plan is a tc.String
+```
+
+The runtime type rules are:
+
+- `str` normalizes to `tc.String`.
+- numeric and boolean primitives normalize to `tc.state.Value`.
+- mixed unions normalize to their greatest common TinyChain value ancestor.
+- explicit `tc.Ref` remains `tc.Ref` for op/reflection routes.
+
+`tc.String` is the value-module `String(Value)` type. It is the only value type
+with `render(...)`; use it for string templating instead of custom payload logic
+or placeholder `Ref[str]` wrappers.
 
 ### Executor auth and routing contract
 
@@ -115,10 +148,10 @@ execution control for local + remote calls in the same flow.
 
 Remote target selection follows one routing contract:
 
-1. Authority-qualified `OpRef` paths (`https://...`) match authority entries in
-   `remotes` first; otherwise they dispatch to that authority directly.
-2. Canonical paths (`/lib/...`) match the longest-prefix entry in `remotes`.
-3. If no match exists, fallback `remote=` handles the request.
+1. Authority-qualified `OpRef` paths (`https://...`) dispatch to that authority.
+2. Path-only canonical routes (`/lib/...`) use the active/default local host.
+3. Cross-host dependency routing is declared on the library manifest and enforced
+   by the local kernel; callers do not pass ad hoc remote routing tables.
 
 See `py/examples/mixed_backend_modes.py`
 for a complete framework-native demonstration (no custom request/response wrappers) of:
@@ -131,7 +164,7 @@ The mixed-backend example also demonstrates minimal-scope signed auth in the
 same script:
 
 1. mint an install token with claim scope limited to local `/lib/.../a/...`,
-2. install local WASM with `tc.wasm.install(...)`, then
+2. install local WASM with `tc.install(library, wasm=...)`, then
 3. execute local+remote calls with
    `tc.kernel.with_library(...)`.
 
@@ -160,13 +193,12 @@ def evaluate(self, request: tc.Ref) -> tc.Ref:
 
 ### Response typing contract
 
-`tc.execute(...)` decodes canonical TinyChain state envelopes into typed Python values:
+Route calls, `tc.Host.execute(...)`, and `tc.execute(...)` decode canonical
+TinyChain state envelopes into typed Python values:
 
 - self-describing scalar values (`"hello"`, `7`, `true`, `null`) -> Python primitives
-- legacy tagged scalar values (`/state/scalar/value/*`) -> same Python primitives (accepted for compatibility)
 - self-describing state maps/objects (`{"k": ...}`) -> `dict`
 - self-describing state tuples/arrays (`[...]`) -> `list`/`tuple` as appropriate
-- legacy tagged `/state/scalar/map` and `/state/scalar/tuple` payloads are still accepted for compatibility
 - `/state/collection/tensor` -> `tc.Tensor` (when local backend types are available)
 - `/state/scalar/op/*` -> `tc.state.OpDef` (decoded transparently)
 
@@ -204,66 +236,45 @@ cargo build --manifest-path tc-wasm/Cargo.toml --example opref_to_remote --targe
 Optional: pass `--secret-key-b64 <base64-ed25519-secret>` to pin key material
 instead of using an ephemeral keypair.
 
-### Example: local WASM → remote OpRef via PyO3 (single file)
+### Example: local WASM -> remote dependency via PyO3
 
-`py/examples/library_integration_example.py` is a single-file integration example which demonstrates:
+`py/examples/mixed_backend_modes.py` is the canonical end-to-end example. It demonstrates:
 
-1. Installing a local WASM library `A` (under `/lib/example-devco/a/0.1.0`) into a local `data_dir`.
-2. Calling `A` in-process via the `tinychain-local` PyO3 backend.
-3. Having `A` return an `OpRef` (as JSON) pointing at a remote `/lib/...` dependency `B`, which the
-   kernel resolves via HTTP RPC under the standard dependency whitelist + route mapping.
+1. defining route stubs with `tc.Library` and `@tc.get`,
+2. binding a remote dependency by authority,
+3. minting minimal-scope install/runtime tokens,
+4. installing a local WASM implementation with `tc.install(a, wasm=...)`,
+5. executing ordinary route method calls through one `tc.backend(...)` context, and
+6. switching to `mode="deferred"` only when an explicit plan is needed.
 
-The remote dependency `B` is expressed as a canonical path plus an optional `authority` (`tc.URI`). The canonical
-path is what gets serialized into schemas and `OpRef`s; the authority is deployment configuration which the kernel
-uses to route authorized egress.
-
-The Python `Library` stubs use v1-style decorators (`@tc.get`, etc.) and execute under an explicit executor context:
+The key runtime shape is:
 
 ```python
-with tc.backend(kernel, bearer_token="..."):
-    # route calls auto-execute by default:
-    assert a.from_b("World") == "Hello, World!"
+kernel = tc.kernel.with_library(a, data_dir=data_dir, token=runtime_token)
+tc.install(a, wasm=wasm_path, kernel=kernel, token=install_token)
+
+with tc.backend(kernel, bearer_token=runtime_token.bearer_token):
     assert b.hello("World") == "Hello, World!"
+    assert a.from_b("World") == "Hello, World!"
 ```
 
-Outside an executor context, calling a decorated stub returns a typed `tc.Ref[...]` value (e.g. `tc.String`) which can be passed around and executed later. Inside an executor context, set `mode="deferred"` if you want explicit deferred control.
-
-The example assumes the WASM artifact exists. From the TinyChain runtime repo root, build it with:
+Build the Rust host and WASM example first:
 
 ```bash
+cargo build --manifest-path tc-server/Cargo.toml --example http_rpc_native_host --example rjwt_install_token
 cargo build --manifest-path tc-wasm/Cargo.toml --example opref_to_remote --target wasm32-unknown-unknown --release
 ```
 
-If you want the script to spawn the remote host automatically, from the runtime repo root build the Rust host example binary first:
+Then run:
 
 ```bash
-cargo build --manifest-path tc-server/Cargo.toml --example http_rpc_native_host
-```
-
-WASM installs require authorization. The example mints scoped signed tokens with
-`tc.auth.mint_rjwt_token(...)` and reuses the same key material for install +
-runtime calls.
-
-If you need to mint tokens manually, use the Rust example:
-
-```bash
-cargo run --example rjwt_install_token -- \
-  --host http://127.0.0.1:8702 \
-  --actor example-admin \
-  --lib /lib/example-devco/a/0.1.0 \
-  --lib /lib/example-devco/example/0.1.0
-```
-
-Or run the helper script to mint a token and execute the Python integration flow:
-
-```bash
-scripts/run_python_integration_with_token.sh
+./.venv/bin/python client/py/examples/mixed_backend_modes.py
 ```
 
 ## WASM installer regression
 
 The `py/tests/test_install_wasm_script.py` test exercises the
-`py/bin/install_wasm.py` helper (which calls `tc.wasm.install`) against the
+`py/bin/install_wasm.py` helper (which calls `tc.install(..., wasm=...)`) against the
 PyO3 kernel. It installs the bundled example schema
 (from the runtime repo: `tc-server/examples/library_schema_example.json`) and a freshly built WASM module
 (from the runtime repo: `tc-wasm/examples/hello_wasm.rs` ⇒ `.../release/examples/hello_wasm.wasm`) into a
@@ -305,39 +316,20 @@ optional backend and then pass `data_dir=...` to `tc.KernelHandle`/`tc.Backend`,
 and registers every WASM library found under `<data-dir>/lib/<id>/<version>`.
 That means:
 
-1. Install the library once (either over HTTP `/lib` or via the
-   `py/bin/install_wasm.py` helper).
+1. Install the library once with `tc.install(...)` (or the `py/bin/install_wasm.py`
+   CLI wrapper).
 2. Point both the HTTP server and PyO3 kernel at the same `data_dir`.
-3. Invoke the routes from Python either through `tc.Backend` (direct
-   in-process calls) or over HTTP using any client—the kernel is the same in
-   both cases, so route discovery and manifest semantics stay aligned.
+3. Invoke routes from Python through `tc.backend(...)` and library route
+   methods. Low-level HTTP clients are useful for adapter diagnostics, but
+   application packages should not hand-build request payloads.
 
 There is no PyO3-specific registration step; the shared txfs layout is the single
 source of truth for both adapters. If a route resolves via HTTP, it will resolve
 in PyO3 as soon as the kernel loads the same directory tree.
 
-## Testing the temporary host-clock flow
-
-While the `/host/time` service is under construction, libraries that validate
-tokens can rely on the opt-in `clock::now_unverified` helper exposed by the host.
-To exercise it during development:
-
-1. Launch `tc-server` with `TC_ALLOW_UNVERIFIED_TIME=1` (or the equivalent CLI
-   flag) so the kernel exposes `clock::now_unverified` to WASM guests.
-2. Install your WASM library with `py/bin/install_wasm.py`.
-3. From Python, mint a short-lived token (seconds-scale expiry) via your test
-   harness, then invoke the library through either a minimal HTTP harness (e.g.
-   `requests`) or the in-process `tc.Backend`.
-4. Assert that the call succeeds before the token expires and fails after the
-   expiry window elapses. This mirrors the production contract and keeps drift
-   bounded while we finish `/host/time`.
-
-When the signed time service is ready, remove the flag and run the same tests
-against `clock::now_attested` to ensure your library handles both flows.
-
 ## Selecting the PyO3 backend
 
-This workspace ships a pure-Python `tinychain` package and an optional in-process PyO3 backend (`tinychain-local`). For HTTP-based tooling/tests, use a minimal harness (e.g. `requests`) until a dedicated v2 Python HTTP client is published. Transaction IDs are minted and validated server-side; a client may need to propagate `txn_id` between requests, but it must not mint or manage transaction lifecycles directly. To exercise the in-process backend (for health checks or bespoke harnesses), install `tinychain-local` and drive requests directly against the shared kernel:
+This workspace ships a pure-Python `tinychain` package and an optional in-process PyO3 backend (`tinychain-local`). Transaction IDs are minted and validated server-side; client code must not mint or manage transaction lifecycles directly. To exercise the in-process backend, install `tinychain-local` and drive requests directly against the shared kernel:
 
 ```python
 import tinychain as tc
@@ -352,15 +344,19 @@ helpers (`begin_txn`, `commit_txn`, etc.) are **not** exposed via PyO3; the
 kernel remains the only owner of transaction state. Always point both HTTP and
 PyO3 adapters at the **same `data_dir`** so they share the txfs state.
 
-## Deferred client-side `Library` definitions (v1-style)
+## Deferred client-side `Library` definitions
 
-For ergonomics and static tooling (type checking, IDE completion), TinyChain keeps a client-side
-deferred-execution model: calling a decorated method returns a typed reference node (not a runtime value).
+For ergonomics and static tooling (type checking, IDE completion), TinyChain
+infers execution mode from context. Reflection/definition code compiles
+decorated calls into typed reference nodes; imperative runtime code executes
+decorated calls eagerly unless a backend selects `mode="deferred"`.
 
-There are two distinct use cases:
+There is one public route surface:
 
-- `tc.Library` + `@tc.get` (stub): build an `OpRef` targeting an already-installed `/lib/...` route.
-- `tc.define.Library` + `@tc.define.get` (definition): define and compile a library interface in Python using v1-style type hints.
+- `tc.Library` + `@tc.get`/`@tc.post` define a canonical `/lib/...` route.
+- Reflection/install code compiles the route to IR.
+- Imperative runtime code calls the route eagerly.
+- `mode="deferred"` returns a typed plan when explicit planning is needed.
 
 Minimal example:
 
@@ -368,87 +364,87 @@ Minimal example:
 import tinychain as tc
 import pathlib
 
-class Echo(tc.define.Library):
+class Echo(tc.Library):
     publisher = "example-devco"
-    name = "echo"
     version = "0.1.0"
 
-    @tc.define.get
+    @tc.get
     def hello(self) -> tc.String:
         ...
 
 echo = Echo()
-ref = echo.hello()   # tc.String (deferred)
+with tc.backend(mode="deferred"):
+    ref = echo.hello()   # tc.String plan
 ```
 
-To install a Python-defined library into a local `data_dir`, compile it to a tiny IR manifest and submit it through `/lib` with an authorized bearer token:
+To install a Python-defined library into a local `data_dir`, submit it through
+the canonical install helper with an authorized token:
 
 ```python
-resp = tc.install(echo, kernel=kernel, data_dir=pathlib.Path("..."), bearer_token=token)
+resp = tc.install(echo, kernel=kernel, data_dir=pathlib.Path("..."), token=install_token)
+assert resp.status == 204
+```
+
+The same helper installs a WASM implementation of a `Library` manifest:
+
+```python
+resp = tc.install(echo, wasm=wasm_path, kernel=kernel, token=install_token)
 assert resp.status == 204
 ```
 
 Handlers that accept parameters (or return `tc.state.Scalar`/`tc.state.OpDef`) automatically compile to `OpDef` routes.
 No explicit flag is required on the decorators.
 
-Execution defaults to auto-run inside an executor/backend:
+Execution defaults to eager in imperative code:
 
 ```python
 with tc.backend(kernel):
     assert echo.hello() == "hello"
 ```
 
-For explicit deferred control at call-site scope (without per-method kwargs):
+For explicit deferred control at call-site scope (without per-method kwargs or
+custom `*_op` helpers):
 
 ```python
 with tc.backend(kernel, mode="deferred"):
     ref = echo.hello()
     assert isinstance(ref, tc.String)
-    assert tc.execute(ref) == "hello"
 ```
+
+Use `tc.execute(ref)` only when you intentionally want to execute a previously
+constructed plan outside the normal route-call flow.
 
 ### Canonical identity vs authority
 
-In v1, a `Library` or `Service` could be expressed either as:
+`Library` declarations use class-level manifest metadata plus class-derived
+names. Declare publisher and version on the class; do not pass a decorator or
+constructor `name` override. Route names come from method names.
 
-- a canonical path identity (no host), suitable for compilation and local installs, or
-- a full address including an authority, suitable for remote execution routing.
+```python
+class Echo(tc.Library):
+    publisher = "example-devco"
+    version = "0.1.0"
 
-The v2 Python client follows the same idea using a single `tc.URI` type, which always includes a canonical `path`
-and may also include an optional authority (`scheme`/`host`/`port`). Schemas and IR serialize only the canonical path.
+    @tc.get
+    def hello(self, name: str) -> tc.String:
+        ...
+```
+
+`Echo` maps to `/lib/example-devco/echo/0.1.0`; `hello` maps to
+`/lib/example-devco/echo/0.1.0/hello`. A path-only URI targets the local/default
+host. Passing `authority=tc.URI.parse("https://api.example.test")` keeps the same
+canonical path but routes eager runtime calls over HTTP(S).
+
+The Python client uses a single `tc.URI` type, which always includes a canonical
+`path` and may also include an optional authority (`scheme`/`host`/`port`). Schemas and IR serialize only the canonical path.
 Deployment configuration uses the authority to install dependency routes and enforce default-deny egress.
 
 ## Using `While` queues for long-running work
 
 Because the transaction owner enforces a **3-second** cap, long-running workflows must
-route through a queue service implemented as a TinyChain `While` loop. A future Python HTTP
-client may expose a simple `service(...).enqueue(...)` helper; executors are just TinyChain services
-whose public `While` loop pulls work and runs it outside the synchronous transaction.
-
-```python
-import requests
-import tinychain as tc
-
-base_url = "http://localhost:8702"
-trainer = tc.uri.service(
-    publisher="publisher",
-    namespace="ml",
-    name="trainer",
-    version="1.0.0",
-)
-job = requests.post(
-    f"{base_url}{trainer}/enqueue",
-    json={
-        "model": "resnet50",
-        "dataset": tc.uri.state(
-            namespace="media",
-            path=("images",),
-        ),
-        "epochs": 50,
-    },
-).json()
-print("queued training job", job["task_id"])
-```
+route through a queue service implemented as a TinyChain `While` loop. Expose the
+queue as an ordinary `/service/...` route and call that route through the
+framework; do not hold a synchronous request open while doing long-running work.
 
 Workers do **not** call `claim`/`ack`; the kernel’s begin/commit cycle inside the `While`
 loop handles leasing and failure recovery automatically. A queue is literally a single
@@ -462,77 +458,65 @@ Queue entries persist under ordinary TinyChain state (e.g.,
 path to that state so callers can poll status or fetch results later. Large artifacts live
 under `/state/media/...`; the queue row only stores the reference.
 
-## WebSocket helper (planned)
+## Execution snippets: deferred planning vs eager execution
 
-The Python client will gain an async WebSocket helper once the `tc-server` WebSocket adapter
-(`--features ws`) lands. The helper will reuse the same capability tokens and route structure
-as HTTP while providing streaming reads/writes for scenarios like live queue monitoring or
-media chunk delivery. Until then, all requests run over HTTP; the helper will automatically
-fall back to HTTP when the host does not advertise WebSocket support.
+Use these side-by-side examples when updating docs or answering contributor
+questions about the canonical eager/deferred client model.
 
-## Migration snippets: v1 deferred vs PyO3 eager
+**Read a collection element with a low-level host request**
 
-Use these side-by-side examples when updating docs or answering contributor questions about the new eager client. They keep v1’s request batching and graph semantics visible while demonstrating the PyO3 equivalents.
-
-**Read a collection element**
+Prefer library route calls in application packages. Use `Host.request` for
+adapter diagnostics or direct collection probes.
 
 ```python
-# v1 (deferred graph)
 import tinychain as tc
 
-client = tc.connect("http://localhost:8702")
-with tc.Transaction() as txn:
-    data = tc.Table(tc.uri.state(
-        namespace="demo",
-        path=("users",),
-    ))
-    txn.result = data["user:123"].name
-response = client.submit(txn)
-
-# v2 (HTTP eager; minimal harness)
-import requests
-
-base_url = "http://localhost:8702"
 table = tc.uri.state(
     namespace="demo",
     path=("users",),
 )
-entry = requests.get(f"{base_url}{table}/user:123").json()
+host = tc.Host("http://localhost:8702")
+entry = host.request("GET", tc.uri(table, "user:123"))
 name = entry["name"]
 ```
 
-**Batch arithmetic with reuse**
+**Switch route calls between eager and deferred mode**
 
 ```python
-# v1 (deferred graph; batching happens on submit)
 import tinychain as tc
 
-with tc.Transaction() as txn:
-    x = tc.Number(2)
-    y = tc.Number(3)
-    txn.sum = x + y
-    txn.double = txn.sum * 2
-cluster = tc.connect("http://localhost:8702")
-result = cluster.submit(txn)
+class Math(tc.Library):
+    publisher = "example-devco"
+    version = "0.1.0"
 
-# v2 (planned): a dedicated HTTP client may add batching ergonomics without exposing
-# explicit transaction lifecycle APIs; until then, use single-request HTTP calls.
+    @tc.get
+    def add(self, left: tc.Number, right: tc.Number) -> tc.Number:
+        ...
+
+math = Math(authority=tc.URI.parse("http://localhost:8702"))
+
+with tc.backend(mode="eager"):
+    value = math.add(2, 3)
+
+with tc.backend(mode="deferred"):
+    plan = math.add(2, 3)
+
+# Use framework route calls for ordinary eager execution; long-running or
+# multi-step workflows should be modeled as queue services.
 ```
 
-Batching helpers (when added) must not mint transaction IDs or expose transaction
-handles as a public API. The server still interprets every request, assigns
-`txn_id`, and decides when to commit/rollback based on the standard protocol
-cues.
-
-Carry forward the v1 ergonomics—graph-style reuse, batching by default, and predictable error envelopes—when expanding the eager client surface.
+Deferred mode returns the same TinyChain plan objects produced during reflection;
+eager mode executes route calls through the active backend or the authority on the
+library instance.
 
 ## Migration note: route-level `deferred` kwargs
 
 Framework execution mode is now controlled at call-site scope, not per route method.
 
 - Do not add `deferred=False` (or similar) kwargs to package route method signatures.
+- Do not add `*_op` helpers just to expose the deferred form.
 - Use `with tc.backend(..., mode="deferred"):` for deferred planning.
-- Use `with tc.backend(..., mode="eager"):` for normal eager execution.
+- Use ordinary route calls for normal eager execution.
 
 Before:
 
@@ -555,59 +539,11 @@ with tc.backend(kernel, mode="deferred"):
     plan = client.add(1, 2)
 ```
 
-## Standard library surface (planned): generated vs Python-authored
+If a package declared route or library names explicitly, rename the Python
+class/method so the derived URI is the intended URI. The framework does not
+support a parallel `name=` override.
 
-The planned v2 Python client mirrors the v1 standard library but splits responsibility between the PyO3 bindings and the Python package:
-
-- **Generated via PyO3 at build time**
-  - Core standard library types and ops: `State`, `Value`, `Collection`, and primitive scalar/collection variants are exposed directly from the Rust host. The bindings are generated by the PyO3 build script so they stay in lockstep with the host kernel and require no handwritten Python stubs.
-  - Host-side behaviors: request routing, validation, and storage-backed execution live in Rust and are surfaced through these bindings. New Rust standard-library additions appear automatically when rebuilt.
-
-- **Authored in Python (mirrors v1 client behavior)**
-  - Session and batching ergonomics, including the `Client` and `session` helpers that assemble batched requests, enforce auth headers, and normalize error envelopes.
-  - Cluster-aware collection routing kept in the client: cross-host sharding for `BTree`, `Table`, and `Tensor` mirrors the v1 Python implementation instead of pushing routing into the host.
-  - Convenience constructors and fluent helpers that map RESTful paths, encode bodies, and compose pipelines in a way familiar to v1 users.
-  - Tooling and tests (e.g., WASM installer, integration harness) that exercise the bindings against a live host to keep the generated surface and Python ergonomics aligned.
-
-When adding new surface area, prefer extending the Rust standard library (so PyO3 regenerates bindings) for canonical types/ops, and extend the Python layer only for client-owned concerns (routing, batching, ergonomics). Document any intentional divergence from the v1 Python client.
-
-## Optional ORM & graph traversal API
-
-The refreshed Python client ships with an **optional ORM layer** that wraps TinyChain `Table`
-collections in higher-level models. The ORM automatically projects foreign-key relationships
-between tables into a client-defined `Graph` data structure, giving publishers a Cypher-like
-traversal API reminiscent of Neo4j while still talking to TinyChain collections under the
-hood:
-
-- Each model declares its table plus outbound edges (foreign keys). The ORM builds a graph
-  catalog at import time and exposes traversal helpers such as `graph.match("User")
-  .out("owns").out("trained")`.
-- Traversals compile into scoped TinyChain requests with parameterized predicates, so query
-  construction is immune to SQL-/JSON-/serialization-injection attacks. Callers pass typed
-  parameters; the ORM encodes them via the standard TinyChain IR before hitting the host.
-- Because the ORM is optional, advanced users can drop down to raw table operations or write
-  bespoke IR calls. Mixing the two is supported: run a graph traversal to fetch IDs, then
-  stream the underlying tables manually.
-
-This layer stays purely client-side: no new kernel types or host adapters are required, and
-the resulting requests still operate on `/state/...` collections registered by the publisher.
-It complements the broader TinyChain architecture, which treats the entire network as a
-queryable graph of capabilities, services, and data. The ORM simply gives Python users a
-Neo4j-style surface for traversing their slice of that graph without sacrificing safety.
-
-### Composing graph ops into composite IR
-
-Both the ORM and lower-level Python helpers can compose multiple scalar and collection ops
-into a **composite operation** before sending it to the host. The client builds a DAG of
-TinyChain ops (a “graph”) and submits it as part of a library/service install (`PUT` to
-`/lib/...` or `/service/...`). The kernel compiles the DAG at install time into the same
-execution units used by the Rust host. At runtime, the scheduler from the reference host
-(`tinychain/host`) orders the ops, enforces data dependencies, and executes them under the
-standard transactional guard—exactly as if the graph were authored inside the host. This
-keeps batched Python workloads aligned with native handlers without inventing new protocol
-semantics.
-
-### Compute graph payloads (Op-graph IR)
+## Compute graph payloads
 
 For numerically heavy workloads (e.g. linear algebra and fixed-count training loops), the client
 also exposes an **Op-graph** builder in `tinychain.compute`. This produces a deterministic, typed
@@ -620,101 +556,28 @@ The builder is intentionally separate from `TCRef` graphs: it is a self-describi
 explicit type parameters (e.g., tensor shapes/dtypes) and explicit operator invocations, so a
 host-side analyzer can reject graphs it cannot analyze/certify with actionable errors.
 
-### `TCRef` helpers
+## `TCRef` helpers
 
-Python bindings expose lightweight helpers for constructing `TCRef` graphs: every `State`,
-`Value`, or composite op you reference becomes a `TCRef` under the hood. Control-flow
-helpers (`tc.if_`, `tc.for_each`, `tc.while_loop`) simply wrap the canonical `TCRef`
-variants from `tinychain/host/scalar`, so when you install a library/service the kernel
-sees the exact same IR as if it were authored in Rust. Execution happens on the host—HTTP
-and PyO3 both transmit serialized `TCRef`s—so branch selection, loop iteration, and queue
-behavior stay consistent and auditable.
+Python bindings expose lightweight helpers for constructing `TCRef` graphs: every
+`State`, `Value`, or composite op you reference becomes a canonical TinyChain IR
+node under the hood. Execution happens on the host; HTTP and PyO3 both transmit
+serialized `TCRef`s, so dependency ordering and transaction behavior stay
+consistent and auditable.
 
 When you need reusable behavior inside the same DAG, construct an `OpRef`: it packages a
 TinyChain op (and any bound arguments) so multiple `TCRef`s can reference it without
 re-encoding the body. `OpRef`s compile at install time along with `TCRef`s, ensuring the
 host scheduler resolves them exactly once per invocation even when referenced repeatedly.
-All of these helpers serialize to the canonical `Scalar` enum defined in `tc-ir`, keeping
-HTTP, PyO3, and future adapters in lockstep.
+All of these helpers serialize to the canonical `Scalar` enum defined in `tc-ir`,
+keeping HTTP and PyO3 in lockstep.
 
-For tiny, expression-only helpers, `tc.post` accepts a Python `lambda` and will compile
-it into a POST `OpDef`. This is intended for simple cases like `reduce` helpers; complex
-control flow should use named routes or full Autograph rewrites.
+For tiny, expression-only helpers, `tc.post` accepts a Python `lambda` and compiles
+it into a POST `OpDef`. Complex control flow should be expressed as named routes
+and canonical TinyChain IR, not as transport-specific Python callbacks.
 
-## Autograph-style inline control flow
-
-TinyChain’s Python client will support Autograph-like rewrites so publishers can use native
-Python `if`/`while`/`for` constructs inside route definitions. Scope:
-
-1. **Decorator API.** Decorators (`@tc.define.get`, `@tc.define.post`, etc.) wrap handler methods defined
-   inside a `Library` or `Service`. The enclosing class declares the canonical URI
-   (publisher, namespace, semantic version); decorators never take explicit paths, preventing
-   divergence between handlers.
-2. **AST transformer.** Based loosely on TF2/JAX Autograph, the transformer lowers Python
-   control flow into `TCRef`/`OpRef` graphs:
-   - `if` → `TCRef::If`
-   - `while` → `TCRef::While`
-   - `for` → `TCRef::ForEach` (tuple iteration)
-   - `async for` → not yet implemented
-   - user-defined helper calls → `OpRef` (with captured args)
-   Unsupported constructs (e.g., `try/except`, dynamic attribute injection) raise
-   deterministic errors with remediation tips.
-3. **Install-time compilation.** The decorator stages the generated DAG until the publisher
-   invokes `tc.autograph.install(...)` (or `@tc.define.get(...).install()`); the client then issues
-   an authorized `PUT` to `/service/...` or `/lib/...`, compiling the graph into the host
-   kernel just like existing helpers.
-4. **Queue enforcement.** Long-running loops automatically trigger a lint warning. Publishers
-   can opt into wrapping them in a TinyChain `Queue` by adding `@tc.queue` or a decorator
-   argument (`@tc.define.get(..., queue=True)`).
-
-### Example
-
-```python
-import tinychain as tc
-
-@tc.service(publisher="example-devco", namespace="ml", name="counter", version="1.0.0")
-class Counter(tc.Service):
-
-    @tc.define.get
-    def handle(self, limit: int):
-        step = tc.scalar.Value(0)
-        while step < limit:
-            if step % 2 == 0:
-                tc.op.emit("even", step)
-            else:
-                tc.op.emit("odd", step)
-            step = step + 1
-        return tc.op.result("done")
-```
-
-The transformer produces a DAG with:
-
-- `TCRef::While` holding the loop condition and body.
-- `TCRef::If` inside the loop body for the parity check.
-- An `OpRef` for `step = step + 1` reused on every iteration.
-
-Installing the route compiles the DAG; runtime executions (HTTP or PyO3) run entirely in the
-Rust host, so no Python control flow executes in production.
-
-### Testing plan
-
-1. **Transformer unit tests.** Feed representative functions into the transformer and assert
-   the emitted `TCRef`/`OpRef` graph matches a manually authored graph.
-2. **Integration test.** Add a `py/tests/test_autograph_counter.py` that installs the
-   example above into a temp `data_dir`, hits it via a minimal HTTP harness, and verifies the emitted
-   events/results.
-3. **Queue lint test.** Ensure a loop annotated with `queue=True` gets lowered into a proper
-   TinyChain queue and respects the 3-second limit.
-
-This keeps user ergonomics close to JAX/TF2 while preserving TinyChain’s install-time
-compilation and host scheduling guarantees.
-
-## HTTP parity and optional transaction handles
+## Transaction handles
 
 - The public Python HTTP client should never expose transaction handles (`txn_id`)
   directly; the server mints them and handles inter-service signing internally.
-- Session helpers (when added) should exist purely for batching ergonomics and can
-  be implemented without surfacing raw transaction IDs. Keep them optional and
-  document that disabling sessions yields single-request semantics identical to v1.
 - PyO3 bindings do not expose transaction APIs; keep transaction logic
   encapsulated inside `tc-server`.

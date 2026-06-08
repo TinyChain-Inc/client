@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Iterable, Optional
 
@@ -85,6 +86,25 @@ def _segment(label: str, value: str) -> str:
     if value in (".", ".."):
         raise ValueError(f"{label} must not be '.' or '..'")
     return value
+
+
+def _class_resource_name(cls: type) -> str:
+    explicit = cls.__dict__.get("name")
+    if explicit is not None:
+        raise TypeError(
+            "Library name overrides are not supported; derive the resource name from the class name"
+        )
+    return _python_name_to_resource(cls.__name__)
+
+
+def _python_name_to_resource(name: str) -> str:
+    if not name:
+        raise TypeError("expected a non-empty class name")
+    first = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", name)
+    resource = re.sub("([a-z0-9])([A-Z])", r"\1_\2", first).replace("-", "_").lower()
+    if resource.startswith("_") or resource.endswith("_") or "__" in resource:
+        raise TypeError(f"cannot derive a canonical resource name from class name {name!r}")
+    return resource
 
 
 def _path_segments(path: Optional[Iterable[str]]) -> list[str]:

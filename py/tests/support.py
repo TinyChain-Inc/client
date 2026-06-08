@@ -6,14 +6,15 @@ import subprocess
 import pytest
 
 import tinychain as tc
+import tinychain.testing as tc_testing
 
-REPO_ROOT = tc.testing.repo_root()
+REPO_ROOT = tc_testing.repo_root()
 
 
 def require_cargo() -> None:
-    if tc.testing.rjwt_install_token_bin() is not None:
+    if tc_testing.rjwt_install_token_bin() is not None:
         return
-    if not tc.testing.cargo_available():
+    if not tc_testing.cargo_available():
         pytest.skip("`cargo` not found and rjwt_install_token binary missing")
 
 
@@ -89,7 +90,7 @@ def rjwt_install_token(*lib_paths: str) -> dict[str, str]:
             actor_id,
         ]
     else:
-        bin_path = tc.testing.rjwt_install_token_bin()
+        bin_path = tc_testing.rjwt_install_token_bin()
         if bin_path is not None:
             args = [
                 str(bin_path),

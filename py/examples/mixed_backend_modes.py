@@ -28,18 +28,18 @@ from typing import Optional
 
 try:
     import tinychain as tc
+    import tinychain.testing as tc_testing
 except ImportError as exc:  # pragma: no cover
     raise RuntimeError(
         "tinychain module not installed; run scripts/install_tc_server_python.sh first"
     ) from exc
 
-REPO_ROOT = tc.testing.repo_root()
+REPO_ROOT = tc_testing.repo_root()
 DEFAULT_SECRET_KEY_B64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 
 
-class RemoteB(tc.Library):
+class Example(tc.Library):
     publisher = "example-devco"
-    name = "example"
     version = "0.1.0"
     dependencies = ()
 
@@ -48,10 +48,10 @@ class RemoteB(tc.Library):
         ...
 
 
-class LocalWasmA(tc.Library):
+class A(tc.Library):
     publisher = "example-devco"
-    name = "a"
     version = "0.1.0"
+    dependencies = (Example.class_id(),)
 
     @tc.get
     def from_b(self, name: str) -> tc.String:
@@ -73,7 +73,7 @@ def _require_local_backend() -> None:
 
 
 def _start_remote_host(*, actor_id: str, secret_key_b64: str):
-    return tc.testing.start_rust_example(
+    return tc_testing.start_rust_example(
         "http_rpc_native_host",
         args=(
             "--bind=127.0.0.1:0",
@@ -113,8 +113,9 @@ def run_demo(
     secret_key_b64: str | None,
     ttl_secs: int,
 ) -> None:
-    b = RemoteB(authority=tc.URI.parse(authority))
-    a = LocalWasmA(dependencies=(b.link(),))
+    b = Example(authority=tc.URI.parse(authority))
+    a = A()
+    a.remote_example = b
     a_root = tc.uri(a).path
     b_root = tc.uri(b).path
 
@@ -144,13 +145,8 @@ def run_demo(
     print("actor_id:", runtime_token.actor_id)
     print("public_key_b64:", runtime_token.public_key_b64)
 
-    host = tc.Host(tc.origin(authority))
-
-    # Explicit transport call for direct host execution.
-    print(
-        "explicit RPC via Host:",
-        host.execute(b.hello("World")),
-    )
+    # Authority-qualified libraries execute over HTTP(S) without custom transport code.
+    print("remote call:", b.hello("World"))
 
     with tempfile.TemporaryDirectory(prefix="tinychain-data-") as temp_dir:
         data_dir = pathlib.Path(temp_dir) / "tc-data"
@@ -162,9 +158,9 @@ def run_demo(
             token=runtime_token,
         )
 
-        install = tc.wasm.install(
-            a.schema(),
-            wasm_path,
+        install = tc.install(
+            a,
+            wasm=wasm_path,
             kernel=kernel,
             token=install_token,
         )
@@ -187,7 +183,6 @@ def run_demo(
         with tc.backend(
             kernel,
             bearer_token=runtime_token.bearer_token,
-            mode="eager",
         ):
             print("route auth context:", a.auth_context())
             print("auto remote call:", b.hello("World"))
