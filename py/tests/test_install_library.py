@@ -18,18 +18,16 @@ def test_install_python_library(tmp_path: pathlib.Path):
             return "hello"
 
     token = rjwt_install_token(Example.class_id().path)
-    kernel = tc.KernelHandle.with_library_schema_rjwt(
-        Example.class_schema_json(),
-        token["host"],
-        token["actor_id"],
-        token["public_key_b64"],
-        data_dir=str(tmp_path),
+    kernel = tc.kernel.with_library(
+        Example(),
+        data_dir=tmp_path,
+        token=tc.auth.SignedBearerToken(**token),
     )
     resp = tc.install(
         Example,
         kernel=kernel,
         data_dir=tmp_path,
-        bearer_token=token["bearer_token"],
+        token=tc.auth.SignedBearerToken(**token),
     )
     assert resp.status == 204
 
@@ -59,20 +57,18 @@ def test_install_python_library_string_concat(tmp_path: pathlib.Path):
             return tc.String("Hello, {{name}}!").render(name=name)
 
     token = rjwt_install_token(Greeter.class_id().path)
-    kernel = tc.KernelHandle.with_library_schema_rjwt(
-        Greeter.class_schema_json(),
-        token["host"],
-        token["actor_id"],
-        token["public_key_b64"],
-        data_dir=str(tmp_path),
+    kernel = tc.kernel.with_library(
+        Greeter(),
+        data_dir=tmp_path,
+        token=tc.auth.SignedBearerToken(**token),
     )
     resp = tc.install(
         Greeter,
         kernel=kernel,
         data_dir=tmp_path,
-        bearer_token=token["bearer_token"],
+        token=tc.auth.SignedBearerToken(**token),
     )
     assert resp.status == 204
 
-    with tc.backend(kernel, bearer_token=token["bearer_token"]):
+    with tc.backend(kernel, token=tc.auth.SignedBearerToken(**token)):
         assert Greeter().hello("Ada") == "Hello, Ada!"

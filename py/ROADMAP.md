@@ -32,62 +32,27 @@ explicitly asks for advanced control.
 - Advanced/internal helpers stay out of top-level `import tinychain as tc` unless
   they are part of the ordinary user path.
 
-## Next milestone: remote install and browser-link ergonomics
+## Current demo contract
 
-Motivation:
-- Enable a 60-second Greeter demo with no testnet-specific API and no boilerplate
-  payload/auth plumbing:
-  1. generate a simple `Hello, {name}!` `Library`,
-  2. call `hello` locally,
-  3. install the same library on a configured remote host with an auth token, and
-  4. open a browser-callable remote `hello` URL.
-
-Deliverables:
-- Extend `tc.install(...)` to accept a remote TinyChain host:
-  ```python
-  tc.install(greeter, remote=tc.Host("https://host.example"), token=install_token)
-  ```
-- Let `tc.Host` carry default auth for install and route calls:
-  ```python
-  host = tc.Host("https://host.example", token=install_token)
-  ```
-- Keep host targeting generic. Do not introduce `tc.testnet` or any network-name
+- The Greeter demo path is generic: define a `Library`, call it locally, install
+  it on any authorized `tc.Host`, then open a browser-callable route URL.
+- Host targeting stays generic. Do not introduce `tc.testnet` or any network-name
   specific API.
-- Accept pre-generated short-lived tokens. If key material is provided, allow
-  framework token minting with a seconds-scale TTL, but do not require keypair
-  handling in the demo script.
-- Add a canonical browser URL builder for route calls:
-  ```python
-  host.url(greeter, "hello", name="Ada")
-  ```
-- Ensure generated route URLs use canonical `/lib/{publisher}/{class-derived-name}/{version}/{route}`
-  paths and standard query encoding.
-- Keep plain route method calls as the normal Python path. `tc.execute(...)` remains
+- `tc.install(library, remote=tc.Host(...), token=...)` and
+  `tc.install(library, wasm=..., token=...)` are the only install shapes shown to
+  application developers.
+- `tc.Host(..., token=...)` carries framework auth for install and route calls.
+- `tc.Host.url(library, route, **query)` builds canonical browser URLs.
+- Plain route method calls are the normal Python path. `tc.execute(...)` remains
   advanced plan execution, not the demo path.
-
-Validation:
-- Unit test `tc.install(..., remote=host, token=...)` builds the same canonical
-  install payload as local install and sends it to remote `/lib` with auth.
-- Unit test `tc.Host(..., token=...)` applies auth to install and route requests
-  without per-method auth kwargs.
-- Unit test browser URL generation for route paths, query encoding, and authority.
-- Mocked remote-host test proving Python-defined `Library` install and route call
-  use framework request/response decoding, not custom payload/status parsing.
-- Example script for the Greeter demo which contains only user-facing code and can
-  be shown without revisions or setup detours.
-
-Documentation:
-- Add a concise README section: "60-second Greeter demo".
-- Document that the remote may be any authorized TinyChain host, including a
-  testnet host, without changing API shape.
-- Document token expectations: pre-generated bearer token is acceptable; optional
-  short-lived minting is framework-provided when key material is available.
 
 Guardrails:
 - Do not add `tc.testnet`.
 - Do not add another install helper.
-- Do not expose raw install payloads, schemas, transaction IDs, or status wrappers
-  in the demo path.
+- Do not expose raw install payloads, schemas, artifacts, transaction IDs, or
+  status wrappers in the demo path.
+- Do not split ordinary Python `Library` installs into top-level schema plus
+  sidecar route artifacts; the library definition itself is the install unit.
 - Do not require per-method auth kwargs.
 - Do not reintroduce `tc.Json`, `tc.define`, `tc.deferred`, `tc.wasm.install`,
   top-level `tc.testing`, or top-level IR compiler helpers.

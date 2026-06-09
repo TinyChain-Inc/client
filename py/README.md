@@ -104,10 +104,11 @@ print(host.url(greeter, "hello", name="Ada"))
 ```
 
 The token can be pre-generated for a short video, or minted from key material
-with `tc.auth.mint_rjwt_token(..., ttl_secs=3)`. The install helper sends the
-same canonical `/lib` payload used by local installs, and the URL helper builds
-the canonical `/lib/{publisher}/{library}/{version}/{route}` path with standard
-query encoding.
+with `tc.auth.mint_rjwt_token(..., ttl_secs=3)`. `tc.install(...)` derives the
+canonical `/lib` definition from the `Library` class; application code should not
+construct schemas, artifacts, status wrappers, or request bodies by hand. For
+WASM-backed libraries, pass `wasm=...` to the same install helper and keep the
+`Library` manifest as the source of truth.
 
 ### Route Type Hints
 
@@ -139,11 +140,18 @@ The runtime type rules are:
 with `render(...)`; use it for string templating instead of custom payload logic
 or placeholder `Ref[str]` wrappers.
 
+Python route implementations are compiled by `tinychain._autograph`, which lowers
+method source code into TinyChain IR. Route decorators capture source at definition
+time when Python exposes it, so normal files and notebook-style environments with
+source-backed cells work. Truly source-less generated functions still cannot be
+installed as Python route implementations; use a normal source-backed method, a
+stub backed by remote/WASM execution, or an explicit TinyChain op definition.
+
 ### Executor auth and routing contract
 
 `tc.backend(...)` uses one remote auth rule:
 
-1. Remote calls do not implicitly forward backend `bearer_token`.
+1. Remote calls do not implicitly forward the backend `token`.
 2. If a remote call needs auth, provide an explicit `Authorization` header on that call.
 
 Remote target selection follows one routing contract:
@@ -253,7 +261,7 @@ The key runtime shape is:
 kernel = tc.kernel.with_library(a, data_dir=data_dir, token=runtime_token)
 tc.install(a, wasm=wasm_path, kernel=kernel, token=install_token)
 
-with tc.backend(kernel, bearer_token=runtime_token.bearer_token):
+with tc.backend(kernel, token=runtime_token):
     assert b.hello("World") == "Hello, World!"
     assert a.from_b("World") == "Hello, World!"
 ```
@@ -271,53 +279,28 @@ Then run:
 ./.venv/bin/python client/py/examples/mixed_backend_modes.py
 ```
 
-## WASM installer regression
+## WASM Install Validation
 
-The `py/tests/test_install_wasm_script.py` test exercises the
-`py/bin/install_wasm.py` helper (which calls `tc.install(..., wasm=...)`) against the
-PyO3 kernel. It installs the bundled example schema
-(from the runtime repo: `tc-server/examples/library_schema_example.json`) and a freshly built WASM module
-(from the runtime repo: `tc-wasm/examples/hello_wasm.rs` ⇒ `.../release/examples/hello_wasm.wasm`) into a
-temporary `data_dir`, then verifies:
+Use `tc.install(library, wasm=wasm_path, kernel=kernel, token=install_token)` for
+local WASM implementations. The Python client does not expose a separate WASM
+installer or schema-file CLI; the `Library` manifest remains the source of truth.
 
-1. `/lib` returns the newly installed schema.
-2. `/lib/hello` dispatches into the WASM export.
-3. The artifacts are persisted under `<data-dir>/lib/<id>/<version>/`.
-
-Run it with:
+Run the WASM integration coverage with:
 
 ```bash
-# from the TinyChain runtime repo root:
 cargo build --manifest-path tc-wasm/Cargo.toml --example hello_wasm --target wasm32-unknown-unknown --release
-
-# from the client repo root:
-python -m pytest py/tests/test_install_wasm_script.py -vv
+PYTHONPATH=client/py .venv/bin/python -m pytest client/py/tests/test_wasm_helper.py client/py/tests/test_auth_context_integration.py -q
 ```
-
-If you call `py/bin/install_wasm.py` directly, pass `--bearer-token` to authorize the install:
-
-```bash
-python py/bin/install_wasm.py tc-server/examples/library_schema_example.json \
-  tc-wasm/target/wasm32-unknown-unknown/release/examples/hello_wasm.wasm \
-  --data-dir /tmp/tc-data \
-  --bearer-token test-token
-```
-
-Run the build by hand before invoking pytest (or set `TC_AUTO_BUILD_WASM=1` to let
-the test run the cargo build automatically when permitted). Use this test whenever
-you touch the `/lib`
-installer, filesystem layout, or PyO3 routing so we keep the closed-source WASM
-workflow working end to end.
 
 ## How WASM libraries surface through PyO3
 
-`tinychain-local` exposes the same kernel that powers the HTTP runtime. When you install the
-optional backend and then pass `data_dir=...` to `tc.KernelHandle`/`tc.Backend`, the PyO3 layer hydrates per-library storage
-and registers every WASM library found under `<data-dir>/lib/<id>/<version>`.
+`tinychain-local` exposes the same kernel that powers the HTTP runtime. When you
+install the optional backend and pass `data_dir=...` to `tc.kernel.with_library`,
+the PyO3 layer hydrates per-library storage and registers every WASM library
+found under `<data-dir>/lib/<id>/<version>`.
 That means:
 
-1. Install the library once with `tc.install(...)` (or the `py/bin/install_wasm.py`
-   CLI wrapper).
+1. Install the library once with `tc.install(...)`.
 2. Point both the HTTP server and PyO3 kernel at the same `data_dir`.
 3. Invoke routes from Python through `tc.backend(...)` and library route
    methods. Low-level HTTP clients are useful for adapter diagnostics, but

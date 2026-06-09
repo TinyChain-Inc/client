@@ -170,7 +170,7 @@ def run_demo(
         # Idiomatic mode: one backend context, route calls auto-execute.
         with tc.backend(
             kernel,
-            bearer_token=runtime_token.bearer_token,
+            token=runtime_token,
             mode="deferred",
         ):
             planned_remote = b.hello("World")
@@ -182,7 +182,7 @@ def run_demo(
 
         with tc.backend(
             kernel,
-            bearer_token=runtime_token.bearer_token,
+            token=runtime_token,
         ):
             print("route auth context:", a.auth_context())
             print("auto remote call:", b.hello("World"))

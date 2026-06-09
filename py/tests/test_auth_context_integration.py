@@ -44,8 +44,8 @@ def test_framework_auth_context_available_in_local_and_wasm_routes(tmp_path: pat
         _ = tc.KernelHandle.local
     except (ImportError, AttributeError):
         pytest.skip("`tinychain-local` not installed")
-    if not hasattr(tc.KernelHandle, "local_with_dependency_routes"):
-        pytest.skip("tinychain-local does not support canonical dependency route constructor")
+    if not hasattr(tc.KernelHandle, "with_library_definition"):
+        pytest.skip("tinychain-local does not support canonical library definitions")
 
     wasm_path = ensure_wasm_example_built("opref_to_remote")
     proc, authority = tc_testing.start_rust_example(
@@ -101,7 +101,7 @@ def test_framework_auth_context_available_in_local_and_wasm_routes(tmp_path: pat
         )
         assert install.status == 204
 
-        with tc.backend(kernel, bearer_token=runtime_token.bearer_token):
+        with tc.backend(kernel, token=runtime_token):
             direct_ctx = tc.execute(tc.auth.context())
             wasm_ctx = a.auth_context()
             assert isinstance(direct_ctx, dict)

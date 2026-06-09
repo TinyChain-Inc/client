@@ -74,6 +74,25 @@ def test_library_routes_compile_opdef_routes():
     assert "opdef" in route
 
 
+def test_library_routes_use_decorator_time_source_capture(monkeypatch):
+    class A(tc.Library):
+        publisher = "example-devco"
+        version = "0.1.0"
+
+        @tc.post
+        def echo(self, x):
+            return x
+
+    def missing_source(_form):
+        raise OSError("could not get source code")
+
+    monkeypatch.setattr("tinychain._autograph.inspect.getsource", missing_source)
+
+    ir = compile_ir(A)
+    route = next(route for route in ir["routes"] if route["path"] == "/echo")
+    assert "opdef" in route
+
+
 def test_library_routes_allow_local_opref_subjects():
     class A(tc.Library):
         publisher = "example-devco"

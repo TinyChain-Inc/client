@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import json
 
 import tinychain as tc
@@ -86,12 +85,13 @@ def test_install_python_library_to_remote_uses_canonical_payload_and_auth(monkey
     assert headers["authorization"] == "Bearer token-123"
     assert headers["content-type"] == "application/json"
     payload = json.loads(data.decode("utf-8"))
-    assert payload["schema"]["id"] == "/lib/example-devco/greeter/0.1.0"
-    assert payload["artifacts"][0]["path"] == "/lib/ir"
-    ir = json.loads(base64.b64decode(payload["artifacts"][0]["bytes"]))
-    encoded_ir = json.dumps(ir)
+    assert list(payload) == ["/lib/example-devco/greeter/0.1.0"]
+    assert list(payload["/lib/example-devco/greeter/0.1.0"]) == ["hello"]
+    encoded_ir = json.dumps(payload)
     assert "$name" in encoded_ir
     assert "/render" in encoded_ir
+    assert "schema" not in payload
+    assert "artifacts" not in payload
 
 
 def test_string_value_render_is_the_only_value_render_surface():

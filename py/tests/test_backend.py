@@ -1,5 +1,6 @@
-import json
+import pathlib
 
+import pytest
 import tinychain as tc
 import tinychain.testing as tc_testing
 
@@ -17,51 +18,52 @@ def test_backend_healthz_routes_to_rust_handler():
     backend.healthz()
 
 
-def test_kernel_handle_installs_library_via_rust_handlers():
-    token = rjwt_install_token(tc.uri("lib", "hello").path)
-    initial_schema = json.dumps(
-        {"id": f"{tc.uri('lib', 'hello').path}", "version": "0.1.0", "dependencies": []}
-    )
-    kernel = tc.KernelHandle.with_library_schema_rjwt(
-        initial_schema,
-        token["host"],
-        token["actor_id"],
-        token["public_key_b64"],
+def test_kernel_handle_installs_library_via_rust_handlers(tmp_path: pathlib.Path):
+    class Hello(tc.Library):
+        publisher = "example-devco"
+        version = "0.1.0"
+
+    class Updated(tc.Library):
+        publisher = "example-devco"
+        version = "0.2.0"
+
+        @tc.get
+        def hello(self):
+            return "hello"
+
+    token = rjwt_install_token(Hello.class_id().path, Updated.class_id().path)
+    kernel = tc.kernel.with_library(
+        Hello(),
+        data_dir=tmp_path,
+        token=tc.auth.SignedBearerToken(**token),
     )
 
-    get_request = tc.KernelRequest("GET", tc.uri("lib", "hello").path, None, None)
+    get_request = tc.KernelRequest("GET", Hello.class_id().path, None, None)
     response = kernel.dispatch(get_request)
     assert response.status == 200
     assert tc_testing.decode_json_body(response)["version"] == "0.1.0"
 
-    updated_schema = json.dumps(
-        {"id": f"{tc.uri('lib', 'hello').path}", "version": "0.2.0", "dependencies": []}
-    )
-    headers = [("authorization", f"Bearer {token['bearer_token']}")]
-    put_request = tc.KernelRequest(
-        "PUT", tc.uri("lib").path, headers, tc.StateHandle(updated_schema)
-    )
-    put_response = kernel.dispatch(put_request)
+    put_response = tc.install(Updated, kernel=kernel, token=tc.auth.SignedBearerToken(**token))
     assert put_response.status == 204
 
-    response_after = kernel.dispatch(
-        tc.KernelRequest("GET", tc.uri("lib", "hello").path, None, None)
-    )
+    response_after = kernel.dispatch(tc.KernelRequest("GET", Updated.class_id().path, None, None))
     assert response_after.status == 200
     assert tc_testing.decode_json_body(response_after)["version"] == "0.2.0"
 
 
-def test_kernel_handle_rejects_unauthorized_library_install():
-    initial_schema = json.dumps(
-        {"id": f"{tc.uri('lib', 'hello').path}", "version": "0.1.0", "dependencies": []}
-    )
-    kernel = tc.KernelHandle.with_library_schema(initial_schema)
+def test_kernel_handle_rejects_unauthorized_library_install(tmp_path: pathlib.Path):
+    class Hello(tc.Library):
+        publisher = "example-devco"
+        version = "0.1.0"
 
-    updated_schema = json.dumps(
-        {"id": f"{tc.uri('lib', 'hello').path}", "version": "0.2.0", "dependencies": []}
-    )
-    put_request = tc.KernelRequest(
-        "PUT", tc.uri("lib").path, None, tc.StateHandle(updated_schema)
-    )
-    put_response = kernel.dispatch(put_request)
-    assert put_response.status == 401
+    class Updated(tc.Library):
+        publisher = "example-devco"
+        version = "0.2.0"
+
+        @tc.get
+        def hello(self):
+            return "hello"
+
+    kernel = tc.kernel.with_library(Hello(), data_dir=tmp_path)
+    with pytest.raises(ValueError, match="token"):
+        tc.install(Updated, kernel=kernel, token=None)

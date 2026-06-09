@@ -1,23 +1,20 @@
 from __future__ import annotations
 
-import base64
 import inspect
 import json
 import logging
 import pathlib
+import base64
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional, get_args, get_origin, get_type_hints
 
-from ._install import dispatch_install, kernel_for_install, local_backend, token_bearer
+from .auth import bearer_token as _bearer_token
 from .opref import OpRef
 from .ref import Ref
 from . import _autograph
 from .state import ContextResult, OpDef, Scalar, TCRef, autobox, context, current_context, scoped_context
 from .state.value import String, Value
 from .uri import URI, _class_resource_name, _segment, uri as _uri
-
-IR_ARTIFACT_CONTENT_TYPE = "application/tinychain+json"
-
 
 def _is_method(form: Callable[..., Any]) -> bool:
     names = list(getattr(form, "__code__", None).co_varnames or ())
@@ -127,6 +124,7 @@ def _validate_library_class(library: type["Library"]) -> None:
 class Route:
     method: str
     form: Callable[..., Any]
+    source: Optional[str] = None
     name: Optional[str] = field(default=None, init=False)
 
     def __post_init__(self) -> None:
@@ -286,9 +284,17 @@ def _decorate(
     form: Optional[Callable[..., Any]] = None,
 ):
     if form is None:
-        return lambda actual: Route(method=method.upper(), form=actual)
+        return lambda actual: Route(
+            method=method.upper(),
+            form=actual,
+            source=_capture_source(actual),
+        )
     if _is_method(form):
-        return Route(method=method.upper(), form=form)
+        return Route(
+            method=method.upper(),
+            form=form,
+            source=_capture_source(form),
+        )
     return _compile_opdef_callable(form, method=method.upper())
 
 
@@ -314,6 +320,14 @@ def delete(
     form: Optional[Callable[..., Any]] = None,
 ):
     return _decorate("DELETE", form)
+
+
+def _capture_source(form: Callable[..., Any]) -> str | None:
+    try:
+        return inspect.getsource(form)
+    except (OSError, TypeError):
+        return None
+
 
 def _compile_opdef_callable(form: Callable[..., Any], *, method: str) -> OpDef:
     sig = inspect.signature(form)
@@ -464,16 +478,6 @@ class Library:
             port=self.authority.port,
         )
 
-    def schema(self) -> dict:
-        return {
-            "id": self.id().path,
-            "version": self.version,
-            "dependencies": [dep.path for dep in self.dependencies],
-        }
-
-    def schema_json(self) -> str:
-        return json.dumps(self.schema(), separators=(",", ":"))
-
     @classmethod
     def class_id(cls) -> URI:
         publisher = getattr(cls, "publisher", None)
@@ -492,26 +496,29 @@ class Library:
             )
         )
 
-    @classmethod
-    def class_schema(cls) -> dict:
-        deps = _class_dependencies(cls)
-        return {
-            "id": cls.class_id().path,
-            "version": getattr(cls, "version", None),
-            "dependencies": [dep.path for dep in deps],
-        }
-
-    @classmethod
-    def class_schema_json(cls) -> str:
-        return json.dumps(cls.class_schema(), separators=(",", ":"))
-
-
 def _to_opref(value: object) -> Optional[OpRef[Any]]:
     if hasattr(value, "op"):
         return value.op  # type: ignore[return-value]
     if isinstance(value, OpRef):
         return value
     return None
+
+
+def _class_schema(cls: type["Library"]) -> dict:
+    deps = _class_dependencies(cls)
+    return {
+        "id": cls.class_id().path,
+        "version": getattr(cls, "version", None),
+        "dependencies": [dep.path for dep in deps],
+    }
+
+
+def _library_schema(library: "Library") -> dict:
+    return {
+        "id": library.id().path,
+        "version": library.version,
+        "dependencies": [dep.path for dep in library.dependencies],
+    }
 
 
 def compile_ir(library: Library | type[Library]) -> dict:
@@ -539,7 +546,7 @@ def compile_ir(library: Library | type[Library]) -> dict:
 
         routes.append({"path": f"/{name}", "value": result})
 
-    return {"schema": library_cls.class_schema(), "routes": routes}
+    return {"schema": _class_schema(library_cls), "routes": routes}
 
 
 def _compile_route(route: Route, library: type[Library]) -> object:
@@ -567,7 +574,7 @@ def _compile_opdef_route(
     injected_names = {"cxt", "ctx", "txn"}
     form = route.form
     if not any(param.name in injected_names for param in params[1:]):
-        form = _autograph.transform(route.form)
+        form = _autograph.transform(route.form, source=route.source)
 
     arg_names = [
         param.name
@@ -772,40 +779,14 @@ def _walk_scalars_with_opdef(root: Scalar):
 
 
 def install(
-    library: Library | type[Library] | pathlib.Path | dict,
+    library: Library | type[Library],
     *,
     wasm: pathlib.Path | None = None,
     remote: object | None = None,
     kernel: Optional[object] = None,
     data_dir: Optional[pathlib.Path] = None,
     token: object | None = None,
-    bearer_token: Optional[str] = None,
 ) -> object:
-    if wasm is not None:
-        from ._wasm import install as install_wasm, install_payload as wasm_install_payload
-
-        if isinstance(library, (Library, type)):
-            library_cls = _library_class(library)
-            _validate_library_class(library_cls)
-            schema = library.schema() if isinstance(library, Library) else library_cls.class_schema()
-        else:
-            schema = library
-        if remote is not None:
-            bearer = token_bearer(token, bearer_token)
-            return _remote_install(remote, wasm_install_payload(schema, wasm), bearer_token=bearer)
-        return install_wasm(
-            schema,
-            wasm,
-            kernel=kernel,
-            data_dir=data_dir,
-            token=token,
-            bearer_token=bearer_token,
-        )
-
-    bearer_token = token_bearer(token, bearer_token)
-    if bearer_token is None and remote is None:
-        raise ValueError("expected `bearer_token` for library installs")
-
     library_cls = _library_class(library)
     _validate_library_class(library_cls)
     if isinstance(library, Library):
@@ -816,40 +797,186 @@ def install(
         ):
             raise TypeError("Library instance fields must match class attributes")
 
-    install_payload = _library_install_payload(library_cls)
+    if wasm is not None:
+        if remote is not None:
+            raise ValueError("remote WASM installs are not supported by the canonical /lib install path")
+        return _install_compiled_wasm_library(
+            library,
+            wasm,
+            kernel=kernel,
+            data_dir=data_dir,
+            token=token,
+        )
+
+    if _bearer_token(token) is None and remote is None:
+        raise ValueError("expected `token` for library installs")
+
+    definition = library_definition(library_cls)
 
     if remote is not None:
-        return _remote_install(remote, install_payload, bearer_token=bearer_token)
+        return _submit_remote_library_definition(remote, definition, token=token)
 
-    local = local_backend()
-    kernel = kernel_for_install(local, kernel=kernel, data_dir=data_dir)
-    return dispatch_install(local, kernel, install_payload, bearer_token=bearer_token)
+    local = _local_backend()
+    kernel = _kernel_for_library_install(local, kernel=kernel, data_dir=data_dir)
+    bearer_token = _bearer_token(token)
+    if bearer_token is None:
+        raise ValueError("expected `token` for library installs")
+    return _submit_local_library_definition(local, kernel, definition, bearer_token=bearer_token)
 
 
-def _library_install_payload(library_cls: type[Library]) -> dict:
-    payload = compile_ir(library_cls)
-    ir_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-    ir_b64 = base64.b64encode(ir_bytes).decode("ascii")
+def library_definition(library: Library | type[Library]) -> dict:
+    """Return the canonical v1-style JSON definition of a Library."""
 
+    library_cls = _library_class(library)
+    ir = compile_ir(library_cls)
     return {
-        "schema": library_cls.class_schema(),
+        library_cls.class_id().path: {
+            route["path"].strip("/"): route["opdef"]
+            if "opdef" in route
+            else route["op"]
+            if "op" in route
+            else route["value"]
+            for route in ir["routes"]
+        }
+    }
+
+
+def _submit_remote_library_definition(
+    remote: object, definition: dict, *, token: object | None
+) -> object:
+    from .host import Host
+
+    if isinstance(remote, Host):
+        host = remote if token is None else Host(remote.__uri__.absolute(), token=token)
+    else:
+        host = Host(str(remote), token=token)
+    return host.request(
+        "PUT",
+        _uri("lib").path,
+        body=definition,
+    )
+
+
+def _local_backend():
+    try:
+        import tinychain_local as local  # type: ignore
+    except Exception as exc:  # pragma: no cover
+        raise ImportError("install requires the optional `tinychain-local` backend") from exc
+    return local
+
+
+def _kernel_for_library_install(
+    local: object,
+    *,
+    kernel: object | None,
+    data_dir: pathlib.Path | None,
+    library: Library | type[Library] | None = None,
+    token: object | None = None,
+) -> object:
+    if kernel is not None:
+        return kernel
+
+    if data_dir is None:
+        raise ValueError("expected either `kernel` or `data_dir`")
+
+    if library is not None:
+        library_id = (
+            library.id().path
+            if isinstance(library, Library)
+            else _library_class(library).class_id().path
+        )
+        return local.KernelHandle.with_library_definition(
+            json.dumps({library_id: {}}, separators=(",", ":")),
+            token=token,
+            data_dir=str(data_dir),
+        )
+
+    return local.KernelHandle.local(data_dir=str(data_dir))
+
+
+def _header_value(response: object, name: str) -> str | None:
+    headers = getattr(response, "headers", None)
+    if not headers:
+        return None
+
+    needle = name.lower()
+    for key, value in headers:
+        if str(key).lower() == needle:
+            return str(value)
+    return None
+
+
+def _submit_local_library_definition(
+    local: object, kernel: object, definition: dict, *, bearer_token: str
+) -> object:
+    install_path = _uri("lib").path
+    body = json.dumps(definition, separators=(",", ":"))
+    headers = [("authorization", f"Bearer {bearer_token}")]
+    request = local.KernelRequest("PUT", install_path, headers, local.StateHandle(body))
+    response = kernel.dispatch(request)
+
+    txn_id = _header_value(response, "x-tc-txn-id")
+    if not txn_id:
+        return response
+
+    commit = local.KernelRequest(
+        "POST",
+        f"{install_path}?txn_id={txn_id}",
+        headers,
+        None,
+    )
+    return kernel.dispatch(commit)
+
+
+def _read_wasm_b64(path: pathlib.Path) -> str:
+    data = path.read_bytes()
+    if not data:
+        raise RuntimeError(f"WASM binary {path} is empty")
+    return base64.b64encode(data).decode("ascii")
+
+
+def _compiled_library_package_for_wasm(
+    library: Library | type[Library], wasm_path: pathlib.Path
+) -> dict:
+    schema = (
+        _library_schema(library)
+        if isinstance(library, Library)
+        else _class_schema(_library_class(library))
+    )
+    return {
+        "schema": schema,
         "artifacts": [
             {
-                "path": _uri("lib", "ir").path,
-                "content_type": IR_ARTIFACT_CONTENT_TYPE,
-                "bytes": ir_b64,
+                "path": _uri("lib", "wasm").path,
+                "content_type": "application/wasm",
+                "bytes": _read_wasm_b64(wasm_path),
             }
         ],
     }
 
 
-def _remote_install(remote: object, payload: dict, *, bearer_token: str | None) -> object:
-    from .host import Host
+def _install_compiled_wasm_library(
+    library: Library | type[Library],
+    wasm_path: pathlib.Path,
+    *,
+    kernel: Optional[object] = None,
+    data_dir: Optional[pathlib.Path] = None,
+    token: object | None = None,
+) -> object:
+    local = _local_backend()
+    bearer_token = _bearer_token(token)
+    if bearer_token is None:
+        raise ValueError("expected `token` for WASM installs")
 
-    host = remote if isinstance(remote, Host) else Host(str(remote))
-    return host.request(
-        "PUT",
-        _uri("lib").path,
-        body=payload,
-        bearer_token=bearer_token,
+    kernel = _kernel_for_library_install(
+        local,
+        kernel=kernel,
+        data_dir=data_dir,
+        library=library,
+        token=token,
+    )
+    package = _compiled_library_package_for_wasm(library, wasm_path)
+    return kernel.install_compiled_package(
+        json.dumps(package, separators=(",", ":")),
+        bearer_token,
     )

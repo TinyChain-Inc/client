@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pathlib
+import json
 from collections.abc import Iterable
 
 from .library import Library
@@ -129,9 +130,6 @@ def with_library(
     *,
     data_dir: pathlib.Path,
     token: object | None = None,
-    token_host: str | None = None,
-    actor_id: str | None = None,
-    public_key_b64: str | None = None,
 ) -> "object":
     """
     Create a local kernel handle configured to route declared library dependencies by authority.
@@ -146,35 +144,18 @@ def with_library(
 
     routes = _dependency_routes_for_library(library)
 
-    if not routes:
-        raise ValueError(
-            "expected at least one dependency with an `authority` to configure egress routing"
+    _token_parts(token)
+
+    with_definition = getattr(tc.KernelHandle, "with_library_definition", None)
+    if not callable(with_definition):
+        raise RuntimeError(
+            "tinychain-local backend does not support canonical library definitions; "
+            "expected `KernelHandle.with_library_definition`"
         )
 
-    token_host_from_token, actor_id_from_token, public_key_b64_from_token = _token_parts(token)
-
-    token_host = token_host or token_host_from_token
-    actor_id = actor_id or actor_id_from_token
-    public_key_b64 = public_key_b64 or public_key_b64_from_token
-
-    call_kwargs = dict(
-        token_host=None,
-        actor_id=None,
-        public_key_b64=None,
+    return with_definition(
+        json.dumps({library.id().path: {}}, separators=(",", ":")),
+        routes=routes,
+        token=token,
         data_dir=str(data_dir),
-    )
-    if token_host and actor_id and public_key_b64:
-        call_kwargs.update(
-            token_host=token_host,
-            actor_id=actor_id,
-            public_key_b64=public_key_b64,
-        )
-
-    local_with_routes = getattr(tc.KernelHandle, "local_with_dependency_routes", None)
-    if callable(local_with_routes):
-        return local_with_routes(routes, **call_kwargs)
-
-    raise RuntimeError(
-        "tinychain-local backend does not support dependency route configuration; "
-        "expected `KernelHandle.local_with_dependency_routes`"
     )

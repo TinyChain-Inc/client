@@ -24,7 +24,6 @@ class RequestTarget(Protocol):
         *,
         body: object | None = None,
         headers: Optional[Iterable[tuple[str, str]]] = None,
-        bearer_token: Optional[str] = None,
     ) -> object:
         ...
 
@@ -201,16 +200,18 @@ def try_current() -> "Executor | None":
 def backend(
     kernel: object | None = None,
     *,
-    bearer_token: Optional[str] = None,
+    token: object | None = None,
     headers: Optional[Iterable[tuple[str, str]]] = None,
     mode: str = "eager",
 ) -> Executor:
     if mode not in {"eager", "deferred"}:
         raise ValueError("backend mode must be 'eager' or 'deferred'")
 
+    from .auth import bearer_token
+
     return Executor(
         kernel=kernel,
-        bearer_token=bearer_token,
+        bearer_token=bearer_token(token),
         headers=headers,
         mode=mode,
     )
@@ -318,7 +319,6 @@ def execute(opref: "object", *, executor: "Executor | None" = None) -> object:
             path,
             body=opref.body,
             headers=remote_headers,
-            bearer_token=None,
         )
 
     if exec_ctx.kernel is None:
