@@ -8,7 +8,7 @@ from urllib.parse import urlencode
 
 import requests
 
-from ._install import token_bearer
+from .auth import bearer_token as _bearer_token
 from .opref import OpRef
 from .ref import Ref
 from .codec import decode_payload
@@ -23,7 +23,6 @@ class Host:
         address: str,
         *,
         token: object | None = None,
-        bearer_token: Optional[str] = None,
     ):
         if "://" not in address:
             raise ValueError(f"host address missing protocol: {address}")
@@ -32,7 +31,7 @@ class Host:
             raise ValueError(
                 f"Host address should not include a path: {self.__uri__.path}"
             )
-        self._bearer_token = token_bearer(token, bearer_token)
+        self._bearer_token = _bearer_token(token)
 
     def __repr__(self) -> str:
         return f"host at {self.__uri__}"
@@ -55,12 +54,7 @@ class Host:
             port=self.__uri__.port,
         )
 
-    def execute(
-        self,
-        opref: OpRef | Ref,
-        *,
-        bearer_token: Optional[str] = None,
-    ) -> object:
+    def execute(self, opref: OpRef | Ref) -> object:
         if hasattr(opref, "op"):
             opref = opref.op
         if not isinstance(opref, OpRef):
@@ -70,7 +64,6 @@ class Host:
             opref.path,
             body=opref.body,
             headers=opref.headers,
-            bearer_token=bearer_token or self._bearer_token,
         )
 
     def url(self, target: object, route: str | None = None, **query: object) -> str:
@@ -87,11 +80,10 @@ class Host:
         *,
         body: object | None = None,
         headers: Optional[Iterable[tuple[str, str]]] = None,
-        bearer_token: Optional[str] = None,
     ) -> object:
         target = self.link(path)
         payload = None if body is None else _encode_body(body)
-        merged_headers = _merge_headers(headers, bearer_token or self._bearer_token, payload is not None)
+        merged_headers = _merge_headers(headers, self._bearer_token, payload is not None)
         response = requests.request(
             method.upper(),
             target.absolute(),

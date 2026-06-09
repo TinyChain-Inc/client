@@ -6,11 +6,11 @@ import tinychain as tc
 import tinychain.testing as tc_testing
 
 
-def test_pyo3_kernel_resolves_opref_over_http_gateway():
+def test_pyo3_kernel_resolves_opref_over_http_gateway(tmp_path):
     if not tc_testing.cargo_available():
         pytest.skip("`cargo` not found; install Rust tooling to run this test")
     try:
-        _ = tc.KernelHandle.local_with_dependency_routes
+        _ = tc.KernelHandle.with_library_definition
     except (ImportError, AttributeError):
         pytest.skip("`tinychain-local` not installed; skipping PyO3 kernel gateway test")
 
@@ -23,7 +23,12 @@ def test_pyo3_kernel_resolves_opref_over_http_gateway():
         b_root = tc.uri("lib", "example-devco", "example", "0.1.0").path
         b_hello = tc.uri("lib", "example-devco", "example", "0.1.0", "hello").path
 
-        kernel = tc.KernelHandle.local_with_dependency_routes([(b_root, addr)])
+        class Local(tc.Library):
+            publisher = "example-devco"
+            version = "0.1.0"
+            dependencies = (tc.URI.parse(f"http://{addr}{b_root}"),)
+
+        kernel = tc.kernel.with_library(Local(), data_dir=tmp_path)
 
         # Control check: the remote route itself is reachable and returns the expected value.
         host = tc.Host(f"http://{addr}")
@@ -44,24 +49,15 @@ def test_pyo3_kernel_resolves_opref_over_http_gateway():
 
 
 def test_kernel_with_library_does_not_read_auth_env(monkeypatch, tmp_path):
-    calls: list[tuple[list[tuple[str, str]], str | None, str | None, str | None, str | None]] = []
+    calls: list[tuple[list[tuple[str, str]] | None, object | None, str | None]] = []
 
     class _KernelHandle:
         @staticmethod
-        def local_with_dependency_routes(
-            dependency_routes: list[tuple[str, str]],
-            *,
-            token_host: str | None = None,
-            actor_id: str | None = None,
-            public_key_b64: str | None = None,
-            data_dir: str | None = None,
-        ):
+        def with_library_definition(_definition_json, *, routes=None, token=None, data_dir=None):
             calls.append(
                 (
-                    dependency_routes,
-                    token_host,
-                    actor_id,
-                    public_key_b64,
+                    routes,
+                    token,
                     data_dir,
                 )
             )
@@ -85,8 +81,6 @@ def test_kernel_with_library_does_not_read_auth_env(monkeypatch, tmp_path):
     assert calls == [
         (
             [("/lib/example-devco/example/0.1.0", "api.example.test")],
-            None,
-            None,
             None,
             str(tmp_path),
         )

@@ -119,12 +119,10 @@ def test_op_reflection_analysis(tmp_path: pathlib.Path) -> None:
         c = C()
 
         token = rjwt_install_token(A.class_id().path, B.class_id().path, C.class_id().path)
-        kernel = tc.KernelHandle.with_library_schema_rjwt(
-            C.class_schema_json(),
-            token["host"],
-            token["actor_id"],
-            token["public_key_b64"],
-            data_dir=str(tmp_path),
+        kernel = tc.kernel.with_library(
+            c,
+            data_dir=tmp_path,
+            token=tc.auth.SignedBearerToken(**token),
         )
 
         for library in (A, B, C):
@@ -132,7 +130,7 @@ def test_op_reflection_analysis(tmp_path: pathlib.Path) -> None:
                 library,
                 kernel=kernel,
                 data_dir=tmp_path,
-                bearer_token=token["bearer_token"],
+                token=tc.auth.SignedBearerToken(**token),
             )
             assert resp.status == 204
 

@@ -15,11 +15,11 @@ def test_with_library_infers_route_from_declared_dependency_authority(tmp_path, 
     _clear_token_env(monkeypatch)
 
     class FakeKernelHandle:
-        calls: list[tuple[list[tuple[str, str]], dict]] = []
+        calls: list[tuple[str, list[tuple[str, str]] | None, object | None, str | None]] = []
 
         @classmethod
-        def local_with_dependency_routes(cls, dependency_routes, **kwargs):
-            cls.calls.append((dependency_routes, kwargs))
+        def with_library_definition(cls, definition_json, *, routes=None, token=None, data_dir=None):
+            cls.calls.append((definition_json, routes, token, data_dir))
             return "kernel"
 
     monkeypatch.setattr(tc, "KernelHandle", FakeKernelHandle)
@@ -33,28 +33,23 @@ def test_with_library_infers_route_from_declared_dependency_authority(tmp_path, 
 
     kernel = tc.kernel.with_library(A(), data_dir=tmp_path)
     assert kernel == "kernel"
-    assert FakeKernelHandle.calls == [
-        (
-            [("/lib/example-devco/b/0.1.0", "deps.example.test:9443")],
-            {
-                "token_host": None,
-                "actor_id": None,
-                "public_key_b64": None,
-                "data_dir": str(tmp_path),
-            },
-        )
-    ]
+    assert len(FakeKernelHandle.calls) == 1
+    assert FakeKernelHandle.calls[0][1:] == (
+        [("/lib/example-devco/b/0.1.0", "deps.example.test:9443")],
+        None,
+        str(tmp_path),
+    )
 
 
 def test_with_library_rejects_dependency_override_argument(tmp_path, monkeypatch):
     _clear_token_env(monkeypatch)
 
     class FakeKernelHandle:
-        calls: list[tuple[list[tuple[str, str]], dict]] = []
+        calls: list[tuple[str, list[tuple[str, str]] | None, object | None, str | None]] = []
 
         @classmethod
-        def local_with_dependency_routes(cls, dependency_routes, **kwargs):
-            cls.calls.append((dependency_routes, kwargs))
+        def with_library_definition(cls, definition_json, *, routes=None, token=None, data_dir=None):
+            cls.calls.append((definition_json, routes, token, data_dir))
             return "kernel"
 
     monkeypatch.setattr(tc, "KernelHandle", FakeKernelHandle)
@@ -75,11 +70,11 @@ def test_with_library_uses_multi_route_constructor_when_available(tmp_path, monk
     _clear_token_env(monkeypatch)
 
     class FakeKernelHandle:
-        calls: list[tuple[list[tuple[str, str]], dict]] = []
+        calls: list[tuple[str, list[tuple[str, str]] | None, object | None, str | None]] = []
 
         @classmethod
-        def local_with_dependency_routes(cls, dependency_routes, **kwargs):
-            cls.calls.append((dependency_routes, kwargs))
+        def with_library_definition(cls, definition_json, *, routes=None, token=None, data_dir=None):
+            cls.calls.append((definition_json, routes, token, data_dir))
             return "kernel"
 
     monkeypatch.setattr(tc, "KernelHandle", FakeKernelHandle)
@@ -94,31 +89,26 @@ def test_with_library_uses_multi_route_constructor_when_available(tmp_path, monk
 
     tc.kernel.with_library(A(), data_dir=tmp_path)
 
-    assert FakeKernelHandle.calls == [
-        (
-            [
-                ("/lib/example-devco/b/0.1.0", "left.example.test:8702"),
-                ("/lib/example-devco/c/0.1.0", "right.example.test:8703"),
-            ],
-            {
-                "token_host": None,
-                "actor_id": None,
-                "public_key_b64": None,
-                "data_dir": str(tmp_path),
-            },
-        )
-    ]
+    assert len(FakeKernelHandle.calls) == 1
+    assert FakeKernelHandle.calls[0][1:] == (
+        [
+            ("/lib/example-devco/b/0.1.0", "left.example.test:8702"),
+            ("/lib/example-devco/c/0.1.0", "right.example.test:8703"),
+        ],
+        None,
+        str(tmp_path),
+    )
 
 
 def test_with_library_keeps_each_declared_dependency_route(tmp_path, monkeypatch):
     _clear_token_env(monkeypatch)
 
     class FakeKernelHandle:
-        calls: list[tuple[list[tuple[str, str]], dict]] = []
+        calls: list[tuple[str, list[tuple[str, str]] | None, object | None, str | None]] = []
 
         @classmethod
-        def local_with_dependency_routes(cls, dependency_routes, **kwargs):
-            cls.calls.append((dependency_routes, kwargs))
+        def with_library_definition(cls, definition_json, *, routes=None, token=None, data_dir=None):
+            cls.calls.append((definition_json, routes, token, data_dir))
             return "kernel"
 
     monkeypatch.setattr(tc, "KernelHandle", FakeKernelHandle)
@@ -133,7 +123,7 @@ def test_with_library_keeps_each_declared_dependency_route(tmp_path, monkeypatch
 
     tc.kernel.with_library(A(), data_dir=tmp_path)
 
-    assert FakeKernelHandle.calls[0][0] == [
+    assert FakeKernelHandle.calls[0][1] == [
         ("/lib/example-devco/b/0.1.0", "deps.example.test:8702"),
         ("/lib/example-devco/c/0.1.0", "deps.example.test:8702"),
     ]
@@ -143,11 +133,11 @@ def test_with_library_infers_authority_from_runtime_dependency_binding(tmp_path,
     _clear_token_env(monkeypatch)
 
     class FakeKernelHandle:
-        calls: list[tuple[list[tuple[str, str]], dict]] = []
+        calls: list[tuple[str, list[tuple[str, str]] | None, object | None, str | None]] = []
 
         @classmethod
-        def local_with_dependency_routes(cls, dependency_routes, **kwargs):
-            cls.calls.append((dependency_routes, kwargs))
+        def with_library_definition(cls, definition_json, *, routes=None, token=None, data_dir=None):
+            cls.calls.append((definition_json, routes, token, data_dir))
             return "kernel"
 
     monkeypatch.setattr(tc, "KernelHandle", FakeKernelHandle)
@@ -165,7 +155,7 @@ def test_with_library_infers_authority_from_runtime_dependency_binding(tmp_path,
 
     tc.kernel.with_library(Local(), data_dir=tmp_path)
 
-    assert FakeKernelHandle.calls[0][0] == [
+    assert FakeKernelHandle.calls[0][1] == [
         ("/lib/example-devco/b/0.1.0", "deps.example.test:8702")
     ]
 
@@ -235,11 +225,11 @@ def test_with_library_ignores_env_auth(tmp_path, monkeypatch):
     monkeypatch.setenv("TC_PUBLIC_KEY_B64", "pubkey")
 
     class FakeKernelHandle:
-        calls: list[tuple[list[tuple[str, str]], dict]] = []
+        calls: list[tuple[str, list[tuple[str, str]] | None, object | None, str | None]] = []
 
         @classmethod
-        def local_with_dependency_routes(cls, dependency_routes, **kwargs):
-            cls.calls.append((dependency_routes, kwargs))
+        def with_library_definition(cls, definition_json, *, routes=None, token=None, data_dir=None):
+            cls.calls.append((definition_json, routes, token, data_dir))
             return "kernel"
 
     monkeypatch.setattr(tc, "KernelHandle", FakeKernelHandle)
@@ -252,28 +242,23 @@ def test_with_library_ignores_env_auth(tmp_path, monkeypatch):
         dependencies = (dep,)
 
     tc.kernel.with_library(A(), data_dir=tmp_path)
-    assert FakeKernelHandle.calls == [
-        (
-            [("/lib/example-devco/b/0.1.0", "deps.example.test:9443")],
-            {
-                "token_host": None,
-                "actor_id": None,
-                "public_key_b64": None,
-                "data_dir": str(tmp_path),
-            },
-        )
-    ]
+    assert len(FakeKernelHandle.calls) == 1
+    assert FakeKernelHandle.calls[0][1:] == (
+        [("/lib/example-devco/b/0.1.0", "deps.example.test:9443")],
+        None,
+        str(tmp_path),
+    )
 
 
 def test_with_library_accepts_single_token_object(tmp_path, monkeypatch):
     _clear_token_env(monkeypatch)
 
     class FakeKernelHandle:
-        calls: list[tuple[list[tuple[str, str]], dict]] = []
+        calls: list[tuple[str, list[tuple[str, str]] | None, object | None, str | None]] = []
 
         @classmethod
-        def local_with_dependency_routes(cls, dependency_routes, **kwargs):
-            cls.calls.append((dependency_routes, kwargs))
+        def with_library_definition(cls, definition_json, *, routes=None, token=None, data_dir=None):
+            cls.calls.append((definition_json, routes, token, data_dir))
             return "kernel"
 
     monkeypatch.setattr(tc, "KernelHandle", FakeKernelHandle)
@@ -294,14 +279,9 @@ def test_with_library_accepts_single_token_object(tmp_path, monkeypatch):
     )
 
     assert tc.kernel.with_library(A(), data_dir=tmp_path, token=token) == "kernel"
-    assert FakeKernelHandle.calls == [
-        (
-            [("/lib/example-devco/b/0.1.0", "deps.example.test:9443")],
-            {
-                "token_host": "http://127.0.0.1:8702",
-                "actor_id": "example-admin",
-                "public_key_b64": "pubkey",
-                "data_dir": str(tmp_path),
-            },
-        )
-    ]
+    assert len(FakeKernelHandle.calls) == 1
+    assert FakeKernelHandle.calls[0][1:] == (
+        [("/lib/example-devco/b/0.1.0", "deps.example.test:9443")],
+        token,
+        str(tmp_path),
+    )

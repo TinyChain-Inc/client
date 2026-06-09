@@ -50,11 +50,19 @@ class _Remote:
     def __init__(self):
         self.calls: list[tuple[str, str, object | None, list[tuple[str, str]] | None]] = []
 
-    def request(self, method: str, path: object, *, body=None, headers=None, bearer_token=None):
-        assert bearer_token is None
+    def request(self, method: str, path: object, *, body=None, headers=None):
         normalized_headers = list(headers) if headers is not None else None
         self.calls.append((method, str(path), body, normalized_headers))
         return {"remote": "ok"}
+
+
+def _token(value: str) -> tc.auth.SignedBearerToken:
+    return tc.auth.SignedBearerToken(
+        host="http://127.0.0.1:8702",
+        actor_id="test",
+        public_key_b64="pub",
+        bearer_token=value,
+    )
 
 
 def test_stub_route_dispatch(monkeypatch):
@@ -101,7 +109,7 @@ def test_stub_route_dispatch_forwards_bearer(monkeypatch):
 
     b = B()
 
-    with tc.backend(kernel, bearer_token="t"):
+    with tc.backend(kernel, token=_token("t")):
         assert b.hello() == "ok"
 
     expected = tc.uri(b, "hello").path
@@ -171,7 +179,7 @@ def test_backend_eager_mode_executes_stub_calls_by_default(monkeypatch):
             ...
 
     e = E()
-    with tc.backend(kernel, bearer_token="token-auto"):
+    with tc.backend(kernel, token=_token("token-auto")):
         assert e.hello() == "ok"
 
     expected = tc.uri(e, "hello").path
@@ -220,11 +228,11 @@ def test_backend_mode_can_be_switched_by_nested_backend_context(monkeypatch):
             ...
 
     g = G()
-    with tc.backend(kernel, bearer_token="token-auto"):
+    with tc.backend(kernel, token=_token("token-auto")):
         eager = g.hello()
         assert eager == "ok"
 
-        with tc.backend(kernel, bearer_token="token-auto", mode="deferred"):
+        with tc.backend(kernel, token=_token("token-auto"), mode="deferred"):
             deferred = g.hello()
             assert isinstance(deferred, tc.String)
 
@@ -294,7 +302,7 @@ def test_backend_mode_deferred_preserves_cross_library_dependency_paths(monkeypa
 
     with tc.backend(
         kernel=kernel,
-        bearer_token="token-123",
+        token=_token("token-123"),
         mode="deferred",
     ):
         local_plan = local.hello()
@@ -316,7 +324,7 @@ def test_backend_routes_authority_qualified_paths(monkeypatch):
 
     op = tc.opref.get("https://api.example.test/lib/example-devco/remote/0.1.0/ping")
 
-    with tc.backend(bearer_token="token-xyz"):
+    with tc.backend(token=_token("token-xyz")):
         assert tc.execute(op) == {"remote": "ok"}
 
     assert remote.calls == [
@@ -425,7 +433,7 @@ def test_backend_authority_op_header_overrides_forwarded_bearer_token(monkeypatc
         headers=[("authorization", "Bearer op-token")],
     )
 
-    with tc.backend(bearer_token="token-xyz"):
+    with tc.backend(token=_token("token-xyz")):
         assert tc.execute(op) == {"remote": "ok"}
 
     assert remote.calls == [

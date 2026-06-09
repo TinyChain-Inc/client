@@ -52,7 +52,7 @@ class _IfAssignments:
     names: list[str]
 
 
-def transform(form):
+def transform(form, *, source: str | None = None):
     sig = inspect.signature(form)
     params = list(sig.parameters.values())
     if not params or params[0].name != "self":
@@ -62,7 +62,7 @@ def transform(form):
     if any(param.name in injected for param in params[1:]):
         raise AutographMixedContextError("explicit cxt/ctx/txn parameters are not supported in autograph mode")
 
-    src = inspect.getsource(form)
+    src = source if source is not None else inspect.getsource(form)
     src = textwrap.dedent(src)
     mod = ast.parse(src)
     fn = _find_function(mod, form.__name__)

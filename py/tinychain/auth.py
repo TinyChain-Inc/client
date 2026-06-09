@@ -13,8 +13,15 @@ class SignedBearerToken:
     host: str
     actor_id: str
     public_key_b64: str
-    secret_key_b64: str
     bearer_token: str
+    secret_key_b64: str = ""
+
+
+def bearer_token(token: object | None = None) -> str | None:
+    if token is None:
+        return None
+    bearer = getattr(token, "bearer_token", None)
+    return str(bearer) if bearer is not None else None
 
 
 def context():
