@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 import tinychain as tc
 
 
@@ -100,3 +101,14 @@ def test_string_value_render_is_the_only_value_render_surface():
     assert rendered.to_json() == "Hello, Ada!"
     assert hasattr(tc.state.Value.string("plain"), "render")
     assert not hasattr(tc.state.Value.number(1), "render")
+
+
+def test_host_rejects_client_transaction_controls():
+    host = tc.Host("https://testnet.example")
+    greeter = Greeter()
+
+    with pytest.raises(ValueError, match="transaction controls"):
+        host.url(greeter, "hello", txn_id="caller-owned")
+
+    with pytest.raises(ValueError, match="transaction controls"):
+        host.request("POST", "/lib?txn_id=caller-owned")

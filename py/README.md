@@ -562,5 +562,7 @@ and canonical TinyChain IR, not as transport-specific Python callbacks.
 
 - The public Python HTTP client should never expose transaction handles (`txn_id`)
   directly; the server mints them and handles inter-service signing internally.
+- `tc.Host` rejects caller-supplied transaction query parameters; use ordinary
+  route calls, `tc.install`, and bearer auth instead of transaction handles.
 - PyO3 bindings do not expose transaction APIs; keep transaction logic
   encapsulated inside `tc-server`.
