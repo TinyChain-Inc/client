@@ -7,6 +7,7 @@ import tinychain.testing as tc_testing
 
 from .support import rjwt_install_token
 
+
 def test_install_python_library(tmp_path: pathlib.Path):
     class Example(tc.Library):
         publisher = "example-devco"

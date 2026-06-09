@@ -850,11 +850,7 @@ def _submit_remote_library_definition(
         host = remote if token is None else Host(remote.__uri__.absolute(), token=token)
     else:
         host = Host(str(remote), token=token)
-    return host.request(
-        "PUT",
-        _uri("lib").path,
-        body=definition,
-    )
+    return host.request("PUT", _uri("lib").path, body=definition)
 
 
 def _local_backend():
@@ -913,19 +909,7 @@ def _submit_local_library_definition(
     body = json.dumps(definition, separators=(",", ":"))
     headers = [("authorization", f"Bearer {bearer_token}")]
     request = local.KernelRequest("PUT", install_path, headers, local.StateHandle(body))
-    response = kernel.dispatch(request)
-
-    txn_id = _header_value(response, "x-tc-txn-id")
-    if not txn_id:
-        return response
-
-    commit = local.KernelRequest(
-        "POST",
-        f"{install_path}?txn_id={txn_id}",
-        headers,
-        None,
-    )
-    return kernel.dispatch(commit)
+    return kernel.dispatch(request)
 
 
 def _read_wasm_b64(path: pathlib.Path) -> str:

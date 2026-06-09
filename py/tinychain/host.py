@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from typing import Iterable, Optional
-from urllib.parse import urlencode
+from urllib.parse import parse_qsl, urlencode, urlsplit
 
 import requests
 
@@ -67,7 +67,9 @@ class Host:
         )
 
     def url(self, target: object, route: str | None = None, **query: object) -> str:
+        _reject_transaction_query(query)
         path = self.link(uri(target, *([route] if route else []))).absolute()
+        _reject_transaction_control(path)
         if not query:
             return path
         encoded = urlencode(_url_query(query), doseq=True)
@@ -82,6 +84,7 @@ class Host:
         headers: Optional[Iterable[tuple[str, str]]] = None,
     ) -> object:
         target = self.link(path)
+        _reject_transaction_control(target.absolute())
         payload = None if body is None else _encode_body(body)
         merged_headers = _merge_headers(headers, self._bearer_token, payload is not None)
         response = requests.request(
@@ -91,6 +94,19 @@ class Host:
             headers=merged_headers,
         )
         return _handle_response(response)
+
+
+def _reject_transaction_query(query: dict[str, object]) -> None:
+    if any(key.lower() == "txn_id" for key in query):
+        raise ValueError("Python client does not expose transaction controls")
+
+
+def _reject_transaction_control(target: str) -> None:
+    query = urlsplit(target).query
+    if not query:
+        return
+    if any(key.lower() == "txn_id" for key, _ in parse_qsl(query, keep_blank_values=True)):
+        raise ValueError("Python client does not expose transaction controls")
 
 
 def _encode_payload(value: object) -> object:
