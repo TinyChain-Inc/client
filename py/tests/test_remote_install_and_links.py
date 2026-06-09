@@ -23,6 +23,14 @@ class _Response:
         return None
 
 
+class _EmptyCreatedResponse:
+    status_code = 201
+    text = ""
+
+    def json(self):
+        raise ValueError("empty")
+
+
 def test_host_carries_default_auth_and_builds_route_url(monkeypatch):
     calls = []
 
@@ -93,6 +101,15 @@ def test_install_python_library_to_remote_uses_canonical_payload_and_auth(monkey
     assert "/render" in encoded_ir
     assert "schema" not in payload
     assert "artifacts" not in payload
+
+
+def test_host_accepts_successful_empty_response(monkeypatch):
+    monkeypatch.setattr(
+        "tinychain.host.requests.request",
+        lambda method, url, *, data=None, headers=None: _EmptyCreatedResponse(),
+    )
+
+    assert tc.Host("https://testnet.example").request("PUT", "/lib", body={}) is None
 
 
 def test_string_value_render_is_the_only_value_render_surface():
