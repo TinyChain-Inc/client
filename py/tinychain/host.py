@@ -159,7 +159,9 @@ def _merge_headers(
 
 def _handle_response(response: requests.Response) -> object:
     status = response.status_code
-    if status == 204:
+    if 200 <= status < 300 and (
+        not getattr(response, "content", b"") or not response.text.strip()
+    ):
         return None
     try:
         payload = response.json()
