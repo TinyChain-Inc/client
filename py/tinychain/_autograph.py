@@ -567,7 +567,7 @@ class _AutographTransformer(ast.NodeTransformer):
         return ast.Call(
             func=ast.Attribute(
                 value=ast.Attribute(value=ast.Name(id="_tc_autograph", ctx=ast.Load()), attr="state", ctx=ast.Load()),
-                attr="cond_op",
+                attr="cond",
                 ctx=ast.Load(),
             ),
             args=[cond, then_op, else_op],
@@ -638,7 +638,7 @@ class _AutographTransformer(ast.NodeTransformer):
 def _eval_const_bool(expr: ast.expr) -> bool | None:
     try:
         value = ast.literal_eval(expr)
-    except Exception:
+    except (TypeError, ValueError, SyntaxError):
         return None
     return value if isinstance(value, bool) else None
 
@@ -763,7 +763,9 @@ def _autograph_opdef_post(item_fns):
                     form.extend(ctx_form[cursor:])
                     cursor = len(ctx_form)
             form.append((name, value))
-        return OpDef.post(form)
+        from .state import PostOpDef
+
+        return PostOpDef(form)
 
 
 def _find_while_state(assignments: list[ast.Assign], locals_before: set[str]) -> str | None:

@@ -251,6 +251,10 @@ else:
 
 This yields a `tc.cond(c0, t0, tc.cond(c1, t1, e))` shape in the `or_else` branch.
 
+Numeric expressions in lowered routes target TinyChain numeric value semantics
+(`tc.Number` and numeric tensor wrappers), not generic `tc.state.Scalar`
+arithmetic.
+
 ### `while` statement lowering (v0)
 
 Autograph `while` is lowered to the canonical TinyChain `TCRef::While` reference via

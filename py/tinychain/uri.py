@@ -156,6 +156,24 @@ def uri(subject: object, *path: str) -> URI | "Scalar":
     return URI(path=new_path, scheme=base.scheme, host=base.host, port=base.port)
 
 
+def path(subject: object, *parts: str) -> str:
+    resolved = uri(subject, *parts)
+    if isinstance(resolved, URI):
+        return resolved.path
+
+    # Scalar URIs should only appear when asking for a class URI without extra segments.
+    if parts:
+        raise TypeError("cannot derive a path from a Scalar URI with path segments")
+
+    scalar_uri = resolved
+    if hasattr(scalar_uri, "to_json"):
+        raw = scalar_uri.to_json()
+        if isinstance(raw, str):
+            return raw
+
+    return str(scalar_uri)
+
+
 def authority(value: str | URI) -> str:
     if isinstance(value, URI):
         parsed = value

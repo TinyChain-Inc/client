@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Type
 
-from .state import Scalar, autobox
+from .state import Scalar, autobox, cond as state_cond
 
 
 def _gcs(*types: Type) -> Type:
@@ -31,5 +31,5 @@ def cond(condition, then, or_else=None):
     else:
         rtype = Scalar
 
-    result = Scalar.cond(condition, autobox(then), autobox(or_else))
+    result = state_cond(condition, autobox(then), autobox(or_else))
     return result if rtype is Scalar else result

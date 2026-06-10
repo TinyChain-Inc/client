@@ -79,6 +79,38 @@ Use one `with tc.backend(...):` block to run mixed local + remote calls:
 This keeps method definitions transport-agnostic while giving explicit per-context
 execution control for local + remote calls in the same flow.
 
+## Canonical application call path
+
+Use this order as the default application path:
+
+1. Define routes with `tc.Library` and `@tc.get` / `@tc.post`.
+2. Call bound route methods directly.
+3. Use `with tc.backend(...)` to select local/remote execution context.
+
+Treat these as advanced APIs (for framework internals, adapters, or explicit
+plan execution tooling), not the ordinary app path:
+
+- `tc.execute(...)`
+- `tc.Host.execute(...)`
+- `tc.Host.request(...)`
+
+### Canonical route stub call shape
+
+Prefer keyword arguments for route parameters:
+
+```python
+result = library.route(name="Ada", count=3)
+```
+
+When you need to pass one explicit payload object, use `body=`:
+
+```python
+result = library.route(body={"name": "Ada"})
+```
+
+Avoid introducing new route-call conventions. Positional argument forms are
+supported for compatibility but are not the recommended authoring style.
+
 ## 60-second Greeter demo shape
 
 The ordinary demo path should stay host-generic: define a `Library`, call it
@@ -562,6 +594,10 @@ keeping HTTP and PyO3 in lockstep.
 For tiny, expression-only helpers, `tc.post` accepts a Python `lambda` and compiles
 it into a POST `OpDef`. Complex control flow should be expressed as named routes
 and canonical TinyChain IR, not as transport-specific Python callbacks.
+
+`tc.state.Scalar` is a generic IR container and should not be treated as a
+numeric type. Use `tc.Number` (and numeric tensor wrappers) for arithmetic in
+client code and transforms.
 
 ## Transaction handles
 

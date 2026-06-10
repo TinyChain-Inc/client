@@ -7,7 +7,7 @@ from .executor import execute as _dispatch_execute
 from .opref import OpRef
 from . import opref
 from .ref import Ref
-from .state.value import Bool, Map, Number, String, Tuple
+from .state.value import Bool, C64, C128, Complex, F32, F64, Float, I64, Integer, Link, Map, Null, Number, String, Tuple, U64
 from .uri import URI, authority, origin, uri
 from . import compute
 from . import state
@@ -25,7 +25,18 @@ __all__ = [
     "opref",
     "Ref",
     "Bool",
+    "Null",
+    "Link",
     "Number",
+    "Integer",
+    "I64",
+    "U64",
+    "Float",
+    "F32",
+    "F64",
+    "Complex",
+    "C64",
+    "C128",
     "Map",
     "Tuple",
     "String",
@@ -75,7 +86,7 @@ def execute(op: "OpRef | Ref") -> object:
             if isinstance(text, (bytes, bytearray)):
                 text = text.decode("utf-8", errors="replace")
             message = text if isinstance(text, str) else str(text)
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         message = None
     if message:
         raise AssertionError(f"unexpected status {status}: {message}")
@@ -110,7 +121,7 @@ try:  # pragma: no cover
         "Tensor",
         "Value",
     ]
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     local = None
 
     class _MissingBackend:

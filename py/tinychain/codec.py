@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import json
 
-from .uri import uri
+from .uri import path
 
 
-_COLLECTION_TENSOR = uri("state", "collection", "tensor").path
-_DTYPE_F32 = uri("state", "scalar", "value", "number", "float", "32").path
-_DTYPE_U64 = uri("state", "scalar", "value", "number", "uint", "64").path
+_COLLECTION_TENSOR = path("state", "collection", "tensor")
+_DTYPE_F32 = path("state", "scalar", "value", "number", "float", "32")
+_DTYPE_U64 = path("state", "scalar", "value", "number", "uint", "64")
 
 
 def _decode_tensor(payload: object) -> object:
@@ -21,13 +21,13 @@ def _decode_tensor(payload: object) -> object:
     dtype = meta[0]
     try:
         shape = [int(dim) for dim in meta[1]]
-    except Exception:
+    except (TypeError, ValueError):
         return payload
     decoded_values = [decode_payload(value) for value in values] if isinstance(values, list) else values
 
     try:
         import tinychain as tc
-    except Exception:
+    except ImportError:
         tc = None
 
     if tc is not None and hasattr(tc, "Tensor"):
@@ -36,7 +36,7 @@ def _decode_tensor(payload: object) -> object:
                 return tc.Tensor.dense_f32(shape, [float(value) for value in decoded_values])
             if dtype == _DTYPE_U64:
                 return tc.Tensor.dense_u64(shape, [int(value) for value in decoded_values])
-        except Exception:
+        except (TypeError, ValueError):
             pass
 
     return {
@@ -60,18 +60,20 @@ def _decode_collections(payload: object) -> object:
 
 def decode_payload(payload: object) -> object:
     from .state import OpDef, TCRef
-    from .state.value import Value
+    from .state.value import Map, Tuple, Value, form_of as value_form_of
 
     def _project_value(value: Value) -> object:
-        if value.kind == "map":
-            assert isinstance(value.value, dict)
-            return {k: _project_value(v) for k, v in value.value.items()}
+        if isinstance(value, Map):
+            map_form = value_form_of(value)
+            assert isinstance(map_form, dict)
+            return {k: _project_value(v) for k, v in map_form.items()}
 
-        if value.kind == "tuple":
-            assert isinstance(value.value, list)
-            return [_project_value(v) for v in value.value]
+        if isinstance(value, Tuple):
+            tuple_form = value_form_of(value)
+            assert isinstance(tuple_form, list)
+            return [_project_value(v) for v in tuple_form]
 
-        return value.value
+        return value_form_of(value)
 
     unwrapped = _decode_collections(payload)
     if unwrapped is None or isinstance(unwrapped, (bool, int, float, str)):
@@ -80,22 +82,22 @@ def decode_payload(payload: object) -> object:
     if isinstance(unwrapped, dict):
         if len(unwrapped) == 1:
             (key, _value), = unwrapped.items()
-            if isinstance(key, str) and key.startswith(uri("state", "scalar", "op").path):
+            if isinstance(key, str) and key.startswith(path("state", "scalar", "op")):
                 try:
                     return OpDef.from_json(unwrapped)
-                except Exception:
+                except (TypeError, ValueError):
                     pass
 
             if isinstance(key, str) and (key.startswith("/") or key.startswith("$")):
                 try:
                     return TCRef.from_json(unwrapped)
-                except Exception:
+                except (TypeError, ValueError):
                     pass
 
             try:
                 value = Value.from_json(unwrapped)
                 return _project_value(value)
-            except Exception:
+            except (TypeError, ValueError):
                 pass
 
         return {k: decode_payload(v) for k, v in unwrapped.items()}

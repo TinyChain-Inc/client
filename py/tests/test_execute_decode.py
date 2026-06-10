@@ -110,7 +110,7 @@ def test_execute_decodes_typed_tensor_when_available(monkeypatch):
 
 
 def test_execute_decodes_opdef_map_to_python_opdef(monkeypatch):
-    payload = tc.state.OpDef.post([("result", 1)]).to_json()
+    payload = tc.state.PostOpDef([("result", 1)]).to_json()
     monkeypatch.setattr(tc, "_dispatch_execute", lambda _op: _Response(payload, status=200))
 
     result = tc.execute(tc.opref.get("/state/opdef"))

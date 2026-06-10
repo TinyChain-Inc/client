@@ -32,8 +32,8 @@ def test_pyo3_kernel_resolves_opref_over_http_gateway(tmp_path):
 
         # Control check: the remote route itself is reachable and returns the expected value.
         host = tc.Host(f"http://{addr}")
-        assert host.execute(tc.OpRef("GET", b_hello, body="World")) == "Hello, World!"
-        assert host.execute(tc.String(tc.OpRef("GET", b_hello, body="World"))) == "Hello, World!"
+        assert host.execute(tc.opref.get(b_hello, body="World")) == "Hello, World!"
+        assert host.execute(tc.String(tc.opref.get(b_hello, body="World"))) == "Hello, World!"
 
         # The local kernel should not proxy arbitrary dependency paths directly.
         with pytest.raises(ValueError):

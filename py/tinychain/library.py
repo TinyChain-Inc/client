@@ -9,10 +9,11 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Optional, get_args, get_origin, get_type_hints
 
 from .auth import bearer_token as _bearer_token
+from . import opref as runtime_opref
 from .opref import OpRef
 from .ref import Ref
 from . import _autograph
-from .state import ContextResult, OpDef, Scalar, TCRef, autobox, context, current_context, scoped_context
+from .state import ContextResult, DeleteOpDef, DeleteOpRef, GetOpDef, GetOpRef, IdRef, OpDef, OpRef as StateOpRef, PostOpDef, PostOpRef, PutOpDef, PutOpRef, Scalar, TCRef, autobox, context, current_context, form_of, map_of as scalar_map_of, scalar_for_hint, scoped_context, tcref_form_of, tuple_of as scalar_tuple_of
 from .state.value import Bool, Map, Number, String, Tuple, Value
 from .uri import URI, _class_resource_name, _segment, uri as _uri
 
@@ -75,6 +76,11 @@ def self_subject(*path: str) -> str:
     if not path:
         return "$self"
     return "$self/" + "/".join(path)
+
+
+def _compile_self_instance(library: type["Library"]) -> "Library":
+    return library()
+
 
 def _route_path(subject: object, route_name: str) -> str:
     for attr in ("publisher", "name", "version"):
@@ -152,7 +158,7 @@ class Route:
     def _return_type(self) -> Optional[type]:
         try:
             rtype = get_type_hints(self.form, globalns=self.form.__globals__).get("return")
-        except Exception:
+        except (NameError, TypeError):
             return None
         if rtype is None:
             sig_rtype = inspect.signature(self.form).return_annotation
@@ -172,7 +178,7 @@ class Route:
         sig = inspect.signature(self.form)
         try:
             hints = get_type_hints(self.form, globalns=self.form.__globals__)
-        except Exception:
+        except (NameError, TypeError):
             hints = {}
 
         params: list[inspect.Parameter] = []
@@ -192,7 +198,16 @@ class Route:
     def _opref(self, instance: object) -> OpRef[Any]:
         route_name = self.name or self.form.__name__
         path = _route_path(instance, route_name)
-        return OpRef(method=self.method, path=path)
+        method = self.method.upper()
+        if method == "GET":
+            return runtime_opref.get(path)
+        if method == "PUT":
+            return runtime_opref.put(path)
+        if method == "POST":
+            return runtime_opref.post(path)
+        if method == "DELETE":
+            return runtime_opref.delete(path)
+        raise ValueError(f"unsupported route method {self.method}")
 
     def opdef(self, instance: object) -> OpDef:
         sig = inspect.signature(self.form)
@@ -208,7 +223,7 @@ class Route:
                 or instance.version != getattr(library_cls, "version", None)
             ):
                 raise TypeError("Library instance fields must match class attributes")
-        return _compile_opdef_route(self, library_cls, params)
+        return _compile_opdef_route(self, _compile_self_instance(library_cls), params)
 
     def __get__(self, instance: object, owner: type | None = None):
         if instance is None:
@@ -253,7 +268,7 @@ class Route:
 
             opref = self._opref(instance)
             if body is not None:
-                opref = OpRef(method=opref.method, path=opref.path, headers=opref.headers, body=body)
+                opref = opref.with_body(body)
             rtype = self._return_type()
             result = rtype(opref) if rtype is not None else opref
 
@@ -341,6 +356,10 @@ def _capture_source(form: Callable[..., Any]) -> str | None:
 
 def _compile_opdef_callable(form: Callable[..., Any], *, method: str) -> OpDef:
     sig = inspect.signature(form)
+    try:
+        hints = get_type_hints(form, globalns=form.__globals__)
+    except (NameError, TypeError):
+        hints = {}
     params = list(sig.parameters.values())
     if params and params[0].name == "self":
         raise TypeError("expected a standalone callable, not a method")
@@ -355,7 +374,8 @@ def _compile_opdef_callable(form: Callable[..., Any], *, method: str) -> OpDef:
                 raise TypeError("variadic opdef callables are not supported")
             if param.name in injected_names:
                 raise TypeError(f"reserved parameter '{param.name}' is not supported in opdef callables")
-            placeholder = Scalar.id(param.name)
+            annotation = hints.get(param.name, param.annotation)
+            placeholder = scalar_for_hint(param.name, _runtime_type_hint(annotation, default=Value))
             arg_names.append(param.name)
             if param.kind == param.KEYWORD_ONLY:
                 kwargs[param.name] = placeholder
@@ -402,16 +422,16 @@ def _compile_opdef_callable(form: Callable[..., Any], *, method: str) -> OpDef:
 def _opdef_from_method(method: str, arg_names: list[str], form: list[tuple[str, Scalar]]) -> OpDef:
     if method == "GET":
         key_name = arg_names[0] if arg_names else "key"
-        return OpDef.get(key_name, form)
+        return GetOpDef(key_name, form)
     if method == "PUT":
         key_name = arg_names[0] if len(arg_names) > 0 else "key"
         value_name = arg_names[1] if len(arg_names) > 1 else "value"
-        return OpDef.put(key_name, value_name, form)
+        return PutOpDef(key_name, value_name, form)
     if method == "POST":
-        return OpDef.post(form)
+        return PostOpDef(form)
     if method == "DELETE":
         key_name = arg_names[0] if arg_names else "key"
-        return OpDef.delete(key_name, form)
+        return DeleteOpDef(key_name, form)
     raise ValueError(f"unsupported opdef method {method}")
 
 
@@ -424,7 +444,7 @@ def _class_dependencies(cls: type) -> tuple[URI, ...]:
         if hasattr(value, "id") and callable(getattr(value, "id")):
             try:
                 dep = value.id()
-            except Exception:
+            except (TypeError, AttributeError):
                 continue
             if dep not in deps:
                 deps.append(dep)
@@ -560,26 +580,32 @@ def compile_ir(library: Library | type[Library]) -> dict:
 
 
 def _compile_route(route: Route, library: type[Library]) -> object:
+    compile_subject = _compile_self_instance(library)
     sig = inspect.signature(route.form)
     params = list(sig.parameters.values())
     if not params or params[0].name != "self":
         raise TypeError("route form must begin with a `self` parameter")
 
     if len(params) > 1:
-        return _compile_opdef_route(route, library, params)
+        return _compile_opdef_route(route, compile_subject, params)
 
-    result = route.form(library)
+    result = route.form(compile_subject)
     if isinstance(result, (OpDef, Scalar)):
-        return _compile_opdef_route(route, library, params)
+        return _compile_opdef_route(route, compile_subject, params)
 
     return result
 
 
 def _compile_opdef_route(
     route: Route,
-    library: type[Library],
+    library: Library,
     params: list[inspect.Parameter],
 ) -> OpDef:
+
+    try:
+        hints = get_type_hints(route.form, globalns=route.form.__globals__)
+    except (NameError, TypeError):
+        hints = {}
 
     injected_names = {"cxt", "ctx", "txn"}
     form = route.form
@@ -610,7 +636,8 @@ def _compile_opdef_route(
                 else:
                     args.append(injected)
                 continue
-            placeholder = Scalar.id(param.name)
+            annotation = hints.get(param.name, param.annotation)
+            placeholder = scalar_for_hint(param.name, _runtime_type_hint(annotation, default=Value))
             if param.kind == param.KEYWORD_ONLY:
                 kwargs[param.name] = placeholder
             else:
@@ -698,76 +725,87 @@ def _validate_opdef(opdef: OpDef, allowed_inputs: set[str]) -> None:
 
     for _, scalar in opdef.form:
         for node in _walk_scalars_with_opdef(scalar):
-            if node.ref is not None:
-                _validate_tcref(node.ref, allowed, form_map)
+            node_form = form_of(node)
+            if isinstance(node_form, TCRef):
+                _validate_tcref(node_form, allowed, form_map)
 
 
 def _inline_opref_refs(opdef: OpDef) -> OpDef:
     form_map = {name: scalar for name, scalar in opdef.form}
 
     def resolve_scalar(scalar: Scalar) -> Scalar:
-        if scalar.ref is not None and scalar.ref.op is not None and isinstance(scalar.ref.op, Scalar):
-            op_scalar = scalar.ref.op
-            if op_scalar.ref is not None and op_scalar.ref.id is not None:
-                target = form_map.get(op_scalar.ref.id.name)
-                if target is not None and target.ref is not None and isinstance(target.ref.op, OpRef):
-                    return Scalar(ref=TCRef(op=target.ref.op))
+        scalar_form = form_of(scalar)
+        if isinstance(scalar_form, TCRef):
+            ref_form = tcref_form_of(scalar_form)
+            if isinstance(ref_form, Scalar):
+                op_scalar = ref_form
+            else:
+                op_scalar = None
+        else:
+            op_scalar = None
 
-        if scalar.op is not None:
-            return Scalar(op=_inline_opref_refs(scalar.op))
-        if scalar.map is not None:
-            return Scalar.map_of({key: resolve_scalar(value) for key, value in scalar.map.items()})
-        if scalar.tuple is not None:
-            return Scalar.tuple_of([resolve_scalar(value) for value in scalar.tuple])
+        if isinstance(op_scalar, Scalar):
+            op_form = form_of(op_scalar)
+            if isinstance(op_form, TCRef) and isinstance(tcref_form_of(op_form), IdRef):
+                target_id = tcref_form_of(op_form)
+                target = form_map.get(target_id.name)
+                target_form = form_of(target) if target is not None else None
+                if isinstance(target_form, TCRef) and isinstance(tcref_form_of(target_form), StateOpRef):
+                    return Scalar(ref=TCRef(tcref_form_of(target_form)))
+
+        if isinstance(scalar_form, OpDef):
+            return Scalar(_inline_opref_refs(scalar_form))
+        if isinstance(scalar_form, dict):
+            return scalar_map_of({key: resolve_scalar(value) for key, value in scalar_form.items()})
+        if isinstance(scalar_form, (list, tuple)):
+            return scalar_tuple_of([resolve_scalar(value) for value in scalar_form])
         return scalar
 
-    return OpDef(
-        method=opdef.method,
-        form=[(name, resolve_scalar(scalar)) for name, scalar in opdef.form],
-        key=opdef.key,
-        value=opdef.value,
-    )
+    resolved_form = [(name, resolve_scalar(scalar)) for name, scalar in opdef.form]
+    if isinstance(opdef, GetOpDef):
+        return GetOpDef(opdef.key, resolved_form)
+    if isinstance(opdef, PutOpDef):
+        return PutOpDef(opdef.key, opdef.value, resolved_form)
+    if isinstance(opdef, DeleteOpDef):
+        return DeleteOpDef(opdef.key, resolved_form)
+    if isinstance(opdef, PostOpDef):
+        return PostOpDef(resolved_form)
+
+    raise TypeError(f"unsupported OpDef type {type(opdef).__name__}")
 
 
 def _validate_tcref(tcref, allowed: set[str], form_map: dict[str, Scalar]) -> None:
-    if tcref.id is not None:
-        name = tcref.id.name
+    ref_form = tcref_form_of(tcref)
+    if isinstance(ref_form, IdRef):
+        name = ref_form.name
         if name not in allowed:
             logging.info("OpDef depends on undefined id $%s", name)
 
-    if tcref.op is not None:
-        if isinstance(tcref.op, OpRef):
-            _validate_opref(tcref.op)
-        elif isinstance(tcref.op, Scalar):
-            resolved = _resolve_opref_ref(tcref.op, form_map)
-            if resolved is not None:
-                _validate_opref(resolved)
+    if isinstance(ref_form, StateOpRef):
+        _validate_opref(ref_form)
+    elif isinstance(ref_form, Scalar):
+        resolved = _resolve_opref_ref(ref_form, form_map)
+        if resolved is not None:
+            _validate_opref(resolved)
 
 
-def _validate_opref(opref: OpRef[Any]) -> None:
-    method = opref.method.upper()
-    if method == "GET":
-        if not isinstance(opref.args, list) or len(opref.args) != 1:
-            raise ValueError("GET OpRef expects a single-element list args")
-    elif method == "PUT":
-        if not isinstance(opref.args, list) or len(opref.args) != 2:
-            raise ValueError("PUT OpRef expects a two-element list args")
-    elif method == "POST":
-        if not isinstance(opref.args, dict):
-            raise ValueError("POST OpRef expects a dict args")
-    elif method == "DELETE":
-        pass
-    else:
-        raise ValueError(f"unsupported OpRef method {opref.method}")
+def _validate_opref(opref: StateOpRef) -> None:
+    if isinstance(opref, (GetOpRef, PutOpRef, PostOpRef, DeleteOpRef)):
+        return
+
+    raise ValueError(f"unsupported OpRef type {type(opref).__name__}")
 
 
-def _resolve_opref_ref(value: Scalar, form_map: dict[str, Scalar]) -> OpRef | None:
-    if value.ref is not None and isinstance(value.ref.op, OpRef):
-        return value.ref.op
-    if value.ref is not None and value.ref.id is not None:
-        target = form_map.get(value.ref.id.name)
-        if target is not None and target is not value:
-            return _resolve_opref_ref(target, form_map)
+def _resolve_opref_ref(value: Scalar, form_map: dict[str, Scalar]) -> StateOpRef | None:
+    value_form = form_of(value)
+    if isinstance(value_form, TCRef):
+        ref_form = tcref_form_of(value_form)
+        if isinstance(ref_form, StateOpRef):
+            return ref_form
+        if isinstance(ref_form, IdRef):
+            target = form_map.get(ref_form.name)
+            if target is not None and target is not value:
+                return _resolve_opref_ref(target, form_map)
     return None
 
 
@@ -777,14 +815,15 @@ def _walk_scalars_with_opdef(root: Scalar):
         node = stack.pop()
         yield node
 
-        if node.op is not None:
-            for _, inner in node.op.form:
+        node_form = form_of(node)
+        if isinstance(node_form, OpDef):
+            for _, inner in node_form.form:
                 stack.append(inner)
-        if node.map is not None:
-            for value in reversed(list(node.map.values())):
+        if isinstance(node_form, dict):
+            for value in reversed(list(node_form.values())):
                 stack.append(value)
-        if node.tuple is not None:
-            for value in reversed(list(node.tuple)):
+        if isinstance(node_form, (list, tuple)):
+            for value in reversed(list(node_form)):
                 stack.append(value)
 
 
@@ -866,7 +905,7 @@ def _submit_remote_library_definition(
 def _local_backend():
     try:
         import tinychain_local as local  # type: ignore
-    except Exception as exc:  # pragma: no cover
+    except ImportError as exc:  # pragma: no cover
         raise ImportError("install requires the optional `tinychain-local` backend") from exc
     return local
 

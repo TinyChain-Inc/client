@@ -32,7 +32,7 @@ def context():
     """
     import tinychain as tc
 
-    return tc.Ref(tc.OpRef("GET", tc.uri("host", "auth", "context").path))
+    return tc.Ref(tc.opref.get(tc.uri("host", "auth", "context").path))
 
 
 def _resolve_minter_command(

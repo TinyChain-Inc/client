@@ -1,0 +1,196 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any, Iterator, Sequence
+
+if TYPE_CHECKING:
+    from . import Scalar
+
+
+class OpDef:
+    __slots__ = ()
+
+    METHOD: str = ""
+
+    @property
+    def method(self) -> str:
+        return type(self).METHOD
+
+    @property
+    def form(self) -> list[tuple[str, "Scalar"]]:
+        raise NotImplementedError()
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, OpDef) and self.to_json() == other.to_json()
+
+    def __hash__(self) -> int:
+        return hash(repr(self.to_json()))
+
+    def last_id(self) -> str | None:
+        if not self.form:
+            return None
+        return self.form[-1][0]
+
+    def walk_scalars(self) -> Iterator["Scalar"]:
+        from . import _iter_scalar_nodes
+
+        for _, scalar in self.form:
+            yield from _iter_scalar_nodes(scalar)
+
+    def reflect_form(self) -> "Scalar":
+        from . import OPDEF_REFLECT_FORM, PostOpRef, Scalar, TCRef
+
+        opref = PostOpRef(OPDEF_REFLECT_FORM, {"op": self})
+        return Scalar(ref=TCRef(opref))
+
+    def reflect_last_id(self) -> "Scalar":
+        from . import OPDEF_REFLECT_LAST_ID, PostOpRef, Scalar, TCRef
+
+        opref = PostOpRef(OPDEF_REFLECT_LAST_ID, {"op": self})
+        return Scalar(ref=TCRef(opref))
+
+    def reflect_scalars(self) -> "Scalar":
+        from . import OPDEF_REFLECT_SCALARS, PostOpRef, Scalar, TCRef
+
+        opref = PostOpRef(OPDEF_REFLECT_SCALARS, {"op": self})
+        return Scalar(ref=TCRef(opref))
+
+    def class_(self) -> "Scalar":
+        from . import Scalar
+
+        return Scalar(self).class_()
+
+    def to_json(self) -> dict[str, object]:
+        raise NotImplementedError()
+
+    @staticmethod
+    def from_json(obj: Any) -> "OpDef":
+        from . import OPDEF_DELETE, OPDEF_GET, OPDEF_POST, OPDEF_PUT, _decode_form
+
+        if not isinstance(obj, dict) or len(obj) != 1:
+            raise TypeError("expected an OpDef map")
+
+        (key, value), = obj.items()
+        if not isinstance(key, str):
+            raise TypeError("expected OpDef map key to be a string")
+
+        if key == OPDEF_GET:
+            if not isinstance(value, list) or len(value) != 2:
+                raise TypeError("invalid GET opdef encoding")
+            key_name, form = value
+            if not isinstance(key_name, str):
+                raise TypeError("expected GET key name to be a string")
+            return GetOpDef(key_name, _decode_form(form))
+
+        if key == OPDEF_PUT:
+            if not isinstance(value, list) or len(value) != 3:
+                raise TypeError("invalid PUT opdef encoding")
+            key_name, value_name, form = value
+            if not isinstance(key_name, str) or not isinstance(value_name, str):
+                raise TypeError("expected PUT key/value names to be strings")
+            return PutOpDef(key_name, value_name, _decode_form(form))
+
+        if key == OPDEF_POST:
+            return PostOpDef(_decode_form(value))
+
+        if key == OPDEF_DELETE:
+            if not isinstance(value, list) or len(value) != 2:
+                raise TypeError("invalid DELETE opdef encoding")
+            key_name, form = value
+            if not isinstance(key_name, str):
+                raise TypeError("expected DELETE key name to be a string")
+            return DeleteOpDef(key_name, _decode_form(form))
+
+        raise TypeError("unexpected OpDef map key")
+
+
+class GetOpDef(OpDef):
+    __slots__ = ("key", "_form")
+
+    METHOD = "GET"
+
+    def __init__(self, key: str, form: Sequence[tuple[str, object]]):
+        from . import _coerce_form
+
+        if not isinstance(key, str):
+            raise TypeError("GET OpDef requires a string key")
+
+        self.key = key
+        self._form = _coerce_form(form)
+
+    @property
+    def form(self) -> list[tuple[str, "Scalar"]]:
+        return self._form
+
+    def to_json(self) -> dict[str, object]:
+        from . import OPDEF_GET, _encode_form
+
+        return {OPDEF_GET: [self.key, _encode_form(self.form)]}
+
+
+class PutOpDef(OpDef):
+    __slots__ = ("key", "value", "_form")
+
+    METHOD = "PUT"
+
+    def __init__(self, key: str, value: str, form: Sequence[tuple[str, object]]):
+        from . import _coerce_form
+
+        if not isinstance(key, str) or not isinstance(value, str):
+            raise TypeError("PUT OpDef requires string key and value bindings")
+
+        self.key = key
+        self.value = value
+        self._form = _coerce_form(form)
+
+    @property
+    def form(self) -> list[tuple[str, "Scalar"]]:
+        return self._form
+
+    def to_json(self) -> dict[str, object]:
+        from . import OPDEF_PUT, _encode_form
+
+        return {OPDEF_PUT: [self.key, self.value, _encode_form(self.form)]}
+
+
+class PostOpDef(OpDef):
+    __slots__ = ("_form",)
+
+    METHOD = "POST"
+
+    def __init__(self, form: Sequence[tuple[str, object]]):
+        from . import _coerce_form
+
+        self._form = _coerce_form(form)
+
+    @property
+    def form(self) -> list[tuple[str, "Scalar"]]:
+        return self._form
+
+    def to_json(self) -> dict[str, object]:
+        from . import OPDEF_POST, _encode_form
+
+        return {OPDEF_POST: _encode_form(self.form)}
+
+
+class DeleteOpDef(OpDef):
+    __slots__ = ("key", "_form")
+
+    METHOD = "DELETE"
+
+    def __init__(self, key: str, form: Sequence[tuple[str, object]]):
+        from . import _coerce_form
+
+        if not isinstance(key, str):
+            raise TypeError("DELETE OpDef requires a string key")
+
+        self.key = key
+        self._form = _coerce_form(form)
+
+    @property
+    def form(self) -> list[tuple[str, "Scalar"]]:
+        return self._form
+
+    def to_json(self) -> dict[str, object]:
+        from . import OPDEF_DELETE, _encode_form
+
+        return {OPDEF_DELETE: [self.key, _encode_form(self.form)]}
