@@ -71,7 +71,6 @@ def _encode_json_body(value: Any) -> "object":
 def _encode_payload(value: Any) -> Any:
     from .state import (
         IdRef,
-        IfRef,
         OpDef,
         OpRef as StateOpRef,
         Scalar,
@@ -93,7 +92,6 @@ def _encode_payload(value: Any) -> Any:
             Scalar,
             Value,
             TCRef,
-            IfRef,
             While,
             IdRef,
             OpDef,

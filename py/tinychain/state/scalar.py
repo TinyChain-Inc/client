@@ -130,26 +130,10 @@ class While:
 
 
 @dataclass(frozen=True, slots=True)
-class IfRef:
+class Cond:
     cond: "TCRef"
     then: "Scalar"
     or_else: "Scalar"
-
-    def to_json(self) -> dict[str, object]:
-        return {
-            TCREF_IF: [
-                self.cond.to_json(),
-                self.then.to_json(),
-                self.or_else.to_json(),
-            ]
-        }
-
-
-@dataclass(frozen=True, slots=True)
-class CondOp:
-    cond: "TCRef"
-    then: "OpDef"
-    or_else: "OpDef"
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -165,8 +149,7 @@ class CondOp:
 class TCRef:
     op: OpRef | None = None
     id: IdRef | None = None
-    if_ref: IfRef | None = None
-    cond_op: CondOp | None = None
+    cond: Cond | None = None
     while_loop: While | None = None
     for_each: "ForEach | None" = None
 
@@ -179,10 +162,8 @@ class TCRef:
             return self.op.to_json()
         if self.id is not None:
             return {self.id.key(): []}
-        if self.if_ref is not None:
-            return self.if_ref.to_json()
-        if self.cond_op is not None:
-            return self.cond_op.to_json()
+        if self.cond is not None:
+            return self.cond.to_json()
         if self.while_loop is not None:
             return self.while_loop.to_json()
         if self.for_each is not None:
@@ -204,29 +185,16 @@ class TCRef:
         if not (key == OPREF_DELETE_TAG or key.startswith("/") or key.startswith("$")):
             raise TypeError("not a TCRef op map")
 
-        if key == TCREF_IF:
+        if key == TCREF_IF or key == TCREF_COND:
             if not isinstance(value, list) or len(value) != 3:
-                raise TypeError("invalid If ref encoding")
+                raise TypeError("invalid Cond ref encoding")
             raw_cond, raw_then, raw_or_else = value
             cond = TCRef.from_json(raw_cond)
             return TCRef(
-                if_ref=IfRef(
+                cond=Cond(
                     cond,
                     Scalar.from_json(raw_then),
                     Scalar.from_json(raw_or_else),
-                )
-            )
-
-        if key == TCREF_COND:
-            if not isinstance(value, list) or len(value) != 3:
-                raise TypeError("invalid CondOp ref encoding")
-            raw_cond, raw_then, raw_or_else = value
-            cond = TCRef.from_json(raw_cond)
-            return TCRef(
-                cond_op=CondOp(
-                    cond,
-                    OpDef.from_json(raw_then),
-                    OpDef.from_json(raw_or_else),
                 )
             )
 
@@ -262,7 +230,7 @@ class TCRef:
 
 
 def autobox(
-    obj: "Scalar | TCRef | OpRef | IdRef | OpDef | Value | IfRef | CondOp | While | ForEach | object",
+    obj: "Scalar | TCRef | OpRef | IdRef | OpDef | Value | Cond | While | ForEach | object",
 ) -> "Scalar":
     if isinstance(obj, Scalar):
         return obj
@@ -275,10 +243,8 @@ def autobox(
         return Scalar(value=Value.link(obj))
     if isinstance(obj, TCRef):
         return Scalar(ref=obj)
-    if isinstance(obj, IfRef):
-        return Scalar(ref=TCRef(if_ref=obj))
-    if isinstance(obj, CondOp):
-        return Scalar(ref=TCRef(cond_op=obj))
+    if isinstance(obj, Cond):
+        return Scalar(ref=TCRef(cond=obj))
     if isinstance(obj, While):
         return Scalar(ref=TCRef(while_loop=obj))
     if isinstance(obj, ForEach):
@@ -324,6 +290,13 @@ def while_loop(
     state: "Scalar | Value | object",
 ) -> "Scalar":
     return Scalar.while_loop(cond, op, state)
+
+
+def after(
+    dependency: "Scalar | Value | object",
+    then: "Scalar | Value | object",
+) -> "Scalar":
+    return Scalar.after(dependency, then)
 
 
 def cond_op(
@@ -388,16 +361,30 @@ class Scalar:
         )
 
     @staticmethod
-    def if_ref(
+    def after(
+        dependency: "Scalar | Value | object",
+        then: "Scalar | Value | object",
+    ) -> "Scalar":
+        from .context import current_context
+
+        bound_then = autobox(then)
+        ctx = current_context()
+        if ctx is not None:
+            # Bind an explicit dependency edge so side-effect order is encoded in the OpDef form.
+            ctx.bind_auto(autobox(dependency), prefix="_after")
+        return bound_then
+
+    @staticmethod
+    def cond(
         cond: "TCRef | Scalar | OpRef | IdRef | object",
         then: "Scalar | Value | object",
         or_else: "Scalar | Value | object",
     ) -> "Scalar":
         cond_ref = cond if isinstance(cond, TCRef) else autobox(cond).ref
         if cond_ref is None:
-            raise TypeError("if_ref condition must be a ref")
+            raise TypeError("cond condition must be a ref")
         return autobox(
-            IfRef(
+            Cond(
                 cond_ref,
                 autobox(then),
                 autobox(or_else),
@@ -410,10 +397,7 @@ class Scalar:
         then: "OpDef",
         or_else: "OpDef",
     ) -> "Scalar":
-        cond_ref = cond if isinstance(cond, TCRef) else autobox(cond).ref
-        if cond_ref is None:
-            raise TypeError("cond_op condition must be a ref")
-        return autobox(CondOp(cond_ref, then, or_else))
+        return Scalar.cond(cond, Scalar(op=then), Scalar(op=or_else))
 
     def to_json(self) -> object:
         if self.ref is not None:
@@ -846,10 +830,6 @@ class OpDef:
             return OpDef.delete(key_name, _decode_form(form))
 
         raise TypeError("unexpected OpDef map key")
-
-
-class If:
-    __uri__ = uri("state", "scalar", "ref", "if")
 
 
 @dataclass(frozen=True, slots=True)

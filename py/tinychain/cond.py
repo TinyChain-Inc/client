@@ -31,5 +31,5 @@ def cond(condition, then, or_else=None):
     else:
         rtype = Scalar
 
-    result = Scalar.if_ref(condition, autobox(then), autobox(or_else))
+    result = Scalar.cond(condition, autobox(then), autobox(or_else))
     return result if rtype is Scalar else result

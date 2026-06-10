@@ -122,8 +122,24 @@ class _AutographTransformer(ast.NodeTransformer):
             body = body[1:]
 
         out.extend(self._autograph_preamble())
-        for stmt in body:
+        i = 0
+        while i < len(body):
+            stmt = body[i]
+            # Ergonomic sugar: `if cond: return x; return y` lowers to one Cond return.
+            if (
+                isinstance(stmt, ast.If)
+                and not stmt.orelse
+                and _is_return_branch(stmt.body)
+                and i + 1 < len(body)
+                and isinstance(body[i + 1], ast.Return)
+            ):
+                stmt = ast.If(test=stmt.test, body=stmt.body, orelse=[body[i + 1]])
+                out.extend(self._lower_stmt(stmt))
+                i += 2
+                continue
+
             out.extend(self._lower_stmt(stmt))
+            i += 1
         return out
 
     def _autograph_preamble(self) -> list[ast.stmt]:
@@ -196,15 +212,10 @@ class _AutographTransformer(ast.NodeTransformer):
         const = _eval_const_bool(stmt.test)
         if const is not None:
             branch = stmt.body if const else stmt.orelse
-            if not stmt.orelse:
-                raise AutographControlFlowError("if statement requires an else branch")
             out: list[ast.stmt] = []
             for inner in branch:
                 out.extend(self._lower_stmt(inner))
             return out
-
-        if not stmt.orelse:
-            raise AutographControlFlowError("if statement requires an else branch")
 
         if _is_return_branch(stmt.body) and (
             _is_return_branch(stmt.orelse)
@@ -221,8 +232,9 @@ class _AutographTransformer(ast.NodeTransformer):
             )
         ]
         for name in then_assigns.names:
-            self._check_name_binding(name)
-            self._locals.add(name)
+            if name not in self._locals:
+                self._check_name_binding(name)
+                self._locals.add(name)
             out.append(
                 ast.Assign(
                     targets=[self._cxt_attr(name, ast.Store())],
@@ -267,8 +279,6 @@ class _AutographTransformer(ast.NodeTransformer):
         return _IfAssignments(map_expr=map_expr, names=names)
 
     def _lower_if_map(self, stmt: ast.If, allowed: set[str]) -> tuple[ast.expr, list[str]]:
-        if not stmt.orelse:
-            raise AutographControlFlowError("if statement requires an else branch")
         if _contains_disallowed_control(stmt.body):
             raise AutographControlFlowError("nested control flow is not supported in if branches")
         if not (len(stmt.orelse) == 1 and isinstance(stmt.orelse[0], ast.If)) and _contains_disallowed_control(
@@ -279,7 +289,17 @@ class _AutographTransformer(ast.NodeTransformer):
         cond_expr = _replace_names(stmt.test, allowed, "_tc_autograph")
         then_form, then_names = self._collect_if_branch_form(stmt.body, allowed)
 
-        if len(stmt.orelse) == 1 and isinstance(stmt.orelse[0], ast.If):
+        if not stmt.orelse:
+            # No-else assignment sugar keeps existing bindings unchanged.
+            missing = [name for name in then_names if name not in allowed]
+            if missing:
+                missing_str = ", ".join(sorted(missing))
+                raise AutographAssignmentError(
+                    f"if without else may only assign previously bound names: {missing_str}"
+                )
+            else_form = [(name, _id_call(name)) for name in then_names]
+            else_names = list(then_names)
+        elif len(stmt.orelse) == 1 and isinstance(stmt.orelse[0], ast.If):
             else_map_expr, else_names = self._lower_if_map(stmt.orelse[0], allowed)
             else_form = self._if_map_to_form(else_map_expr, else_names, allowed)
         else:
