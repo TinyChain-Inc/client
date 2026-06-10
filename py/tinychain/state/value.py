@@ -1,121 +1,80 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Iterable, Iterator, Literal, Mapping, Sequence
+import cmath
+from typing import Any, Iterable, Iterator, Mapping, Sequence
 
-from ..uri import URI, uri
-
-VALUE_NONE: str = uri("state", "scalar", "value", "none").path
-VALUE_BOOL: str = uri("state", "scalar", "value", "bool").path
-VALUE_NUMBER: str = uri("state", "scalar", "value", "number").path
-VALUE_STRING: str = uri("state", "scalar", "value", "string").path
-VALUE_LINK: str = uri("state", "scalar", "value", "link").path
-VALUE_MAP: str = uri("state", "scalar", "value", "map").path
-VALUE_TUPLE: str = uri("state", "scalar", "value", "tuple").path
+from .scalar import Scalar
+from ..uri import URI, path, uri
 
 
-@dataclass(frozen=True, slots=True)
-class Value:
-    kind: Literal["none", "bool", "number", "string", "link", "map", "tuple"]
-    value: None | bool | int | float | str | dict[str, "Value"] | list["Value"] = None
+class Value(Scalar):
+    __slots__ = ("_value",)
 
-    @staticmethod
-    def none() -> "Value":
-        return Value(kind="none", value=None)
+    __uri__: URI = uri("state", "scalar", "value")
 
-    @staticmethod
-    def bool(value: bool | object) -> "Bool":
-        return Bool(value)
+    def __init__(self, value: None | bool | int | float | complex | str | dict[str, "Value"] | list["Value"] = None):
+        super().__init__(value)
+        self._value = value
 
-    @staticmethod
-    def number(value: int | float | object) -> "Number":
-        return Number(value)
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, Value) and type(self) is type(other) and self._value == other._value
 
-    @staticmethod
-    def string(value: str) -> "String":
-        return String(value)
-
-    @staticmethod
-    def link(value: URI | str) -> "Value":
-        return Value(kind="link", value=str(value))
-
-    @staticmethod
-    def map_of(value: Mapping[str, object] | object) -> "Map":
-        return Map(value)
-
-    @staticmethod
-    def tuple_of(value: Sequence[object] | object) -> "Tuple":
-        return Tuple(value)
+    def __hash__(self) -> int:
+        return hash((type(self), self._value))
 
     def to_json(self) -> object:
-        if self.kind == "none":
-            return None
-        if self.kind == "bool":
-            return self.value
-        if self.kind == "number":
-            return self.value
-        if self.kind == "string":
-            return self.value
-        if self.kind == "link":
-            return {VALUE_LINK: str(self.value)}
-        if self.kind == "map":
-            assert isinstance(self.value, dict)
-            return {key: _encode_value_item(item) for key, item in self.value.items()}
-        if self.kind == "tuple":
-            assert isinstance(self.value, list)
-            return [_encode_value_item(item) for item in self.value]
-        raise AssertionError(f"unexpected Value.kind {self.kind}")
+        raise TypeError(f"{type(self).__name__}.to_json must be implemented by a concrete Value subclass")
 
     @staticmethod
     def from_json(obj: Any) -> "Value":
         if obj is None:
-            return Value.none()
+            return Null()
         if isinstance(obj, bool):
-            return Value.bool(obj)
+            return Bool(obj)
         if isinstance(obj, (int, float)):
-            return Value.number(obj)
+            return Number(obj)
         if isinstance(obj, str):
-            return Value.string(obj)
+            return String(obj)
         if isinstance(obj, list):
-            return Value.tuple_of(obj)
+            return Tuple(obj)
 
         if isinstance(obj, dict) and len(obj) == 1:
             (key, value), = obj.items()
-            if key == VALUE_NONE:
-                return Value.none()
-            if key == VALUE_BOOL:
-                if not isinstance(value, bool):
-                    raise TypeError("expected bool value")
-                return Value.bool(value)
-            if key == VALUE_NUMBER:
-                if not isinstance(value, (int, float)) or isinstance(value, bool):
-                    raise TypeError("expected number value")
-                return Value.number(value)
-            if key == VALUE_STRING:
-                if not isinstance(value, str):
-                    raise TypeError("expected string value")
-                return Value.string(value)
-            if key == VALUE_LINK:
-                if not isinstance(value, str):
-                    raise TypeError("expected link value")
-                return Value.link(value)
-            if key == VALUE_MAP:
-                if not isinstance(value, dict):
-                    raise TypeError("expected map value")
-                return Value.map_of(value)
-            if key == VALUE_TUPLE:
-                if not isinstance(value, list):
-                    raise TypeError("expected tuple value")
-                return Value.tuple_of(value)
+            if isinstance(key, str):
+                value_type = _value_class_for_uri(key)
+                if value_type is not None:
+                    return value_type._from_json(value)
+
             if isinstance(key, str) and (key.startswith("/") or "://" in key):
                 if value != []:
                     raise TypeError("expected link value to be an empty list")
-                return Value.link(key)
+                return Link(key)
 
         if isinstance(obj, dict):
-            return Value.map_of(obj)
+            return Map(obj)
 
         raise TypeError(f"cannot decode Value from {type(obj).__name__}")
+
+    @classmethod
+    def _from_json(cls, obj: Any) -> "Value":
+        raise TypeError("Value.from_json is not implemented for the base class")
+
+
+def _iter_value_subclasses(base: type[Value]) -> Iterator[type[Value]]:
+    for subclass in base.__subclasses__():
+        yield subclass
+        yield from _iter_value_subclasses(subclass)
+
+
+def _value_class_for_uri(uri_path: str) -> type[Value] | None:
+    if uri_path == path(Value):
+        return Value
+
+    for value_type in _iter_value_subclasses(Value):
+        if path(value_type) == uri_path:
+            return value_type
+
+    return None
 
 
 def _decode_value_item(obj: object) -> Value:
@@ -129,34 +88,106 @@ def _encode_value_item(value: Value) -> object:
     return value.to_json()
 
 
+def form_of(value: "Value | object") -> object:
+    if isinstance(value, Value):
+        return value._value
+    return value
+
+
+class Null(Value):
+    __slots__ = ()
+
+    __uri__: URI = uri(Value, "none")
+
+    def __init__(self):
+        super().__init__(None)
+
+    def to_json(self) -> object:
+        return None
+
+    @classmethod
+    def _from_json(cls, obj: Any) -> "Null":
+        return cls()
+
+
+class Link(Value):
+    __slots__ = ()
+
+    __uri__: URI = uri(Value, "link")
+
+    def __init__(self, value: URI | str):
+        if not isinstance(value, (URI, str)):
+            raise TypeError("expected link value")
+
+        super().__init__(str(value))
+
+    def to_json(self) -> object:
+        return {path(Link): str(form_of(self))}
+
+    @classmethod
+    def _from_json(cls, obj: Any) -> "Link":
+        if not isinstance(obj, str):
+            raise TypeError("expected link value")
+        return cls(obj)
+
+
 class String(Value):
     __slots__ = ("op",)
 
+    __uri__: URI = uri(Value, "string")
+
     def __init__(self, value: str | object):
         from ..opref import OpRef as RuntimeOpRef
-        from .scalar import OpRef as StateOpRef
+        from .scalar import OpRef as StateOpRef, TCRef, tcref_form_of
+
+        if isinstance(value, TCRef):
+            value = tcref_form_of(value)
 
         if isinstance(value, (RuntimeOpRef, StateOpRef)):
-            super().__init__(kind="string", value=None)
+            super().__init__(None)
             object.__setattr__(self, "op", value)
         else:
-            super().__init__(kind="string", value=value)
+            if not isinstance(value, str):
+                raise TypeError("expected string value")
+            super().__init__(value)
             object.__setattr__(self, "op", None)
 
     def render(self, params: dict[str, object] | None = None, **kwargs: object) -> "String":
         if params is not None and kwargs:
             raise ValueError("String.render accepts a dict or kwargs, not both")
 
-        from .scalar import autobox
+        from .scalar import OpRef as StateOpRef, TCRef, autobox, form_of, tcref_form_of
 
         render_params = kwargs if params is None else params
         if self.op is None and all(_is_literal_render_value(value) for value in render_params.values()):
-            rendered = str(self.value)
+            rendered = str(form_of(self))
             for key, value in render_params.items():
                 rendered = rendered.replace(f"{{{{{key}}}}}", str(value))
             return String(rendered)
 
-        return String(autobox(self)._string_render(render_params).ref.op)
+        rendered_scalar = autobox(self)
+        render_fn = getattr(rendered_scalar, "_string_render", None)
+        if not callable(render_fn):
+            raise TypeError("expected string render to produce an op ref")
+
+        rendered_form = form_of(render_fn(render_params))
+        if not isinstance(rendered_form, TCRef):
+            raise TypeError("expected string render to produce an op ref")
+
+        ref_form = tcref_form_of(rendered_form)
+        if not isinstance(ref_form, StateOpRef):
+            raise TypeError("expected string render to produce an op ref")
+
+        return String(ref_form)
+
+    def to_json(self) -> object:
+        return form_of(self)
+
+    @classmethod
+    def _from_json(cls, obj: Any) -> "String":
+        if not isinstance(obj, str):
+            raise TypeError("expected string value")
+        return cls(obj)
 
 
 def _is_literal_render_value(value: object) -> bool:
@@ -166,27 +197,40 @@ def _is_literal_render_value(value: object) -> bool:
 class Bool(Value):
     __slots__ = ("op",)
 
+    __uri__: URI = uri(Value, "bool")
+
     def __init__(self, value: bool | object):
         op = _as_opref(value)
         if op is not None:
-            super().__init__(kind="bool", value=None)
+            super().__init__(None)
             object.__setattr__(self, "op", op)
             return
 
         if not isinstance(value, bool):
             raise TypeError("expected bool value")
 
-        super().__init__(kind="bool", value=value)
+        super().__init__(value)
         object.__setattr__(self, "op", None)
+
+    def to_json(self) -> object:
+        return form_of(self)
+
+    @classmethod
+    def _from_json(cls, obj: Any) -> "Bool":
+        if not isinstance(obj, bool):
+            raise TypeError("expected bool value")
+        return cls(obj)
 
 
 class Number(Value):
     __slots__ = ("op",)
 
+    __uri__: URI = uri(Value, "number")
+
     def __init__(self, value: int | float | object):
         op = _as_opref(value)
         if op is not None:
-            super().__init__(kind="number", value=None)
+            super().__init__(None)
             object.__setattr__(self, "op", op)
             return
 
@@ -195,17 +239,284 @@ class Number(Value):
         if not isinstance(value, (int, float)):
             raise TypeError("expected number value")
 
-        super().__init__(kind="number", value=value)
+        super().__init__(value)
         object.__setattr__(self, "op", None)
+
+    def to_json(self) -> object:
+        return form_of(self)
+
+    @classmethod
+    def _from_json(cls, obj: Any) -> "Number":
+        if isinstance(obj, bool):
+            raise TypeError("expected number value")
+        return cls(obj)
+
+    def _scalar(self):
+        from .scalar import autobox
+
+        return autobox(self)
+
+    def _binary(self, op_name: str, other: object, literal_op) -> "Number":
+        from .scalar import PostOpRef, autobox
+
+        if self.op is None and isinstance(other, Number) and other.op is None:
+            return Number(literal_op(form_of(self), form_of(other)))
+
+        if self.op is None and isinstance(other, (int, float)) and not isinstance(other, bool):
+            return Number(literal_op(form_of(self), other))
+
+        subject = self._scalar()._subject()
+        opref = PostOpRef(f"{subject}/{op_name}", {"r": autobox(other)})
+        return Number(opref)
+
+    @staticmethod
+    def _coerce_number(value: object) -> "Number":
+        if isinstance(value, Number):
+            return value
+        return Number(value)
+
+    def add(self, other: object) -> "Number":
+        return self._binary("add", other, lambda l, r: l + r)
+
+    def sub(self, other: object) -> "Number":
+        return self._binary("sub", other, lambda l, r: l - r)
+
+    def mul(self, other: object) -> "Number":
+        return self._binary("mul", other, lambda l, r: l * r)
+
+    def div(self, other: object) -> "Number":
+        return self._binary("div", other, lambda l, r: l / r)
+
+    def __add__(self, other: object) -> "Number":
+        return self.add(other)
+
+    def __radd__(self, other: object) -> "Number":
+        return Number._coerce_number(other).add(self)
+
+    def __sub__(self, other: object) -> "Number":
+        return self.sub(other)
+
+    def __rsub__(self, other: object) -> "Number":
+        return Number._coerce_number(other).sub(self)
+
+    def __mul__(self, other: object) -> "Number":
+        return self.mul(other)
+
+    def __rmul__(self, other: object) -> "Number":
+        return Number._coerce_number(other).mul(self)
+
+    def __truediv__(self, other: object) -> "Number":
+        return self.div(other)
+
+    def __rtruediv__(self, other: object) -> "Number":
+        return Number._coerce_number(other).div(self)
+
+
+class Integer(Number):
+    __slots__ = ()
+
+    __uri__: URI = uri(Number, "integer")
+
+    def __init__(self, value: int | object):
+        op = _as_opref(value)
+        if op is not None:
+            super().__init__(op)
+            return
+
+        if isinstance(value, bool):
+            raise TypeError("bool is not an integer")
+        if not isinstance(value, int):
+            raise TypeError("expected integer value")
+
+        super().__init__(value)
+
+
+class Float(Number):
+    __slots__ = ()
+
+    __uri__: URI = uri(Number, "float")
+
+    def __init__(self, value: int | float | object):
+        op = _as_opref(value)
+        if op is not None:
+            super().__init__(op)
+            return
+
+        if isinstance(value, bool):
+            raise TypeError("bool is not a float")
+        if not isinstance(value, (int, float)):
+            raise TypeError("expected float value")
+
+        super().__init__(float(value))
+
+
+class Complex(Number):
+    __slots__ = ()
+
+    __uri__: URI = uri(Number, "complex")
+
+    def __init__(self, value: complex | object):
+        op = _as_opref(value)
+        if op is not None:
+            super().__init__(op)
+            return
+
+        if not isinstance(value, complex):
+            raise TypeError("expected complex value")
+
+        Value.__init__(self, value)
+        object.__setattr__(self, "op", None)
+
+    @staticmethod
+    def _coerce_complex(value: object) -> "Complex":
+        if isinstance(value, Complex):
+            return value
+
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return Complex(complex(value))
+
+        return Complex(value)
+
+    def _binary_complex(self, op_name: str, other: object, literal_op) -> "Complex":
+        from .scalar import PostOpRef, autobox
+
+        if self.op is None:
+            rhs = Complex._coerce_complex(other)
+            if rhs.op is None:
+                left_form = form_of(self)
+                right_form = form_of(rhs)
+                assert isinstance(left_form, complex)
+                assert isinstance(right_form, complex)
+                return Complex(literal_op(left_form, right_form))
+
+        subject = self._scalar()._subject()
+        opref = PostOpRef(f"{subject}/{op_name}", {"r": autobox(other)})
+        return Complex(opref)
+
+    def add(self, other: object) -> "Complex":
+        return self._binary_complex("add", other, lambda l, r: l + r)
+
+    def sub(self, other: object) -> "Complex":
+        return self._binary_complex("sub", other, lambda l, r: l - r)
+
+    def mul(self, other: object) -> "Complex":
+        return self._binary_complex("mul", other, lambda l, r: l * r)
+
+    def div(self, other: object) -> "Complex":
+        return self._binary_complex("div", other, lambda l, r: l / r)
+
+    def __add__(self, other: object) -> "Complex":
+        return self.add(other)
+
+    def __radd__(self, other: object) -> "Complex":
+        return Complex._coerce_complex(other).add(self)
+
+    def __sub__(self, other: object) -> "Complex":
+        return self.sub(other)
+
+    def __rsub__(self, other: object) -> "Complex":
+        return Complex._coerce_complex(other).sub(self)
+
+    def __mul__(self, other: object) -> "Complex":
+        return self.mul(other)
+
+    def __rmul__(self, other: object) -> "Complex":
+        return Complex._coerce_complex(other).mul(self)
+
+    def __truediv__(self, other: object) -> "Complex":
+        return self.div(other)
+
+    def __rtruediv__(self, other: object) -> "Complex":
+        return Complex._coerce_complex(other).div(self)
+
+    def conjugate(self) -> "Complex":
+        from .scalar import PostOpRef
+
+        if self.op is None:
+            value_form = form_of(self)
+            assert isinstance(value_form, complex)
+            return Complex(value_form.conjugate())
+
+        subject = self._scalar()._subject()
+        return Complex(PostOpRef(f"{subject}/conjugate", {}))
+
+    def exp(self) -> "Complex":
+        from .scalar import PostOpRef
+
+        if self.op is None:
+            value_form = form_of(self)
+            assert isinstance(value_form, complex)
+            return Complex(cmath.exp(value_form))
+
+        subject = self._scalar()._subject()
+        return Complex(PostOpRef(f"{subject}/exp", {}))
+
+    def log(self) -> "Complex":
+        from .scalar import PostOpRef
+
+        if self.op is None:
+            value_form = form_of(self)
+            assert isinstance(value_form, complex)
+            return Complex(cmath.log(value_form))
+
+        subject = self._scalar()._subject()
+        return Complex(PostOpRef(f"{subject}/log", {}))
+
+
+class I64(Integer):
+    __slots__ = ()
+
+    __uri__: URI = uri(Integer, "i64")
+
+
+class U64(Integer):
+    __slots__ = ()
+
+    __uri__: URI = uri(Integer, "u64")
+
+    def __init__(self, value: int | object):
+        super().__init__(value)
+
+        if self.op is None:
+            value_form = form_of(self)
+            assert isinstance(value_form, int)
+            if value_form < 0:
+                raise ValueError("u64 cannot be negative")
+
+
+class F32(Float):
+    __slots__ = ()
+
+    __uri__: URI = uri(Float, "32")
+
+
+class F64(Float):
+    __slots__ = ()
+
+    __uri__: URI = uri(Float, "64")
+
+
+class C64(Complex):
+    __slots__ = ()
+
+    __uri__: URI = uri(Complex, "64")
+
+
+class C128(Complex):
+    __slots__ = ()
+
+    __uri__: URI = uri(Complex, "128")
 
 
 class Map(Value):
     __slots__ = ("op",)
 
+    __uri__: URI = uri(Value, "map")
+
     def __init__(self, value: Mapping[str, object] | object):
         op = _as_opref(value)
         if op is not None:
-            super().__init__(kind="map", value=None)
+            super().__init__(None)
             object.__setattr__(self, "op", op)
             return
 
@@ -218,67 +529,98 @@ class Map(Value):
                 raise TypeError("expected map key to be a string")
             decoded[key] = _decode_value_item(item)
 
-        super().__init__(kind="map", value=decoded)
+        super().__init__(decoded)
         object.__setattr__(self, "op", None)
 
     def __iter__(self) -> Iterator[str]:
-        if self.value is None:
+        value_form = form_of(self)
+        if value_form is None:
             raise TypeError("cannot iterate a deferred Map without execution")
-        assert isinstance(self.value, dict)
-        return iter(self.value)
+        assert isinstance(value_form, dict)
+        return iter(value_form)
 
     def keys(self) -> Iterable[str]:
-        if self.value is None:
+        value_form = form_of(self)
+        if value_form is None:
             raise TypeError("cannot read keys from a deferred Map without execution")
-        assert isinstance(self.value, dict)
-        return self.value.keys()
+        assert isinstance(value_form, dict)
+        return value_form.keys()
 
     def values(self) -> Iterable[Value]:
-        if self.value is None:
+        value_form = form_of(self)
+        if value_form is None:
             raise TypeError("cannot read values from a deferred Map without execution")
-        assert isinstance(self.value, dict)
-        return self.value.values()
+        assert isinstance(value_form, dict)
+        return value_form.values()
 
     def items(self) -> Iterable[tuple[str, Value]]:
-        if self.value is None:
+        value_form = form_of(self)
+        if value_form is None:
             raise TypeError("cannot read items from a deferred Map without execution")
-        assert isinstance(self.value, dict)
-        return self.value.items()
+        assert isinstance(value_form, dict)
+        return value_form.items()
+
+    def to_json(self) -> object:
+        value_form = form_of(self)
+        assert isinstance(value_form, dict)
+        return {key: _encode_value_item(item) for key, item in value_form.items()}
+
+    @classmethod
+    def _from_json(cls, obj: Any) -> "Map":
+        if not isinstance(obj, dict):
+            raise TypeError("expected map value")
+        return cls(obj)
 
 
 class Tuple(Value):
     __slots__ = ("op",)
 
+    __uri__: URI = uri(Value, "tuple")
+
     def __init__(self, value: Sequence[object] | object):
         op = _as_opref(value)
         if op is not None:
-            super().__init__(kind="tuple", value=None)
+            super().__init__(None)
             object.__setattr__(self, "op", op)
             return
 
         if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
             raise TypeError("expected tuple value")
 
-        super().__init__(kind="tuple", value=[_decode_value_item(item) for item in value])
+        super().__init__([_decode_value_item(item) for item in value])
         object.__setattr__(self, "op", None)
 
     def __iter__(self) -> Iterator[Value]:
-        if self.value is None:
+        value_form = form_of(self)
+        if value_form is None:
             raise TypeError("cannot iterate a deferred Tuple without execution")
-        assert isinstance(self.value, list)
-        return iter(self.value)
+        assert isinstance(value_form, list)
+        return iter(value_form)
 
     def __len__(self) -> int:
-        if self.value is None:
+        value_form = form_of(self)
+        if value_form is None:
             raise TypeError("cannot get len of a deferred Tuple without execution")
-        assert isinstance(self.value, list)
-        return len(self.value)
+        assert isinstance(value_form, list)
+        return len(value_form)
 
     def __getitem__(self, index: int) -> Value:
-        if self.value is None:
+        value_form = form_of(self)
+        if value_form is None:
             raise TypeError("cannot index a deferred Tuple without execution")
-        assert isinstance(self.value, list)
-        return self.value[index]
+        assert isinstance(value_form, list)
+        return value_form[index]
+
+    def to_json(self) -> object:
+        value_form = form_of(self)
+        assert isinstance(value_form, list)
+        return [_encode_value_item(item) for item in value_form]
+
+    @classmethod
+    def _from_json(cls, obj: Any) -> "Tuple":
+        if not isinstance(obj, list):
+            raise TypeError("expected tuple value")
+        return cls(obj)
 
 
 def _as_opref(value: object) -> object | None:

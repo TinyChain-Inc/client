@@ -141,8 +141,8 @@ def test_library_routes_allow_local_opref_subjects():
         @tc.post
         def bad(self):
             subject = "$foo"
-            opref = tc.state.OpRef.get(subject)
-            return tc.state.Scalar(ref=tc.state.TCRef(op=opref))
+            opref = tc.state.GetOpRef(subject)
+            return tc.state.Scalar(ref=tc.state.TCRef(opref))
 
     a = A()
     ir = compile_ir(a)

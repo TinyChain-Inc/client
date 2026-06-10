@@ -292,7 +292,7 @@ def _default_executor_for_path(path: str) -> Executor:
 
 
 def execute(opref: "object", *, executor: "Executor | None" = None) -> object:
-    from .opref import OpRef
+    from .opref import DeleteOpRef, GetOpRef, OpRef, PostOpRef, PutOpRef
     from .ref import Ref
 
     if hasattr(opref, "op"):
@@ -324,11 +324,11 @@ def execute(opref: "object", *, executor: "Executor | None" = None) -> object:
             f"no local kernel configured and no remote route matched {path}; set `kernel=` in tc.backend(...) or declare an authority on the Library"
         )
 
-    method = opref.method.upper()
     if not hasattr(exec_ctx.kernel, "dispatch"):
         raise NotImplementedError("kernel does not implement dispatch")
 
-    if method == "GET":
+    method = opref.method
+    if isinstance(opref, GetOpRef):
         return _kernel_dispatch(
             exec_ctx.kernel,
             method,
@@ -336,4 +336,8 @@ def execute(opref: "object", *, executor: "Executor | None" = None) -> object:
             headers,
             _encode_dispatch_body(opref.body),
         )
-    return _kernel_dispatch(exec_ctx.kernel, method, path, headers, _encode_body(opref.body))
+
+    if isinstance(opref, (PutOpRef, PostOpRef, DeleteOpRef)):
+        return _kernel_dispatch(exec_ctx.kernel, method, path, headers, _encode_body(opref.body))
+
+    raise TypeError(f"unsupported OpRef type {type(opref).__name__}")

@@ -21,6 +21,9 @@ explicitly asks for advanced control.
   default.
 - `tc.backend(..., mode="deferred")` is the single call-site switch for explicit
   planning in runtime code.
+- Canonical route invocation style is keyword arguments (or one explicit
+  `body=` payload). Positional route calls are compatibility-only and should not
+  grow new conventions.
 - `tc.install(...)` is the canonical install helper for Python libraries and WASM
   implementations.
 - Auth context is framework-owned and derived from validated transport/auth state,
@@ -31,6 +34,8 @@ explicitly asks for advanced control.
   compose plans but never mint or manage transaction handles.
 - Advanced/internal helpers stay out of top-level `import tinychain as tc` unless
   they are part of the ordinary user path.
+- `tc.execute(...)`, `tc.Host.execute(...)`, and `tc.Host.request(...)` remain
+  advanced surfaces; route method calls are the ordinary application path.
 
 ## Current demo contract
 
@@ -59,6 +64,9 @@ Guardrails:
 
 ## Maintenance backlog
 
+- Defer replacing the `rjwt_install_token` Rust-example minting path with the
+  Python `rjwt` package until the in-progress `rjwt` rewrite stabilizes; keep
+  migration work tracked but out of the immediate implementation queue.
 - Keep `tinychain._autograph` internal until the transformer is validated as a
   public API.
 - Keep `tc.Host.request` as a low-level primitive but avoid presenting it as the

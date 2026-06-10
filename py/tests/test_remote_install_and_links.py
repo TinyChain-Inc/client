@@ -116,8 +116,8 @@ def test_string_value_render_is_the_only_value_render_surface():
     rendered = tc.String("Hello, {{name}}!").render(name="Ada")
     assert isinstance(rendered, tc.String)
     assert rendered.to_json() == "Hello, Ada!"
-    assert hasattr(tc.state.Value.string("plain"), "render")
-    assert not hasattr(tc.state.Value.number(1), "render")
+    assert hasattr(tc.String("plain"), "render")
+    assert not hasattr(tc.Number(1), "render")
 
 
 def test_host_rejects_client_transaction_controls():

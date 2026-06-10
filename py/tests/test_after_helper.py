@@ -6,7 +6,7 @@ import tinychain as tc
 def test_after_preserves_wrapped_type() -> None:
     with tc.state.scoped_context() as cxt:
         dep = tc.state.id("left").eq(1)
-        value = tc.String(tc.state.id("right")._string_render({"x": 1}).ref.op)
+        value = tc.String(tc.state.form_of(tc.state.id("right")._string_render({"x": 1})))
 
         result = tc.after(dep, value)
 

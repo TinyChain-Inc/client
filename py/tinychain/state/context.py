@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import contextvars
 from typing import Iterable
 
-from .scalar import Scalar, autobox
+from .scalar import IdRef, Scalar, TCRef, autobox
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,8 +30,16 @@ class Context:
                     name = alias
                     break
         self._names.add(name)
-        self._form.append((name, autobox(value)))
-        bound = Scalar.id(name)
+        boxed = autobox(value)
+        self._form.append((name, boxed))
+
+        cls = type(boxed) if isinstance(boxed, Scalar) else Scalar
+        try:
+            bound = cls(ref=TCRef(IdRef(name)))
+        except TypeError:
+            # Fall back to an untyped scalar if a subclass constructor diverges.
+            bound = Scalar(ref=TCRef(IdRef(name)))
+
         self._bound[name] = bound
         self._bound[original] = bound
         return bound

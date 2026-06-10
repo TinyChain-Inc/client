@@ -63,6 +63,49 @@ staying thin and well-documented for new users.
 - Path-only library/service/class URIs target the active/default local PyO3 host;
   authority-qualified URIs target HTTP(S). Preserve `with tc.backend(...)` as an
   override, not as a requirement for ordinary package calls.
+- Treat `tc.state.Scalar` as a generic IR union, not a numeric type. Do not add
+  arithmetic dunder semantics to `Scalar`; numeric arithmetic belongs to
+  `tc.Number` (and future numeric tensor wrappers) with explicit coercion rules.
+- Keep control-flow and container constructors as module helpers
+  (`tc.state.cond`, `tc.state.while_loop`, `tc.state.after`, `tc.state.map_of`,
+  `tc.state.tuple_of`, `tc.state.id`), not `Scalar` static methods.
+- Do not add compile-time tree-walk APIs on `Scalar` (for example `walk` or
+  `walk_tcref`). Traversal logic must operate on IR/form payloads at the point of
+  use and must not assume values are known during route compilation.
+- Keep type-specific operations on typed wrappers (`tc.Number`, `tc.Bool`,
+  `tc.Tuple`, `tc.Map`, `tc.String`) and avoid growing generic operation helpers
+  on `tc.state.Scalar`.
+- Keep symbolic IR wrappers (`tc.state.Scalar`, `tc.state.TCRef`, `tc.state.OpRef`,
+  and related control-flow/reference forms) on a single canonical representation
+  per instance. Do not model them as dataclass-like containers with parallel
+  optional fields for each variant.
+- Avoid literal-membership or eager-value checks to choose symbolic behavior
+  (for example checking whether a symbolic node "contains" a concrete value kind)
+  in deferred planning paths. Route dispatch should follow symbolic form/type
+  semantics and operation subjects, not runtime literals.
+- Prefer a v1-style form accessor pattern (`form_of(...)`-style helpers) for
+  internal traversal and compilation logic. Do not rely on `.value/.ref/.op/.map/.tuple`
+  field probing on symbolic wrappers.
+- Keep `tc.state.Value` as a minimal base with explicit concrete subclasses
+  (`Null`, `Link`, `Bool`, `Number`, `String`, `Map`, `Tuple`). Do not add
+  type-specific constructors/accessors on `Value`, and do not expose a `.value`
+  property for client code; access underlying representation via `form_of(...)`
+  helpers.
+- Keep symbolic wrappers focused on IR shape and serialization round-trips;
+  runtime arithmetic/comparison/container behaviors belong on typed wrappers
+  (`tc.Number`, `tc.Bool`, `tc.Tuple`, `tc.Map`, `tc.String`) and protocols.
+- Preserve concrete method type information for symbolic operation forms.
+  Do not erase `Get/Put/Post/Delete` operation refs/defs behind parent-class
+  method strings or generic `args` shape checks when constructing, validating,
+  or serializing IR. Prefer concrete subclasses and `isinstance` dispatch.
+- Keep one canonical route-stub call shape in application code.
+  Prefer keyword arguments for route parameters and use `body=` only when
+  passing one explicit payload. Treat positional forms as compatibility-only,
+  and avoid adding new route-call conventions.
+- Preserve a single obvious execution path for applications:
+  route method calls inside `tc.backend(...)` contexts are the default,
+  while `tc.execute`, `tc.Host.execute`, and `tc.Host.request` remain
+  advanced/low-level APIs.
 
 ## Gap triage guardrails
 

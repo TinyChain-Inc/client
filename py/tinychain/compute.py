@@ -3,16 +3,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Literal, Mapping, Optional
 
-from .opref import OpRef
-from .uri import uri
+from .opref import OpRef, post as opref_post
+from .uri import path
 
 
 DType = Literal["i64", "u64", "f32", "f64"]
 
-TENSOR_CLASS: str = uri("state", "collection", "tensor").path
-NUMBER_CLASS: str = uri("state", "scalar", "value", "number").path
+TENSOR_CLASS: str = path("state", "collection", "tensor")
+NUMBER_CLASS: str = path("state", "scalar", "value", "number")
 
-NUMERIC_OPS_CLASS_ROOT: str = uri("class", "tinychain", "numeric", "0.1.0").path
+NUMERIC_OPS_CLASS_ROOT: str = path("class", "tinychain", "numeric", "0.1.0")
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,7 +175,7 @@ class OpGraph:
     _next_value: int = 0
     _next_node: int = 0
 
-    TYPE_TAG: str = uri("state", "scalar", "value", "op_graph").path
+    TYPE_TAG: str = path("state", "scalar", "value", "op_graph")
 
     def _alloc_value(self, name: str) -> int:
         if name in self._values:
@@ -273,9 +273,9 @@ def analyze_opref(
     if target:
         body["target"] = target.to_json()
 
-    path = uri("lib", publisher, "compute", compute_version, "analyze").path
+    route_path = path("lib", publisher, "compute", compute_version, "analyze")
 
-    return OpRef(method="POST", path=path, body=body)
+    return opref_post(route_path, body=body)
 
 
 certify_opref = analyze_opref
@@ -289,7 +289,7 @@ def run_opref(
     publisher: str = "tinychain",
     headers: Optional[Iterable[tuple[str, str]]] = None,
 ) -> OpRef[Any]:
-    path = uri("lib", publisher, "compute", compute_version, "run").path
+    route_path = path("lib", publisher, "compute", compute_version, "run")
 
-    op = OpRef(method="POST", path=path, body={"graph": graph.to_json(), "inputs": dict(inputs)})
+    op = opref_post(route_path, body={"graph": graph.to_json(), "inputs": dict(inputs)})
     return op.with_headers(headers)
