@@ -71,7 +71,7 @@ implemented by the v1 `Context`. Even though v2 Autograph uses AST rewriting rat
 ### Compile-time constant folding (v0)
 
 When an `if`/`while` condition can be evaluated at transform-time (i.e., during the AST
-rewrite), Autograph must eliminate the unreachable branch and must not emit a `TCRef::If`
+rewrite), Autograph must eliminate the unreachable branch and must not emit a `TCRef::Cond`
 or `TCRef::While`:
 
 - `if True: ... else: ...` lowers to just the `then` branch.
@@ -91,7 +91,7 @@ joined explicitly using TinyChain conditional references.
 #### Condition
 
 The `if` condition must compile to a TinyChain reference (a `Scalar` whose `ref` is not
-`None`), because `TCRef::If` requires a reference-valued condition. Autograph must reject
+`None`), because `TCRef::Cond` requires a reference-valued condition. Autograph must reject
 conditions which are plain Python literals (e.g. `True`) or any expression which compiles
 to a non-ref `Scalar`.
 
@@ -101,7 +101,7 @@ Constant-valued conditions are a special case handled by compile-time constant f
 #### Mapping to TinyChain IR
 
 An `if` statement is lowered using `tc.cond(condition, then, or_else)` (a `Scalar` whose
-`ref` is a `TCRef::If`).
+`ref` is a `TCRef::Cond`).
 
 Autograph supports the following `if` forms in v0:
 
@@ -140,21 +140,89 @@ cxt.x = tc.cond(cond, then_x, else_x)
 The branch bodies do **not** construct independent contexts. Instead, the lowered form
 computes each branch RHS as a normal expression and joins them with `tc.cond`.
 
+3) **Assignment-if without else**
+
+```python
+value = initial
+if cond:
+  value = next_value
+```
+
+Lowers to identity-preserving else semantics:
+
+```python
+cxt.value = tc.cond(cond, next_value, tc.state.id("value"))
+```
+
+This form is only valid when every assigned name in the `then` branch is already
+bound in the surrounding scope.
+
+4) **Return-if with immediate fallback return**
+
+```python
+if cond:
+  return then_expr
+return else_expr
+```
+
+Lowers to:
+
+```python
+return tc.cond(cond, then_expr, else_expr)
+```
+
 #### v0 structural constraints (fail fast)
 
 To keep the transform deterministic and avoid SSA/phi semantics in v0, Autograph must
 reject any `if` which violates any of the following:
 
-- The `if` must have an `else` branch.
 - The `then` and `else` bodies must be composed only of supported statements:
   - either a single `return <expr>` (Return-if), or
   - a sequence of simple assignments `name = <expr>` (Assignment-if).
+- For `if` without `else`, every assigned name in the `then` branch must already
+  be bound in the surrounding scope.
+- `if cond: return ...` is allowed without `else` only when followed immediately
+  by a fallback `return ...`.
 - Assignment-if: the `then` and `else` branches must assign the **same set of names**,
   and each name must be assigned **exactly once** per branch.
 - No nested control flow inside the branches (no nested `if`, no `for`, no `while`).
 - No `return` mixed with assignments within the same branch.
 - No name collisions: a name assigned by Assignment-if must not already be bound in the
   surrounding scope (including parameters).
+
+## Ordering semantics and side effects
+
+Autograph lowers Python syntax into TinyChain dataflow. Execution order is derived from
+dependency edges, not source order. Independent nodes may execute concurrently.
+
+Autograph does not infer side-effect ordering and must not synthesize sequencing edges.
+If route logic depends on side-effect order, the developer must add an explicit `After`
+reference in the graph.
+
+The Python client exposes this as `tc.after(dependency, then)` (and `tc.state.after`
+at the scalar layer). The helper records an explicit ordering dependency and returns
+`then` unchanged so typed wrappers remain chainable.
+
+Use explicit `After` when:
+
+- Two side-effecting operations must happen in a specific order.
+- An externally visible effect (notification, write, audit emission) must occur only
+  after another effect commits.
+- There is no natural data dependency between two operations, but ordering is required.
+
+Example:
+
+```python
+@tc.post
+def update_then_read(self, key: tc.String, value: tc.Number) -> tc.Number:
+    write_op = self.store.put(key, value)
+    read_ref = self.store.get(key)
+    ordered_read = tc.after(write_op, read_ref)
+    return ordered_read
+```
+
+In this shape, `ordered_read` keeps the same wrapper type as `read_ref`, but the
+graph records that the read must execute after the write.
 
 ### `elif` lowering (v0)
 
@@ -364,7 +432,7 @@ Autograph treats each control-flow block as a pure graph fragment which:
 
 - Takes an explicit input environment (a map of named scalars).
 - Emits an explicit output environment (a map of named scalars).
-- Is encoded as an `OpDef` and invoked via `TCRef::If`, `TCRef::While`, or `TCRef::ForEach`.
+- Is encoded as an `OpDef` and invoked via `TCRef::Cond`, `TCRef::While`, or `TCRef::ForEach`.
 
 This makes nested control flow just nesting of graph fragments.
 
@@ -382,7 +450,7 @@ This makes nested control flow just nesting of graph fragments.
 ### Nested `if`
 
 - Lower each branch to its own `OpDef`.
-- The enclosing scope invokes `TCRef::If` with the branch `OpDef`s.
+- The enclosing scope invokes `TCRef::Cond` with the branch `OpDef`s.
 - The result is an environment map; it is merged into the outer scope via rule (4).
 
 ### Nested `while`

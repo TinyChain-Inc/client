@@ -14,6 +14,7 @@ from . import state
 from . import kernel
 from . import auth
 from .cond import cond
+from .after import after
 from .host import Host
 
 __all__ = [
@@ -38,6 +39,7 @@ __all__ = [
     "post",
     "delete",
     "cond",
+    "after",
     "uri",
     "authority",
     "origin",

@@ -547,6 +547,11 @@ node under the hood. Execution happens on the host; HTTP and PyO3 both transmit
 serialized `TCRef`s, so dependency ordering and transaction behavior stay
 consistent and auditable.
 
+For explicit side-effect sequencing when no data dependency exists, use
+`tc.after(dependency, then)` (or `tc.state.after` in scalar-only code). It records
+an explicit ordering dependency and returns `then` so the original wrapper type
+remains available for method chaining.
+
 When you need reusable behavior inside the same DAG, construct an `OpRef`: it packages a
 TinyChain op (and any bound arguments) so multiple `TCRef`s can reference it without
 re-encoding the body. `OpRef`s compile at install time along with `TCRef`s, ensuring the
