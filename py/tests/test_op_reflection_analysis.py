@@ -114,6 +114,18 @@ def test_op_reflection_analysis(tmp_path: pathlib.Path) -> None:
                     state = {"items": rest, "count": next_count}
                 return {"count": state["count"]}
 
+            @tc.post
+            def tuple_loop_supported(self, items: tc.Tuple) -> tc.Number:
+                for item in items:
+                    observed = item
+                return 1
+
+            @tc.post
+            def map_loop_supported(self, items: tc.Map) -> tc.String:
+                for key in items:
+                    observed = key
+                return "ok"
+
         a = A()
         b = B()
         c = C()
@@ -141,5 +153,9 @@ def test_op_reflection_analysis(tmp_path: pathlib.Path) -> None:
             assert depth_branch["max"] == 2
             nested = tc_testing.run_with_timeout(20, lambda: c.nested_if_count([0, 1, 0, 0]))
             assert nested["count"] == 3
+            tuple_loop = tc_testing.run_with_timeout(20, lambda: c.tuple_loop_supported([1, 2, 7]))
+            assert tuple_loop == 1
+            map_loop = tc_testing.run_with_timeout(20, lambda: c.map_loop_supported({"b": 1, "a": 2}))
+            assert map_loop == "ok"
 
     tc_testing.run_with_timeout(45, _run)

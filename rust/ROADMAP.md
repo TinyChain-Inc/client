@@ -16,6 +16,15 @@
      in `tc-server`.
    - Keep generated/exposed bindings aligned with the canonical runtime type
      model and client-facing docs.
+  - Implementation phases:
+    1. Introduce shared bridge traits for extraction/projection and keep impls
+      near type-family definitions instead of central adapter files.
+    2. Migrate the Python local backend to consume those traits through a
+      small registration/composition layer.
+    3. Add extension fixtures proving new `Value`/`Collection` variants can be
+      exposed with localized impls and no adapter-wide rewrites.
+    4. Add perf regression gates to ensure the bridge migration does not add
+      avoidable serialization or allocation overhead on native calls.
 
 3. **Client-local packaging and CI**
    - Keep `maturin` workflows runnable from the `client` repo.

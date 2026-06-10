@@ -7,7 +7,7 @@ from .executor import execute as _dispatch_execute
 from .opref import OpRef
 from . import opref
 from .ref import Ref
-from .state.value import String
+from .state.value import Bool, Map, Number, String, Tuple
 from .uri import URI, authority, origin, uri
 from . import compute
 from . import state
@@ -23,6 +23,10 @@ __all__ = [
     "OpRef",
     "opref",
     "Ref",
+    "Bool",
+    "Number",
+    "Map",
+    "Tuple",
     "String",
     "URI",
     "compute",

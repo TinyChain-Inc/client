@@ -21,7 +21,7 @@ from .scalar import (
     for_each,
 )
 from .context import Context, ContextResult, context, scoped_context, current_context
-from .value import String, Value
+from .value import Bool, Map, Number, String, Tuple, Value
 
 __all__ = [
     "Op",
@@ -40,6 +40,10 @@ __all__ = [
     "While",
     "ForEach",
     "Value",
+    "Bool",
+    "Number",
+    "Map",
+    "Tuple",
     "String",
     "autobox",
     "Context",
