@@ -47,6 +47,10 @@ def test_route_type_hints_resolve_to_runtime_value_types():
         def mixed(self, text: str, count: int) -> str | int:
             ...
 
+        @tc.post
+        def typed(self, n: tc.Number, b: tc.Bool, m: tc.Map, t: tc.Tuple) -> tc.Tuple:
+            ...
+
     hello_sig = inspect.signature(A().hello)
     assert hello_sig.parameters["name"].annotation is tc.String
     assert hello_sig.return_annotation is tc.String
@@ -54,8 +58,44 @@ def test_route_type_hints_resolve_to_runtime_value_types():
 
     mixed_sig = inspect.signature(A().mixed)
     assert mixed_sig.parameters["text"].annotation is tc.String
-    assert mixed_sig.parameters["count"].annotation is tc.state.Value
+    assert mixed_sig.parameters["count"].annotation is tc.Number
     assert mixed_sig.return_annotation is tc.state.Value
+
+    typed_sig = inspect.signature(A().typed)
+    assert typed_sig.parameters["n"].annotation is tc.Number
+    assert typed_sig.parameters["b"].annotation is tc.Bool
+    assert typed_sig.parameters["m"].annotation is tc.Map
+    assert typed_sig.parameters["t"].annotation is tc.Tuple
+    assert typed_sig.return_annotation is tc.Tuple
+
+
+def test_library_routes_return_typed_value_refs():
+    class A(tc.Library):
+        publisher = "example-devco"
+        version = "0.1.0"
+
+        @tc.get
+        def number(self) -> tc.Number:
+            ...
+
+        @tc.get
+        def flag(self) -> tc.Bool:
+            ...
+
+        @tc.get
+        def obj(self) -> tc.Map:
+            ...
+
+        @tc.get
+        def seq(self) -> tc.Tuple:
+            ...
+
+    a = A()
+    with tc.backend(mode="deferred"):
+        assert isinstance(a.number(), tc.Number)
+        assert isinstance(a.flag(), tc.Bool)
+        assert isinstance(a.obj(), tc.Map)
+        assert isinstance(a.seq(), tc.Tuple)
 
 
 def test_library_routes_compile_opdef_routes():

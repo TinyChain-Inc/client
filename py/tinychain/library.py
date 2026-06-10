@@ -13,7 +13,7 @@ from .opref import OpRef
 from .ref import Ref
 from . import _autograph
 from .state import ContextResult, OpDef, Scalar, TCRef, autobox, context, current_context, scoped_context
-from .state.value import String, Value
+from .state.value import Bool, Map, Number, String, Tuple, Value
 from .uri import URI, _class_resource_name, _segment, uri as _uri
 
 def _is_method(form: Callable[..., Any]) -> bool:
@@ -40,11 +40,21 @@ def _runtime_type_hint(type_hint: object, default: type = Value) -> type:
         return Value
     if type_hint is str:
         return String
-    if type_hint in (bool, int, float):
-        return Value
+    if type_hint is bool:
+        return Bool
+    if type_hint in (int, float):
+        return Number
+    if type_hint is dict:
+        return Map
+    if type_hint in (list, tuple):
+        return Tuple
 
     origin = get_origin(type_hint)
     if origin is not None:
+        if origin is dict:
+            return Map
+        if origin in (list, tuple):
+            return Tuple
         if origin is Optional:
             args = [arg for arg in get_args(type_hint) if arg is not type(None)]
         else:

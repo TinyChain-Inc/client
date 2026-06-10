@@ -658,19 +658,19 @@ class Scalar:
                 if isinstance(key, str) and key.startswith(uri("state", "scalar", "op").path):
                     return Scalar(op=OpDef.from_json(obj))
 
-            # Try to decode as a Value-typed map.
-            try:
-                return Scalar(value=Value.from_json(obj))
-            except Exception:
-                pass
-
-            # Try to decode as a TCRef/OpRef map.
-            # Only applies to IR op maps (subject keys start with '/' or '$', or DELETE tag).
+            # Decode TCRef/OpRef maps before generic Value maps to avoid
+            # treating single-entry refs (e.g. {"$id": []}) as plain maps.
             if len(obj) == 1:
                 try:
                     return Scalar(ref=TCRef.from_json(obj))
                 except Exception:
                     pass
+
+            # Try to decode as a Value-typed map.
+            try:
+                return Scalar(value=Value.from_json(obj))
+            except Exception:
+                pass
 
             return Scalar.map_of({k: Scalar.from_json(v) for k, v in _sorted_items(obj)})
 

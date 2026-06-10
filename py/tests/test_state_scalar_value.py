@@ -1,4 +1,5 @@
 import tinychain as tc
+import pytest
 
 
 def test_value_roundtrip_typed_maps():
@@ -10,6 +11,51 @@ def test_value_roundtrip_typed_maps():
 
     n = tc.state.Value.none()
     assert tc.state.Value.from_json(n.to_json()) == n
+
+
+def test_value_bool_is_distinct_from_number():
+    b = tc.state.Value.bool(True)
+    assert tc.state.Value.from_json(b.to_json()) == b
+    assert tc.state.Value.from_json(True).kind == "bool"
+    assert tc.state.Value.from_json(1).kind == "number"
+
+    with pytest.raises(TypeError, match="bool is not a number"):
+        tc.state.Value.number(True)
+
+
+def test_value_map_and_tuple_roundtrip():
+    value = tc.state.Value.map_of(
+        {
+            "dtype": "f32",
+            "encoding": {"signed": True, "bits": 16},
+            "shape": ["N", "D"],
+        }
+    )
+
+    decoded = tc.state.Value.from_json(value.to_json())
+    assert decoded == value
+
+
+def test_value_subtype_constructors_and_from_json_types():
+    assert isinstance(tc.Number(3), tc.Number)
+    assert isinstance(tc.Bool(False), tc.Bool)
+    assert isinstance(tc.Map({"x": 1}), tc.Map)
+    assert isinstance(tc.Tuple([1, 2]), tc.Tuple)
+
+    assert isinstance(tc.state.Value.from_json(3), tc.Number)
+    assert isinstance(tc.state.Value.from_json(True), tc.Bool)
+    assert isinstance(tc.state.Value.from_json({"x": 1}), tc.Map)
+    assert isinstance(tc.state.Value.from_json([1, 2]), tc.Tuple)
+
+
+def test_map_and_tuple_literal_iteration_helpers():
+    m = tc.Map({"a": 1, "b": 2})
+    assert list(m) == ["a", "b"]
+    assert [k for k, _ in m.items()] == ["a", "b"]
+
+    t = tc.Tuple([1, "x", True])
+    assert len(t) == 3
+    assert [v.kind for v in t] == ["number", "string", "bool"]
 
 
 def test_scalar_roundtrip_nested_map_and_tuple():

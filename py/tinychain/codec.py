@@ -62,6 +62,17 @@ def decode_payload(payload: object) -> object:
     from .state import OpDef, TCRef
     from .state.value import Value
 
+    def _project_value(value: Value) -> object:
+        if value.kind == "map":
+            assert isinstance(value.value, dict)
+            return {k: _project_value(v) for k, v in value.value.items()}
+
+        if value.kind == "tuple":
+            assert isinstance(value.value, list)
+            return [_project_value(v) for v in value.value]
+
+        return value.value
+
     unwrapped = _decode_collections(payload)
     if unwrapped is None or isinstance(unwrapped, (bool, int, float, str)):
         return unwrapped
@@ -83,7 +94,7 @@ def decode_payload(payload: object) -> object:
 
             try:
                 value = Value.from_json(unwrapped)
-                return value.value
+                return _project_value(value)
             except Exception:
                 pass
 
