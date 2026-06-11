@@ -3,12 +3,17 @@ from __future__ import annotations
 import pytest
 
 import tinychain as tc
+import tinychain._local as tc_local
 
 
 def _clear_token_env(monkeypatch) -> None:
     monkeypatch.delenv("TC_TOKEN_HOST", raising=False)
     monkeypatch.delenv("TC_ACTOR_ID", raising=False)
     monkeypatch.delenv("TC_PUBLIC_KEY_B64", raising=False)
+
+
+def _use_kernel_handle(monkeypatch, handle: type) -> None:
+    monkeypatch.setattr(tc_local, "kernel_handle", lambda: handle)
 
 
 def test_with_library_infers_route_from_declared_dependency_authority(tmp_path, monkeypatch):
@@ -22,7 +27,7 @@ def test_with_library_infers_route_from_declared_dependency_authority(tmp_path, 
             cls.calls.append((definition_json, routes, token, data_dir))
             return "kernel"
 
-    monkeypatch.setattr(tc, "KernelHandle", FakeKernelHandle)
+    _use_kernel_handle(monkeypatch, FakeKernelHandle)
 
     dep = tc.URI.parse("https://deps.example.test:9443/lib/example-devco/b/0.1.0")
 
@@ -52,7 +57,7 @@ def test_with_library_rejects_dependency_override_argument(tmp_path, monkeypatch
             cls.calls.append((definition_json, routes, token, data_dir))
             return "kernel"
 
-    monkeypatch.setattr(tc, "KernelHandle", FakeKernelHandle)
+    _use_kernel_handle(monkeypatch, FakeKernelHandle)
 
     class A(tc.Library):
         publisher = "example-devco"
@@ -77,7 +82,7 @@ def test_with_library_uses_multi_route_constructor_when_available(tmp_path, monk
             cls.calls.append((definition_json, routes, token, data_dir))
             return "kernel"
 
-    monkeypatch.setattr(tc, "KernelHandle", FakeKernelHandle)
+    _use_kernel_handle(monkeypatch, FakeKernelHandle)
 
     dep_b = tc.URI.parse("http://left.example.test:8702/lib/example-devco/b/0.1.0")
     dep_c = tc.URI.parse("http://right.example.test:8703/lib/example-devco/c/0.1.0")
@@ -111,7 +116,7 @@ def test_with_library_keeps_each_declared_dependency_route(tmp_path, monkeypatch
             cls.calls.append((definition_json, routes, token, data_dir))
             return "kernel"
 
-    monkeypatch.setattr(tc, "KernelHandle", FakeKernelHandle)
+    _use_kernel_handle(monkeypatch, FakeKernelHandle)
 
     dep_b = tc.URI.parse("http://deps.example.test:8702/lib/example-devco/b/0.1.0")
     dep_c = tc.URI.parse("http://deps.example.test:8702/lib/example-devco/c/0.1.0")
@@ -140,7 +145,7 @@ def test_with_library_infers_authority_from_runtime_dependency_binding(tmp_path,
             cls.calls.append((definition_json, routes, token, data_dir))
             return "kernel"
 
-    monkeypatch.setattr(tc, "KernelHandle", FakeKernelHandle)
+    _use_kernel_handle(monkeypatch, FakeKernelHandle)
 
     class B(tc.Library):
         publisher = "example-devco"
@@ -166,7 +171,7 @@ def test_with_library_missing_authority_is_clear(tmp_path, monkeypatch):
     class FakeKernelHandle:
         pass
 
-    monkeypatch.setattr(tc, "KernelHandle", FakeKernelHandle)
+    _use_kernel_handle(monkeypatch, FakeKernelHandle)
 
     class A(tc.Library):
         publisher = "example-devco"
@@ -183,7 +188,7 @@ def test_with_library_rejects_ambiguous_runtime_binding_authority(tmp_path, monk
     class FakeKernelHandle:
         pass
 
-    monkeypatch.setattr(tc, "KernelHandle", FakeKernelHandle)
+    _use_kernel_handle(monkeypatch, FakeKernelHandle)
 
     LeftB = type(
         "B",
@@ -232,7 +237,7 @@ def test_with_library_ignores_env_auth(tmp_path, monkeypatch):
             cls.calls.append((definition_json, routes, token, data_dir))
             return "kernel"
 
-    monkeypatch.setattr(tc, "KernelHandle", FakeKernelHandle)
+    _use_kernel_handle(monkeypatch, FakeKernelHandle)
 
     dep = tc.URI.parse("https://deps.example.test:9443/lib/example-devco/b/0.1.0")
 
@@ -261,7 +266,7 @@ def test_with_library_accepts_single_token_object(tmp_path, monkeypatch):
             cls.calls.append((definition_json, routes, token, data_dir))
             return "kernel"
 
-    monkeypatch.setattr(tc, "KernelHandle", FakeKernelHandle)
+    _use_kernel_handle(monkeypatch, FakeKernelHandle)
 
     dep = tc.URI.parse("https://deps.example.test:9443/lib/example-devco/b/0.1.0")
 

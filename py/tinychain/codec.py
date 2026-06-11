@@ -26,16 +26,21 @@ def _decode_tensor(payload: object) -> object:
     decoded_values = [decode_payload(value) for value in values] if isinstance(values, list) else values
 
     try:
-        import tinychain as tc
-    except ImportError:
-        tc = None
+        from . import _local
+        from .state.tensor import Tensor
 
-    if tc is not None and hasattr(tc, "LocalTensor"):
+        local = _local.backend()
+        native_tensor = getattr(local, "Tensor", None)
+    except ImportError:
+        native_tensor = None
+        Tensor = None  # type: ignore[assignment]
+
+    if native_tensor is not None and Tensor is not None:
         try:
             if dtype == _DTYPE_F32:
-                return tc.LocalTensor.dense_f32(shape, [float(value) for value in decoded_values])
+                return Tensor(native=native_tensor.dense_f32(shape, [float(value) for value in decoded_values]))
             if dtype == _DTYPE_U64:
-                return tc.LocalTensor.dense_u64(shape, [int(value) for value in decoded_values])
+                return Tensor(native=native_tensor.dense_u64(shape, [int(value) for value in decoded_values]))
         except (TypeError, ValueError):
             pass
 

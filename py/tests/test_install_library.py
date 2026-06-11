@@ -3,6 +3,7 @@ from __future__ import annotations
 import pathlib
 
 import tinychain as tc
+import tinychain._local as tc_local
 import tinychain.testing as tc_testing
 
 from .support import rjwt_install_token
@@ -43,7 +44,7 @@ def test_install_python_library(tmp_path: pathlib.Path):
     stub = Example()
     with tc.backend(kernel, mode="deferred"):
         op = stub.hello()
-        response = kernel.dispatch(tc.KernelRequest("GET", op.op.path, None, None))
+        response = kernel.dispatch(tc_local.kernel_request("GET", op.op.path, None, None))
         assert response.status == 200
         assert tc_testing.decode_json_body(response) == "hello"
 

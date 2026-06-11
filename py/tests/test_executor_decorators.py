@@ -66,7 +66,8 @@ def _token(value: str) -> tc.auth.SignedBearerToken:
 
 
 def test_stub_route_dispatch(monkeypatch):
-    monkeypatch.setattr(tc, "KernelRequest", _Request)
+    import tinychain._local as tc_local
+    monkeypatch.setattr(tc_local, "kernel_request", lambda *args: _Request(*args))
 
     kernel = _Kernel()
 
@@ -95,7 +96,8 @@ def test_stub_route_dispatch(monkeypatch):
 
 
 def test_stub_route_dispatch_forwards_bearer(monkeypatch):
-    monkeypatch.setattr(tc, "KernelRequest", _Request)
+    import tinychain._local as tc_local
+    monkeypatch.setattr(tc_local, "kernel_request", lambda *args: _Request(*args))
 
     kernel = _Kernel()
 
@@ -120,7 +122,8 @@ def test_stub_route_dispatch_forwards_bearer(monkeypatch):
 
 
 def test_stub_route_uses_annotated_return_type(monkeypatch):
-    monkeypatch.setattr(tc, "KernelRequest", _Request)
+    import tinychain._local as tc_local
+    monkeypatch.setattr(tc_local, "kernel_request", lambda *args: _Request(*args))
 
     class C(tc.Library):
         publisher = "example-devco"
@@ -138,7 +141,8 @@ def test_stub_route_uses_annotated_return_type(monkeypatch):
 
 
 def test_stub_route_accepts_body_and_dispatches(monkeypatch):
-    monkeypatch.setattr(tc, "KernelRequest", _Request)
+    import tinychain._local as tc_local
+    monkeypatch.setattr(tc_local, "kernel_request", lambda *args: _Request(*args))
 
     kernel = _Kernel()
 
@@ -166,7 +170,8 @@ def test_stub_route_accepts_body_and_dispatches(monkeypatch):
 
 
 def test_backend_eager_mode_executes_stub_calls_by_default(monkeypatch):
-    monkeypatch.setattr(tc, "KernelRequest", _Request)
+    import tinychain._local as tc_local
+    monkeypatch.setattr(tc_local, "kernel_request", lambda *args: _Request(*args))
 
     kernel = _Kernel()
 
@@ -190,7 +195,8 @@ def test_backend_eager_mode_executes_stub_calls_by_default(monkeypatch):
 
 
 def test_backend_mode_deferred_returns_plan(monkeypatch):
-    monkeypatch.setattr(tc, "KernelRequest", _Request)
+    import tinychain._local as tc_local
+    monkeypatch.setattr(tc_local, "kernel_request", lambda *args: _Request(*args))
 
     kernel = _Kernel()
 
@@ -215,7 +221,8 @@ def test_backend_mode_deferred_returns_plan(monkeypatch):
 
 
 def test_backend_mode_can_be_switched_by_nested_backend_context(monkeypatch):
-    monkeypatch.setattr(tc, "KernelRequest", _Request)
+    import tinychain._local as tc_local
+    monkeypatch.setattr(tc_local, "kernel_request", lambda *args: _Request(*args))
 
     kernel = _Kernel()
 
@@ -248,7 +255,8 @@ def test_backend_mode_can_be_switched_by_nested_backend_context(monkeypatch):
 
 
 def test_backend_mode_deferred_remains_deferred_when_nested(monkeypatch):
-    monkeypatch.setattr(tc, "KernelRequest", _Request)
+    import tinychain._local as tc_local
+    monkeypatch.setattr(tc_local, "kernel_request", lambda *args: _Request(*args))
     kernel = _Kernel()
 
     class H(tc.Library):
@@ -271,7 +279,8 @@ def test_backend_mode_deferred_remains_deferred_when_nested(monkeypatch):
 
 
 def test_backend_mode_deferred_preserves_cross_library_dependency_paths(monkeypatch):
-    monkeypatch.setattr(tc, "KernelRequest", _Request)
+    import tinychain._local as tc_local
+    monkeypatch.setattr(tc_local, "kernel_request", lambda *args: _Request(*args))
     kernel = _Kernel()
     remote = _Remote()
     monkeypatch.setattr(
@@ -349,8 +358,9 @@ def test_backend_requires_local_or_remote():
 
 
 def test_execute_path_only_without_backend_requires_default_local_host(monkeypatch):
-    monkeypatch.setattr(tc, "local", None, raising=False)
-    monkeypatch.setattr(tc, "KernelHandle", object(), raising=False)
+    import tinychain._local as tc_local
+
+    monkeypatch.setattr(tc_local, "kernel_handle", lambda: object())
     op = tc.opref.get("/lib/example-devco/local/0.1.0/ping")
 
     with pytest.raises(RuntimeError, match="no default local TinyChain host"):

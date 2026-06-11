@@ -59,11 +59,11 @@ class _RemoteRoute:
 
 
 def _encode_json_body(value: Any) -> "object":
-    import tinychain as tc
+    from . import _local
 
     payload = json.dumps(_encode_payload(value), separators=(",", ":")).encode("utf-8")
     try:
-        return tc.StateHandle(payload)
+        return _local.state_handle(payload)
     except ImportError:
         return payload
 
@@ -156,18 +156,13 @@ class Executor:
         headers: Optional[Iterable[tuple[str, str]]] = None,
         body: Any = None,
     ) -> object:
-        import tinychain as tc
+        from . import _local
 
         if self.kernel is None:
             raise RuntimeError("no local kernel configured for dispatch; set `kernel=` in tc.backend(...)")
 
-        if not hasattr(tc, "KernelRequest"):
-            raise ImportError(
-                "KernelRequest is not available; install `tinychain-local` to use the in-process executor"
-            )
-
         request_body = None if body is None else (_encode_json_body(body) if not hasattr(body, "value") else body)
-        request = tc.KernelRequest(method, path, self._merge_headers(headers), request_body)
+        request = _local.kernel_request(method, path, self._merge_headers(headers), request_body)
         return self.kernel.dispatch(request)
 
     def execute(self, opref: "object") -> object:
@@ -236,13 +231,13 @@ def _encode_dispatch_body(body: Any) -> "object":
         return body
 
     try:
-        import tinychain as tc
+        from . import _local
     except ImportError:
         return _encode_body(body)
 
     if isinstance(body, (bytes, bytearray)):
         try:
-            return tc.StateHandle(bytes(body))
+            return _local.state_handle(bytes(body))
         except ImportError:
             return _encode_body(body)
     if isinstance(body, str):
@@ -252,21 +247,20 @@ def _encode_dispatch_body(body: Any) -> "object":
 
 
 def _kernel_dispatch(kernel: object, method: str, path: str, headers, body) -> object:
-    import tinychain as tc
+    from . import _local
 
-    request = tc.KernelRequest(method, path, headers, body)
+    request = _local.kernel_request(method, path, headers, body)
     return kernel.dispatch(request)
 
 
 def _default_local_kernel() -> object | None:
     try:
-        import tinychain as tc
+        from . import _local
     except ImportError:
         return None
 
     try:
-        kernel_handle = getattr(tc, "KernelHandle", None)
-        local_ctor = getattr(kernel_handle, "local", None)
+        local_ctor = getattr(_local.kernel_handle(), "local", None)
         if callable(local_ctor):
             return local_ctor()
     except ImportError:

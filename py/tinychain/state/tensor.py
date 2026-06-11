@@ -22,17 +22,37 @@ def _reduce_args(axes: object = None, keepdims: bool = False) -> dict[str, Scala
 
 
 class Tensor(Comparable):
-    """Symbolic TinyChain tensor.
+    """TinyChain tensor.
 
-    This is the Python authoring facade for `/state/collection/tensor`. Its
-    methods mirror the v1 Tensor surface but only build canonical TinyChain op
-    references; execution mode is still controlled by the active backend.
+    A tensor may be symbolic (backed by an IR ref/op) or materialized (backed by
+    eager backend data). User code should not need to distinguish those cases.
     """
+
+    __slots__ = ("_native",)
 
     __uri__: URI = uri("state", "collection", "tensor")
 
+    def __init__(self, form: object = None, *, ref=None, native: object = None):
+        if native is not None and (form is not None or ref is not None):
+            raise TypeError("Tensor accepts either native data or symbolic form/ref")
+        super().__init__(form, ref=ref)
+        self._native = native
+
     @property
-    def dtype(self) -> Scalar:
+    def native(self) -> object | None:
+        return self._native
+
+    def _native_attr(self, name: str) -> object | None:
+        if self._native is None:
+            return None
+        attr = getattr(self._native, name)
+        return attr() if callable(attr) else attr
+
+    @property
+    def dtype(self) -> object:
+        native = self._native_attr("dtype")
+        if native is not None:
+            return native
         return self._post("dtype", rtype=Scalar)
 
     @property
@@ -40,7 +60,10 @@ class Tensor(Comparable):
         return self._post("ndim", rtype=Number)
 
     @property
-    def shape(self) -> Tuple:
+    def shape(self) -> object:
+        native = self._native_attr("shape")
+        if native is not None:
+            return native
         return self._post("shape", rtype=Tuple)
 
     @property
@@ -151,6 +174,24 @@ class Tensor(Comparable):
 
     def __rtruediv__(self, other: object) -> "Tensor":
         return autobox(other)._post("div", {"r": self}, rtype=Tensor)
+
+    @property
+    def values(self) -> object:
+        native = self._native_attr("values")
+        if native is None:
+            raise AttributeError("symbolic Tensor has no materialized values")
+        return native
+
+    def to_json(self) -> object:
+        if self._native is None:
+            return super().to_json()
+
+        return {
+            str(uri("state", "collection", "tensor")): [
+                [self.dtype, self.shape],
+                self.values,
+            ]
+        }
 
 
 def split(tensor: Tensor, num_or_size_splits: object, axis: object = 0) -> Scalar:

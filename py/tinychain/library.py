@@ -881,12 +881,11 @@ def install(
     if remote is not None:
         return _submit_remote_library_definition(remote, definition, token=token)
 
-    local = _local_backend()
-    kernel = _kernel_for_library_install(local, kernel=kernel, data_dir=data_dir)
+    kernel = _kernel_for_library_install(kernel=kernel, data_dir=data_dir)
     bearer_token = _bearer_token(token)
     if bearer_token is None:
         raise ValueError("expected `token` for library installs")
-    return _submit_local_library_definition(local, kernel, definition, bearer_token=bearer_token)
+    return _submit_local_library_definition(kernel, definition, bearer_token=bearer_token)
 
 
 def library_definition(library: Library | type[Library]) -> dict:
@@ -918,16 +917,7 @@ def _submit_remote_library_definition(
     return host.request("PUT", _uri("lib").path, body=definition)
 
 
-def _local_backend():
-    try:
-        import tinychain_local as local  # type: ignore
-    except ImportError as exc:  # pragma: no cover
-        raise ImportError("install requires the optional `tinychain-local` backend") from exc
-    return local
-
-
 def _kernel_for_library_install(
-    local: object,
     *,
     kernel: object | None,
     data_dir: pathlib.Path | None,
@@ -946,13 +936,17 @@ def _kernel_for_library_install(
             if isinstance(library, Library)
             else _library_class(library).class_id().path
         )
-        return local.KernelHandle.with_library_definition(
+        from . import _local
+
+        return _local.kernel_with_library_definition(
             json.dumps({library_id: {}}, separators=(",", ":")),
             token=token,
             data_dir=str(data_dir),
         )
 
-    return local.KernelHandle.local(data_dir=str(data_dir))
+    from . import _local
+
+    return _local.local_kernel(data_dir=str(data_dir))
 
 
 def _header_value(response: object, name: str) -> str | None:
@@ -967,13 +961,13 @@ def _header_value(response: object, name: str) -> str | None:
     return None
 
 
-def _submit_local_library_definition(
-    local: object, kernel: object, definition: dict, *, bearer_token: str
-) -> object:
+def _submit_local_library_definition(kernel: object, definition: dict, *, bearer_token: str) -> object:
+    from . import _local
+
     install_path = _uri("lib").path
     body = json.dumps(definition, separators=(",", ":"))
     headers = [("authorization", f"Bearer {bearer_token}")]
-    request = local.KernelRequest("PUT", install_path, headers, local.StateHandle(body))
+    request = _local.kernel_request("PUT", install_path, headers, _local.state_handle(body))
     return kernel.dispatch(request)
 
 
@@ -1012,13 +1006,11 @@ def _install_compiled_wasm_library(
     data_dir: Optional[pathlib.Path] = None,
     token: object | None = None,
 ) -> object:
-    local = _local_backend()
     bearer_token = _bearer_token(token)
     if bearer_token is None:
         raise ValueError("expected `token` for WASM installs")
 
     kernel = _kernel_for_library_install(
-        local,
         kernel=kernel,
         data_dir=data_dir,
         library=library,

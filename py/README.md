@@ -293,7 +293,7 @@ TinyChain state envelopes into typed Python values:
 - self-describing scalar values (`"hello"`, `7`, `true`, `null`) -> Python primitives
 - self-describing state maps/objects (`{"k": ...}`) -> `dict`
 - self-describing state tuples/arrays (`[...]`) -> `list`/`tuple` as appropriate
-- `/state/collection/tensor` -> `tc.LocalTensor` when the optional PyO3 backend is available, otherwise a typed tensor payload dict
+- `/state/collection/tensor` -> `tc.Tensor` with materialized backing data
 - `/state/scalar/op/*` -> `tc.state.OpDef` (decoded transparently)
 
 This means callers should expect typed responses by default, not ad-hoc JSON/status parsing
@@ -398,20 +398,33 @@ in PyO3 as soon as the kernel loads the same directory tree.
 
 ## Selecting the PyO3 backend
 
-This workspace ships a pure-Python `tinychain` package and an optional in-process PyO3 backend (`tinychain-local`). Transaction IDs are minted and validated server-side; client code must not mint or manage transaction lifecycles directly. To exercise the in-process backend, install `tinychain-local` and drive requests directly against the shared kernel:
+This workspace ships a pure-Python `tinychain` package and an optional
+in-process PyO3 backend (`tinychain-local`). Application code should not import
+or reference `tinychain-local` classes directly. Use the public TinyChain API and
+let `tc.backend(...)` select local eager execution:
 
 ```python
 import tinychain as tc
 
-kernel = tc.KernelHandle.local(data_dir="path/to/data")
-health = kernel.dispatch(tc.KernelRequest("GET", tc.uri.healthz(), None, None))
-print(health.status())  # 200 when the kernel is wired correctly
+class Greeter(tc.Library):
+    publisher = "demo"
+    version = "0.1.0"
+
+    @tc.get
+    def hello(self, name: str) -> tc.String:
+        return tc.String("Hello, {{name}}!").render(name=name)
+
+kernel = tc.kernel.with_library(Greeter(), data_dir=data_dir, token=install_token)
+
+with tc.backend(kernel, token=runtime_token):
+    print(Greeter().hello("Ada"))
 ```
 
-`tc.Backend` wraps the same handle and adds the `healthz` helper. Transaction
-helpers (`begin_txn`, `commit_txn`, etc.) are **not** exposed via PyO3; the
-kernel remains the only owner of transaction state. Always point both HTTP and
-PyO3 adapters at the **same `data_dir`** so they share the txfs state.
+The private `tinychain._local` bridge exists only for framework internals and
+low-level tests. Transaction helpers (`begin_txn`, `commit_txn`, etc.) are **not**
+exposed via PyO3; the kernel remains the only owner of transaction state. Always
+point both HTTP and PyO3 adapters at the **same `data_dir`** so they share the
+txfs state.
 
 ## Deferred client-side `Library` definitions
 
@@ -531,23 +544,6 @@ under `/state/media/...`; the queue row only stores the reference.
 
 Use these side-by-side examples when updating docs or answering contributor
 questions about the canonical eager/deferred client model.
-
-**Read a collection element with a low-level host request**
-
-Prefer library route calls in application packages. Use `Host.request` for
-adapter diagnostics or direct collection probes.
-
-```python
-import tinychain as tc
-
-table = tc.uri.state(
-    namespace="demo",
-    path=("users",),
-)
-host = tc.Host("http://localhost:8702")
-entry = host.request("GET", tc.uri(table, "user:123"))
-name = entry["name"]
-```
 
 **Switch route calls between eager and deferred mode**
 

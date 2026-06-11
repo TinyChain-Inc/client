@@ -2,6 +2,7 @@ import pathlib
 
 import pytest
 import tinychain as tc
+import tinychain._local as tc_local
 import tinychain.testing as tc_testing
 
 from .support import rjwt_install_token
@@ -12,7 +13,7 @@ def _failing_stub(_request):
 
 
 def test_backend_healthz_routes_to_rust_handler():
-    backend = tc.Backend(_failing_stub, _failing_stub, None)
+    backend = tc_local.backend_handle(_failing_stub, _failing_stub, None)
 
     # Should return without running the python stubs because the Rust health handler responds
     backend.healthz()
@@ -38,7 +39,7 @@ def test_kernel_handle_installs_library_via_rust_handlers(tmp_path: pathlib.Path
         token=tc.auth.SignedBearerToken(**token),
     )
 
-    get_request = tc.KernelRequest("GET", Hello.class_id().path, None, None)
+    get_request = tc_local.kernel_request("GET", Hello.class_id().path, None, None)
     response = kernel.dispatch(get_request)
     assert response.status == 200
     assert tc_testing.decode_json_body(response)["version"] == "0.1.0"
@@ -46,7 +47,7 @@ def test_kernel_handle_installs_library_via_rust_handlers(tmp_path: pathlib.Path
     put_response = tc.install(Updated, kernel=kernel, token=tc.auth.SignedBearerToken(**token))
     assert put_response.status == 204
 
-    response_after = kernel.dispatch(tc.KernelRequest("GET", Updated.class_id().path, None, None))
+    response_after = kernel.dispatch(tc_local.kernel_request("GET", Updated.class_id().path, None, None))
     assert response_after.status == 200
     assert tc_testing.decode_json_body(response_after)["version"] == "0.2.0"
 
