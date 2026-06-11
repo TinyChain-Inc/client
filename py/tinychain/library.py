@@ -139,25 +139,10 @@ def _validate_library_class(library: type["Library"]) -> None:
 
 
 @dataclass(frozen=True, slots=True)
-class GradSpec:
-    rule: object | None = None
-    wrt: tuple[str, ...] | None = None
-
-    def to_json(self) -> dict[str, object]:
-        out: dict[str, object] = {}
-        if self.rule is not None:
-            out["rule"] = self.rule
-        if self.wrt is not None:
-            out["wrt"] = list(self.wrt)
-        return out
-
-
-@dataclass(frozen=True, slots=True)
 class Route:
     method: str
     form: Callable[..., Any]
     source: Optional[str] = None
-    grad: GradSpec | None = None
     name: Optional[str] = field(default=None, init=False)
 
     def __post_init__(self) -> None:
@@ -330,14 +315,12 @@ def _decorate(
             method=method.upper(),
             form=actual,
             source=_capture_source(actual),
-            grad=getattr(actual, "__tc_grad__", None),
         )
     if _is_method(form):
         return Route(
             method=method.upper(),
             form=form,
             source=_capture_source(form),
-            grad=getattr(form, "__tc_grad__", None),
         )
     return _compile_opdef_callable(form, method=method.upper())
 
@@ -366,39 +349,18 @@ def delete(
     return _decorate("DELETE", form)
 
 
-def grad(
-    form: Optional[Callable[..., Any] | Route] = None,
-    *,
-    rule: object | None = None,
-    wrt: tuple[str, ...] | list[str] | None = None,
-):
-    """Annotate a canonical route with autodiff metadata.
+def grad(target: object, *, wrt: object = None) -> object:
+    """Return the TinyChain autodiff transform for a route/ref/op.
 
-    This intentionally does not define a new route kind. Autodiff is a compiler
-    layer over ordinary TinyChain routes, so this decorator only records metadata
-    for future autodiff passes.
+    This is intentionally shaped like JAX's call-site transform API rather than
+    route metadata. The route defines the computation; the autodiff compiler
+    decides traversal, fanout, accumulation, and the differentiation target.
     """
 
-    spec = GradSpec(rule=rule, wrt=tuple(wrt) if wrt is not None else None)
-
-    def annotate(actual: Callable[..., Any] | Route):
-        if isinstance(actual, Route):
-            return Route(
-                method=actual.method,
-                form=actual.form,
-                source=actual.source,
-                grad=spec,
-            )
-
-        if not callable(actual):
-            raise TypeError(f"expected a callable or Route, got {type(actual).__name__}")
-
-        setattr(actual, "__tc_grad__", spec)
-        return actual
-
-    if form is None:
-        return annotate
-    return annotate(form)
+    raise NotImplementedError(
+        "tc.grad is the reserved call-site autodiff transform; the autodiff "
+        "compiler is not implemented yet"
+    )
 
 
 def _capture_source(form: Callable[..., Any]) -> str | None:
@@ -616,26 +578,19 @@ def compile_ir(library: Library | type[Library]) -> dict:
         result = _compile_route(attr, library_cls)
         op = _to_opref(result)
         if op is not None:
-            route_ir = {
-                "path": f"/{name}",
-                "op": {"method": op.method, "path": op.path},
-            }
-            if attr.grad is not None:
-                route_ir["grad"] = attr.grad.to_json()
-            routes.append(route_ir)
+            routes.append(
+                {
+                    "path": f"/{name}",
+                    "op": {"method": op.method, "path": op.path},
+                }
+            )
             continue
 
         if isinstance(result, OpDef):
-            route_ir = {"path": f"/{name}", "opdef": result.to_json()}
-            if attr.grad is not None:
-                route_ir["grad"] = attr.grad.to_json()
-            routes.append(route_ir)
+            routes.append({"path": f"/{name}", "opdef": result.to_json()})
             continue
 
-        route_ir = {"path": f"/{name}", "value": result}
-        if attr.grad is not None:
-            route_ir["grad"] = attr.grad.to_json()
-        routes.append(route_ir)
+        routes.append({"path": f"/{name}", "value": result})
 
     return {"schema": _class_schema(library_cls), "routes": routes}
 

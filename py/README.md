@@ -198,25 +198,28 @@ The initial v2 port covers the method-definition surface only: `shape`, `dtype`,
 Tensor wrappers or deferred flags; execution mode still comes from
 `tc.backend(..., mode=...)`.
 
-### Autodiff Metadata
-
-Use `tc.grad(...)` to mark an ordinary route as differentiable without changing
-its route method, path, or call shape:
+### Autodiff Transform
 
 ```python
 class Math(tc.Library):
     publisher = "demo"
     version = "0.1.0"
 
-    @tc.grad(rule="matmul", wrt=("left", "right"))
     @tc.post
     def matmul(self, left: tc.Tensor, right: tc.Tensor) -> tc.Tensor:
         return left @ right
+
+with tc.backend(mode="deferred"):
+    op = Math().matmul(left=tc.state.id("left"), right=tc.state.id("right"))
+    grad_op = tc.grad(op, wrt=("left", "right"))
 ```
 
-Autodiff is a compiler layer over canonical TinyChain route IR. Do not create
-autodiff-specific `get` or `post` decorators; metadata must compose with normal
-routes so routing, installation, and reflection keep one code path.
+Autodiff follows a JAX-like call-site transform model: routes define ordinary
+TinyChain computation, and the autodiff compiler decides `wrt`, traversal,
+fanout, and accumulation when `tc.grad(...)` is called. Do not create
+autodiff-specific `get`/`post` decorators or route-level `rule`/`wrt` metadata.
+The current `tc.grad(...)` surface is a reserved stub until the compiler pass is
+implemented.
 
 Python route implementations are compiled by `tinychain._autograph`, which lowers
 method source code into TinyChain IR. Route decorators capture source at definition

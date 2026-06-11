@@ -98,10 +98,11 @@ staying thin and well-documented for new users.
   Do not erase `Get/Put/Post/Delete` operation refs/defs behind parent-class
   method strings or generic `args` shape checks when constructing, validating,
   or serializing IR. Prefer concrete subclasses and `isinstance` dispatch.
-- Autodiff metadata is orthogonal to routing. Do not add autodiff-specific
-  route decorators such as `diff_get` or `diff_post`; use `tc.grad(...)` on
-  canonical `@tc.get`/`@tc.post` routes so the autodiff compiler consumes the
-  same route identity and IR as every other tool.
+- Autodiff is a call-site transform over canonical route IR, not route
+  metadata. Do not add autodiff-specific route decorators such as `diff_get`
+  or `diff_post`, and do not put `rule`/`wrt` metadata on `@tc.get`/`@tc.post`.
+  Reserve `tc.grad(target, wrt=...)` for the JAX-like autodiff transform API;
+  route definitions remain ordinary TinyChain routes.
 - High-level symbolic wrappers must construct refs through the canonical typed
   builder methods on `Scalar` (for example `_get`, `_post`, `_put`,
   `_post_ref`). Do not hand-write `TCRef(GetOpRef(...))`,
