@@ -536,6 +536,8 @@ class _AutographTransformer(ast.NodeTransformer):
         if isinstance(expr, (ast.Await, ast.Yield, ast.YieldFrom)):
             raise AutographSyntaxError("async/yield expressions are not supported in autograph mode")
         expr = _rewrite_len_calls(expr)
+        allowed = {*self._params, *self._locals, "self", *_ALLOWED_GLOBALS}
+        _validate_load_names(expr, allowed, context="autograph expression")
         return self._lower_names(expr)
 
     def _lower_names(self, expr: ast.expr) -> ast.expr:
@@ -656,6 +658,16 @@ def _contains_disallowed_control(stmts: list[ast.stmt]) -> bool:
             if _contains_disallowed_control(stmt.body) or _contains_disallowed_control(stmt.orelse):
                 return True
     return False
+
+
+def _validate_load_names(expr: ast.expr, allowed: set[str], *, context: str) -> None:
+    class _LoadNameValidator(ast.NodeVisitor):
+        def visit_Name(self, node: ast.Name) -> None:
+            if isinstance(node.ctx, ast.Load) and node.id not in allowed:
+                raise AutographNameError(f"unsupported name {node.id} in {context}")
+            self.generic_visit(node)
+
+    _LoadNameValidator().visit(expr)
 
 
 def _replace_names(expr: ast.expr, allowed: set[str], tc_name: str) -> ast.expr:
