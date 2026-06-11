@@ -184,6 +184,33 @@ Across all milestones:
 4. Test coverage includes positive and negative auth/data/update flows.
 5. Docs stay aligned with shipped behavior and runtime requirements.
 
+## LogChain integration guidance (direct and indirect)
+
+`client/web` integrates LogChain through `client/js` as the protocol source of
+truth, while providing direct UX patterns for diagnostics dashboards.
+
+Direct web responsibilities:
+- Define reusable UI patterns for log topic selection, streaming tails,
+  correlation drill-down, and export actions.
+- Ensure UI handlers are duplicate-safe and cursor-aware (at-least-once stream
+  behavior).
+- Provide explicit loading/error/reconnect states for SSE/WebSocket/polling
+  fallback transitions.
+
+Indirect integration boundary:
+- Protocol, auth/capability checks, and cursor transport contracts come from
+  `client/js` LogChain helpers.
+- `client/web` does not implement bespoke log transport logic outside TinyChain
+  client contracts.
+
+Planned validation additions:
+- Integration tests for subscribe/resume flows via the shared `client/js`
+  adapter in both server and browser runtimes.
+- Browser tests for fallback behavior (SSE -> WebSocket optional -> polling)
+  and stable rendering under bursty log streams.
+- Security tests ensuring unauthorized topic reads are surfaced predictably in
+  UI state.
+
 ## Risks and mitigations
 
 - Risk: component sprawl without consistent UX contract.

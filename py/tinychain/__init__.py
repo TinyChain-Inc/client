@@ -7,6 +7,7 @@ from .executor import execute as _dispatch_execute
 from .opref import OpRef
 from . import opref
 from .ref import Ref
+from .state.tensor import Tensor, concatenate, einsum, split, tile
 from .state.value import Bool, C64, C128, Complex, F32, F64, Float, I64, Integer, Link, Map, Null, Number, String, Tuple, U64
 from .uri import URI, authority, origin, uri
 from . import compute
@@ -40,6 +41,11 @@ __all__ = [
     "Map",
     "Tuple",
     "String",
+    "Tensor",
+    "concatenate",
+    "einsum",
+    "split",
+    "tile",
     "URI",
     "compute",
     "state",
@@ -105,7 +111,7 @@ try:  # pragma: no cover
     State = local.State
     Scalar = local.Scalar
     Collection = local.Collection
-    Tensor = local.Tensor
+    LocalTensor = local.Tensor
     Value = local.Value
 
     __all__ += [
@@ -118,7 +124,7 @@ try:  # pragma: no cover
         "State",
         "Scalar",
         "Collection",
-        "Tensor",
+        "LocalTensor",
         "Value",
     ]
 except ImportError:  # pragma: no cover
@@ -151,7 +157,7 @@ except ImportError:  # pragma: no cover
     State = _MissingBackend("State")
     Scalar = _MissingBackend("Scalar")
     Collection = _MissingBackend("Collection")
-    Tensor = _MissingBackend("Tensor")
+    LocalTensor = _MissingBackend("LocalTensor")
     Value = _MissingBackend("Value")
 
 
@@ -165,7 +171,7 @@ def __getattr__(name: str):  # pragma: no cover
         "State",
         "Scalar",
         "Collection",
-        "Tensor",
+        "LocalTensor",
         "Value",
     }:
         raise ImportError(
