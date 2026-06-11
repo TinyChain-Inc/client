@@ -246,10 +246,7 @@ def _encode_dispatch_body(body: Any) -> "object":
         except ImportError:
             return _encode_body(body)
     if isinstance(body, str):
-        try:
-            return tc.StateHandle(body)
-        except ImportError:
-            return _encode_body(body)
+        return _encode_json_body(body)
 
     return _encode_body(body)
 

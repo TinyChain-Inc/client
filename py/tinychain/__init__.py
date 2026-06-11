@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .library import Library, delete, get, install, post, put
+from .library import Library, delete, get, grad, install, post, put
 from .codec import decode_response_body
 from .executor import Executor, backend
 from .executor import execute as _dispatch_execute
@@ -52,6 +52,7 @@ __all__ = [
     "kernel",
     "install",
     "get",
+    "grad",
     "put",
     "post",
     "delete",
@@ -109,10 +110,7 @@ try:  # pragma: no cover
     KernelResponse = local.KernelResponse
     StateHandle = local.StateHandle
     State = local.State
-    Scalar = local.Scalar
-    Collection = local.Collection
     LocalTensor = local.Tensor
-    Value = local.Value
 
     __all__ += [
         "local",
@@ -122,11 +120,12 @@ try:  # pragma: no cover
         "KernelResponse",
         "StateHandle",
         "State",
-        "Scalar",
-        "Collection",
         "LocalTensor",
-        "Value",
     ]
+    for _name in ("Scalar", "Collection", "Value"):
+        if hasattr(local, _name):
+            globals()[_name] = getattr(local, _name)
+            __all__.append(_name)
 except ImportError:  # pragma: no cover
     local = None
 
@@ -155,10 +154,7 @@ except ImportError:  # pragma: no cover
     KernelResponse = _MissingBackend("KernelResponse")
     StateHandle = _MissingBackend("StateHandle")
     State = _MissingBackend("State")
-    Scalar = _MissingBackend("Scalar")
-    Collection = _MissingBackend("Collection")
     LocalTensor = _MissingBackend("LocalTensor")
-    Value = _MissingBackend("Value")
 
 
 def __getattr__(name: str):  # pragma: no cover

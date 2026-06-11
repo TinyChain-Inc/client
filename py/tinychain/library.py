@@ -68,6 +68,8 @@ def _runtime_type_hint(type_hint: object, default: type = Value) -> type:
             return type_hint
         if issubclass(type_hint, Value):
             return type_hint
+        if issubclass(type_hint, Scalar):
+            return type_hint
 
     return default
 
@@ -137,10 +139,25 @@ def _validate_library_class(library: type["Library"]) -> None:
 
 
 @dataclass(frozen=True, slots=True)
+class GradSpec:
+    rule: object | None = None
+    wrt: tuple[str, ...] | None = None
+
+    def to_json(self) -> dict[str, object]:
+        out: dict[str, object] = {}
+        if self.rule is not None:
+            out["rule"] = self.rule
+        if self.wrt is not None:
+            out["wrt"] = list(self.wrt)
+        return out
+
+
+@dataclass(frozen=True, slots=True)
 class Route:
     method: str
     form: Callable[..., Any]
     source: Optional[str] = None
+    grad: GradSpec | None = None
     name: Optional[str] = field(default=None, init=False)
 
     def __post_init__(self) -> None:
@@ -313,12 +330,14 @@ def _decorate(
             method=method.upper(),
             form=actual,
             source=_capture_source(actual),
+            grad=getattr(actual, "__tc_grad__", None),
         )
     if _is_method(form):
         return Route(
             method=method.upper(),
             form=form,
             source=_capture_source(form),
+            grad=getattr(form, "__tc_grad__", None),
         )
     return _compile_opdef_callable(form, method=method.upper())
 
@@ -345,6 +364,41 @@ def delete(
     form: Optional[Callable[..., Any]] = None,
 ):
     return _decorate("DELETE", form)
+
+
+def grad(
+    form: Optional[Callable[..., Any] | Route] = None,
+    *,
+    rule: object | None = None,
+    wrt: tuple[str, ...] | list[str] | None = None,
+):
+    """Annotate a canonical route with autodiff metadata.
+
+    This intentionally does not define a new route kind. Autodiff is a compiler
+    layer over ordinary TinyChain routes, so this decorator only records metadata
+    for future autodiff passes.
+    """
+
+    spec = GradSpec(rule=rule, wrt=tuple(wrt) if wrt is not None else None)
+
+    def annotate(actual: Callable[..., Any] | Route):
+        if isinstance(actual, Route):
+            return Route(
+                method=actual.method,
+                form=actual.form,
+                source=actual.source,
+                grad=spec,
+            )
+
+        if not callable(actual):
+            raise TypeError(f"expected a callable or Route, got {type(actual).__name__}")
+
+        setattr(actual, "__tc_grad__", spec)
+        return actual
+
+    if form is None:
+        return annotate
+    return annotate(form)
 
 
 def _capture_source(form: Callable[..., Any]) -> str | None:
@@ -562,19 +616,26 @@ def compile_ir(library: Library | type[Library]) -> dict:
         result = _compile_route(attr, library_cls)
         op = _to_opref(result)
         if op is not None:
-            routes.append(
-                {
-                    "path": f"/{name}",
-                    "op": {"method": op.method, "path": op.path},
-                }
-            )
+            route_ir = {
+                "path": f"/{name}",
+                "op": {"method": op.method, "path": op.path},
+            }
+            if attr.grad is not None:
+                route_ir["grad"] = attr.grad.to_json()
+            routes.append(route_ir)
             continue
 
         if isinstance(result, OpDef):
-            routes.append({"path": f"/{name}", "opdef": result.to_json()})
+            route_ir = {"path": f"/{name}", "opdef": result.to_json()}
+            if attr.grad is not None:
+                route_ir["grad"] = attr.grad.to_json()
+            routes.append(route_ir)
             continue
 
-        routes.append({"path": f"/{name}", "value": result})
+        route_ir = {"path": f"/{name}", "value": result}
+        if attr.grad is not None:
+            route_ir["grad"] = attr.grad.to_json()
+        routes.append(route_ir)
 
     return {"schema": _class_schema(library_cls), "routes": routes}
 
@@ -667,7 +728,7 @@ def _compile_opdef_route(
         for key, value in result.items():
             if not isinstance(key, str):
                 raise TypeError("opdef form keys must be strings")
-        form.append((key, autobox(value)))
+            form.append((key, autobox(value)))
         opdef = _opdef_from_method(route.method, arg_names, form)
         opdef = _inline_opref_refs(opdef)
         _validate_opdef(opdef, set(arg_names))

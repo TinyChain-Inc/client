@@ -166,11 +166,57 @@ The runtime type rules are:
 - `str` normalizes to `tc.String`.
 - numeric and boolean primitives normalize to `tc.state.Value`.
 - mixed unions normalize to their greatest common TinyChain value ancestor.
+- explicit `tc.Tensor` remains a symbolic `/state/collection/tensor` value for
+  deferred planning and route reflection.
 - explicit `tc.Ref` remains `tc.Ref` for op/reflection routes.
 
 `tc.String` is the value-module `String(Value)` type. It is the only value type
 with `render(...)`; use it for string templating instead of custom payload logic
 or placeholder `Ref[str]` wrappers.
+
+### Tensor Method Surface
+
+Use `tc.Tensor` in route signatures and method bodies for symbolic tensor
+authoring. Its methods mirror the v1 Tensor ergonomics while compiling to
+canonical TinyChain op references:
+
+```python
+class Math(tc.Library):
+    publisher = "demo"
+    version = "0.1.0"
+
+    @tc.post
+    def mm(self, left: tc.Tensor, right: tc.Tensor) -> tc.Tensor:
+        return (left @ right).reshape([2, 2])
+```
+
+The initial v2 port covers the method-definition surface only: `shape`, `dtype`,
+`ndim`, `size`, `all`, `any`, `broadcast`, `cast`, `copy`, `expand_dims`,
+`cond`, `max`, `min`, `mean`, `norm`, `product`, `reshape`, `slice`, `std`,
+`sum`, `transpose`, `write`, arithmetic operators, logical operators,
+`matmul`, `tile`, `split`, `concatenate`, and `einsum`. Do not add per-package
+Tensor wrappers or deferred flags; execution mode still comes from
+`tc.backend(..., mode=...)`.
+
+### Autodiff Metadata
+
+Use `tc.grad(...)` to mark an ordinary route as differentiable without changing
+its route method, path, or call shape:
+
+```python
+class Math(tc.Library):
+    publisher = "demo"
+    version = "0.1.0"
+
+    @tc.grad(rule="matmul", wrt=("left", "right"))
+    @tc.post
+    def matmul(self, left: tc.Tensor, right: tc.Tensor) -> tc.Tensor:
+        return left @ right
+```
+
+Autodiff is a compiler layer over canonical TinyChain route IR. Do not create
+autodiff-specific `get` or `post` decorators; metadata must compose with normal
+routes so routing, installation, and reflection keep one code path.
 
 Python route implementations are compiled by `tinychain._autograph`, which lowers
 method source code into TinyChain IR. Route decorators capture source at definition
@@ -244,7 +290,7 @@ TinyChain state envelopes into typed Python values:
 - self-describing scalar values (`"hello"`, `7`, `true`, `null`) -> Python primitives
 - self-describing state maps/objects (`{"k": ...}`) -> `dict`
 - self-describing state tuples/arrays (`[...]`) -> `list`/`tuple` as appropriate
-- `/state/collection/tensor` -> `tc.Tensor` (when local backend types are available)
+- `/state/collection/tensor` -> `tc.LocalTensor` when the optional PyO3 backend is available, otherwise a typed tensor payload dict
 - `/state/scalar/op/*` -> `tc.state.OpDef` (decoded transparently)
 
 This means callers should expect typed responses by default, not ad-hoc JSON/status parsing

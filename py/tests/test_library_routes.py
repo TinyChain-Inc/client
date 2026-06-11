@@ -4,7 +4,7 @@ import inspect
 
 import pytest
 import tinychain as tc
-from tinychain.library import compile_ir
+from tinychain.library import compile_ir, library_definition
 
 
 def test_library_routes_return_typed_refs():
@@ -112,6 +112,60 @@ def test_library_routes_compile_opdef_routes():
 
     route = next(route for route in ir["routes"] if route["path"] == "/echo")
     assert "opdef" in route
+
+
+def test_library_routes_preserve_all_dict_return_keys():
+    class A(tc.Library):
+        publisher = "example-devco"
+        version = "0.1.0"
+
+        @tc.post
+        def stats(self, x: tc.Number):
+            return {"min": x, "max": x}
+
+    ir = compile_ir(A)
+    route = next(route for route in ir["routes"] if route["path"] == "/stats")
+    opdef = route["opdef"]["/state/scalar/op/post"]
+
+    assert [name for name, _ in opdef] == ["min", "max"]
+
+
+def test_grad_metadata_composes_with_route_decorators():
+    class A(tc.Library):
+        publisher = "example-devco"
+        version = "0.1.0"
+
+        @tc.post
+        @tc.grad(rule="linear", wrt=("x",))
+        def inner_first(self, x: tc.Number) -> tc.Number:
+            return x
+
+        @tc.grad(rule="square", wrt=("x",))
+        @tc.post
+        def route_first(self, x: tc.Number) -> tc.Number:
+            return x
+
+    routes = {route["path"]: route for route in compile_ir(A)["routes"]}
+
+    assert routes["/inner_first"]["grad"] == {"rule": "linear", "wrt": ["x"]}
+    assert routes["/route_first"]["grad"] == {"rule": "square", "wrt": ["x"]}
+
+
+def test_grad_metadata_does_not_change_install_definition_shape():
+    class A(tc.Library):
+        publisher = "example-devco"
+        version = "0.1.0"
+
+        @tc.grad(rule="identity")
+        @tc.post
+        def identity(self, x: tc.Number) -> tc.Number:
+            return x
+
+    definition = library_definition(A)
+    route = definition[A.class_id().path]["identity"]
+
+    assert "/state/scalar/op/post" in route
+    assert "grad" not in route
 
 
 def test_library_routes_use_decorator_time_source_capture(monkeypatch):

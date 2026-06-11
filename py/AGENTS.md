@@ -98,6 +98,16 @@ staying thin and well-documented for new users.
   Do not erase `Get/Put/Post/Delete` operation refs/defs behind parent-class
   method strings or generic `args` shape checks when constructing, validating,
   or serializing IR. Prefer concrete subclasses and `isinstance` dispatch.
+- Autodiff metadata is orthogonal to routing. Do not add autodiff-specific
+  route decorators such as `diff_get` or `diff_post`; use `tc.grad(...)` on
+  canonical `@tc.get`/`@tc.post` routes so the autodiff compiler consumes the
+  same route identity and IR as every other tool.
+- High-level symbolic wrappers must construct refs through the canonical typed
+  builder methods on `Scalar` (for example `_get`, `_post`, `_put`,
+  `_post_ref`). Do not hand-write `TCRef(GetOpRef(...))`,
+  `TCRef(PostOpRef(...))`, etc. in wrapper modules such as `state/tensor.py`.
+  Keep URI values structured until the serialization/transport boundary; avoid
+  extracting `.path` in symbolic wrappers.
 - Keep one canonical route-stub call shape in application code.
   Prefer keyword arguments for route parameters and use `body=` only when
   passing one explicit payload. Treat positional forms as compatibility-only,
