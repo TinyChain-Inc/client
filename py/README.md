@@ -179,6 +179,11 @@ source-backed cells work. Truly source-less generated functions still cannot be
 installed as Python route implementations; use a normal source-backed method, a
 stub backed by remote/WASM execution, or an explicit TinyChain op definition.
 
+Autograph enforces strict TinyChain-only symbol usage inside compiled route
+expressions. Names must resolve to route parameters, prior local bindings,
+`self`, or `tc`; non-TinyChain globals (for example `urllib`, `tensorflow`/`tf`,
+`jax`) are rejected at compile time with an `AutographNameError`.
+
 ### Executor auth and routing contract
 
 `tc.backend(...)` uses one remote auth rule:
