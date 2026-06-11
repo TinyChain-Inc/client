@@ -52,7 +52,7 @@ def test_op_reflection_analysis(tmp_path: pathlib.Path) -> None:
                 return {"max": max_out}
 
             @tc.post
-            def cyclotomic_depth(self, op: tc.state.OpDef) -> tc.Ref:
+            def cyclomatic_depth(self, op: tc.state.OpDef) -> tc.Ref:
                 op_form = op.reflect_form()
                 state = {"items": op_form, "idx": 0, "todo": [], "max": 1}
                 while (len(state["items"]) > state["idx"]).logical_or(len(state["todo"]) > 0):
@@ -147,9 +147,9 @@ def test_op_reflection_analysis(tmp_path: pathlib.Path) -> None:
             assert resp.status == 204
 
         with tc.backend(kernel):
-            depth_leaf = tc_testing.run_with_timeout(20, lambda: c.cyclotomic_depth(a.leaf))
+            depth_leaf = tc_testing.run_with_timeout(20, lambda: c.cyclomatic_depth(a.leaf))
             assert depth_leaf["max"] == 1
-            depth_branch = tc_testing.run_with_timeout(20, lambda: c.cyclotomic_depth(b.branch))
+            depth_branch = tc_testing.run_with_timeout(20, lambda: c.cyclomatic_depth(b.branch))
             assert depth_branch["max"] == 2
             nested = tc_testing.run_with_timeout(20, lambda: c.nested_if_count([0, 1, 0, 0]))
             assert nested["count"] == 3
