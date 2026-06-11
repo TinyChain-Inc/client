@@ -604,6 +604,67 @@ and canonical TinyChain IR, not as transport-specific Python callbacks.
 numeric type. Use `tc.Number` (and numeric tensor wrappers) for arithmetic in
 client code and transforms.
 
+## LogChain taxonomy planning note
+
+LogChain diagnostics remain planning-level in the Python client. The intended
+client contract is taxonomy-aware logging metadata that aligns with control-plane
+PII policy:
+
+- Structured user fields are classified before logging.
+- Unclassified user payload fields default to PII and are not emitted as raw log
+  values.
+- Taxonomy labels are extensible so applications can add namespaced categories in
+  addition to platform-defined labels.
+
+The authoritative admit/reject decision for log payload safety remains on the
+host/control-plane boundary; client helpers are ergonomic hints, not security
+enforcement.
+
+## ORM + graph query planning note
+
+The Python client roadmap includes a Django-style ORM layer with Cypher-like
+graph traversal semantics, built as typed fluent APIs rather than raw query
+strings.
+
+- SQL-like and Cypher-like ergonomics should come from `Model`/`ForeignKey`/
+  `QuerySet` builders, not string construction/parsing.
+- Foreign keys are treated as graph edges for typed forward/reverse traversal.
+- Query builders compile to canonical TinyChain request/IR forms using existing
+  method-typed ops and executor behavior.
+- The primary client API must not expose raw graph query-string execution.
+
+Planned ORM declarations prioritize intuitive defaults:
+
+- Implicit FK by type annotation: a field typed as another `Model` is treated
+  as a foreign key edge to that model primary key.
+- Explicit FK declarations are available for non-default targets and policies.
+
+Illustrative authoring shape (planning-level):
+
+```python
+class User(tc.Model):
+    id = tc.String(primary_key=True)
+
+class Article(tc.Model):
+    id = tc.String(primary_key=True)
+    author: User  # implicit FK edge -> User.id
+    reviewer = tc.ForeignKey(User, to_field="id", related_name="reviews")
+
+    class Taxonomy:
+        labels = ["platform.pii.contact", "app.example_devco.content"]
+        classification = "pii"
+        regulatory = ["gdpr", "ccpa"]
+        retention_policy = "retention.default_90d"
+        redaction_policy = "redaction.hash_email"
+```
+
+The exact class/field names may evolve, but the defaults are stable: type-driven
+FK inference, explicit override hooks, and versioned taxonomy metadata.
+
+For schema/model upgrades, the client submits policy/config inputs, but
+authoritative canary/soak/rollback orchestration remains in
+`/service/std/rollout` on the control-plane.
+
 ## Transaction handles
 
 - The public Python HTTP client should never expose transaction handles (`txn_id`)

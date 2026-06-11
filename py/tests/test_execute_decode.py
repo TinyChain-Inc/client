@@ -87,7 +87,7 @@ def test_execute_decodes_canonical_scalar_array(monkeypatch):
 
 def test_execute_decodes_typed_tensor_when_available(monkeypatch):
     try:
-        has_tensor = hasattr(tc, "Tensor") and hasattr(tc.Tensor, "dense_u64")
+        has_tensor = hasattr(tc, "LocalTensor") and hasattr(tc.LocalTensor, "dense_u64")
     except ImportError:
         has_tensor = False
 
@@ -103,7 +103,7 @@ def test_execute_decodes_typed_tensor_when_available(monkeypatch):
     monkeypatch.setattr(tc, "_dispatch_execute", lambda _op: _Response(payload, status=200))
 
     result = tc.execute(tc.opref.get("/state/tensor"))
-    assert isinstance(result, tc.Tensor)
+    assert isinstance(result, tc.LocalTensor)
     assert result.dtype() == "u64"
     assert result.shape() == [2]
     assert result.values() == [10, 11]

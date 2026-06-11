@@ -122,6 +122,41 @@ Validation:
 - End-to-end parity fixtures for install/runtime and logging flows.
 - Compatibility tests across Node and browser for supported features.
 
+### J4.1: LogChain client integration contract
+
+Deliverables:
+- Define a canonical JS helper surface for LogChain:
+  - `tinychain.logchain.topics(...)`
+  - `tinychain.logchain.subscribe(...)`
+  - `tinychain.logchain.export(...)`
+  - optional `tinychain.logchain.publish(...)` where authorized by policy.
+- Specify runtime transport behavior:
+  - prefer SSE for broad compatibility,
+  - upgrade to WebSocket when explicitly requested/available,
+  - deterministic fallback to paged polling when streaming transports are unavailable.
+- Define cursor and replay contract for helpers:
+  - opaque cursor tokens,
+  - resume-from-cursor semantics,
+  - at-least-once delivery expectations and duplicate-safe handler guidance.
+- Define structured filter/query contract for subscriptions (tenant, service,
+  level, label, correlation window) using typed parameters only.
+- Keep helper behavior capability-scoped and consistent with control-plane
+  `/logchain/topics`, `/logchain/subscribe`, and `/logchain/export` routes.
+
+Dependencies:
+- LogChain API routes and access-control semantics stabilized in control-plane docs.
+- J3 browser/edge parity for transport behavior.
+
+Exit criteria:
+- Node and browser expose the same LogChain helper semantics for supported
+  transports.
+- Helper docs include one canonical integration pattern and failure/retry behavior.
+
+Validation:
+- Cross-runtime parity tests for topic discovery, subscribe/resume, and export.
+- Negative tests for unauthorized topic access and malformed cursor handling.
+- Reliability tests proving non-blocking consumption behavior under bursty log traffic.
+
 ## Cross-cutting validation requirements
 
 - Maintain parity fixture suites that run the same logical workflows in Python

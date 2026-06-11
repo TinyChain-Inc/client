@@ -30,12 +30,12 @@ def _decode_tensor(payload: object) -> object:
     except ImportError:
         tc = None
 
-    if tc is not None and hasattr(tc, "Tensor"):
+    if tc is not None and hasattr(tc, "LocalTensor"):
         try:
             if dtype == _DTYPE_F32:
-                return tc.Tensor.dense_f32(shape, [float(value) for value in decoded_values])
+                return tc.LocalTensor.dense_f32(shape, [float(value) for value in decoded_values])
             if dtype == _DTYPE_U64:
-                return tc.Tensor.dense_u64(shape, [int(value) for value in decoded_values])
+                return tc.LocalTensor.dense_u64(shape, [int(value) for value in decoded_values])
         except (TypeError, ValueError):
             pass
 

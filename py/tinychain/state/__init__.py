@@ -33,6 +33,7 @@ from .scalar import (
     form_of,
 )
 from .context import Context, ContextResult, context, scoped_context, current_context
+from .tensor import Tensor, concatenate, einsum, split, tile
 from .value import Bool, C64, C128, Complex, F32, F64, Float, I64, Integer, Link, Map, Null, Number, String, Tuple, U64, Value
 
 __all__ = [
@@ -74,6 +75,11 @@ __all__ = [
     "Map",
     "Tuple",
     "String",
+    "Tensor",
+    "concatenate",
+    "einsum",
+    "split",
+    "tile",
     "autobox",
     "after",
     "cond",
