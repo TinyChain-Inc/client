@@ -257,7 +257,10 @@ class Number(Value):
         return autobox(self)
 
     def _binary(self, op_name: str, other: object, literal_op) -> "Number":
-        from .scalar import PostOpRef, autobox
+        from .scalar import (
+            PostOpRef,
+            autobox,
+        )
 
         if self.op is None and isinstance(other, Number) and other.op is None:
             return Number(literal_op(form_of(self), form_of(other)))

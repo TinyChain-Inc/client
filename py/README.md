@@ -710,6 +710,18 @@ For schema/model upgrades, the client submits policy/config inputs, but
 authoritative canary/soak/rollback orchestration remains in
 `/service/std/rollout` on the control-plane.
 
+Planned Tensor datastore integration follows the same contract boundaries:
+
+- Tensor-backed persistent fields participate in typed ORM/query planning, but
+  Tensor payload bindings are not implicit model foreign-key edges.
+- Sparse Tensor components (coordinates/indices and values) follow the same
+  taxonomy safety model: unclassified user-supplied components default to PII
+  classification until explicitly classified.
+- Tensor query predicates remain typed and parameterized; raw expression-string
+  execution is not part of the primary client API.
+- Implementation sequencing remains planner/taxonomy contract first, then
+  client ergonomic expansion.
+
 ## Transaction handles
 
 - The public Python HTTP client should never expose transaction handles (`txn_id`)

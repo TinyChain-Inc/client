@@ -14,6 +14,7 @@ from . import compute
 from . import state
 from . import kernel
 from . import auth
+from . import std
 from .cond import cond
 from .after import after
 from .host import Host
@@ -51,6 +52,7 @@ __all__ = [
     "state",
     "kernel",
     "install",
+    "std",
     "get",
     "grad",
     "put",

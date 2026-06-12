@@ -142,8 +142,14 @@ def test_grad_is_call_site_transform_stub_not_route_decorator():
     routes = {route["path"]: route for route in compile_ir(A)["routes"]}
 
     assert "grad" not in routes["/identity"]
-    with pytest.raises(NotImplementedError, match="autodiff transform"):
-        tc.grad(A().identity, wrt=("x",))
+    grad_ref = tc.grad(A().identity, wrt=("x",))
+    grad_form = tc.state.form_of(grad_ref)
+    assert isinstance(grad_form, tc.state.TCRef)
+    opref = tc.state.tcref_form_of(grad_form)
+    assert isinstance(opref, tc.state.PostOpRef)
+    assert opref.subject == tc.uri("lib", "std", "autodiff", "0.1.0", "grad").path
+    assert opref.args["route"].endswith("/identity")
+    assert opref.args["wrt"] == ["x"]
 
 
 def test_grad_cannot_be_used_as_route_metadata_decorator():
@@ -155,7 +161,7 @@ def test_grad_cannot_be_used_as_route_metadata_decorator():
         def identity(self, x: tc.Number) -> tc.Number:
             return x
 
-    with pytest.raises(NotImplementedError, match="autodiff transform"):
+    with pytest.raises(TypeError, match="call-site transform"):
 
         class B(tc.Library):
             publisher = "example-devco"

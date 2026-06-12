@@ -7,6 +7,7 @@ from .uri import path
 
 _COLLECTION_TENSOR = path("state", "collection", "tensor")
 _DTYPE_F32 = path("state", "scalar", "value", "number", "float", "32")
+_DTYPE_F64 = path("state", "scalar", "value", "number", "float", "64")
 _DTYPE_U64 = path("state", "scalar", "value", "number", "uint", "64")
 
 
@@ -39,16 +40,17 @@ def _decode_tensor(payload: object) -> object:
         try:
             if dtype == _DTYPE_F32:
                 return Tensor(native=native_tensor.dense_f32(shape, [float(value) for value in decoded_values]))
+            if dtype == _DTYPE_F64:
+                return Tensor(native=native_tensor.dense_f64(shape, [float(value) for value in decoded_values]))
             if dtype == _DTYPE_U64:
                 return Tensor(native=native_tensor.dense_u64(shape, [int(value) for value in decoded_values]))
-        except (TypeError, ValueError):
+        except (AttributeError, TypeError, ValueError):
             pass
 
-    return {
-        "dtype": dtype,
-        "shape": shape,
-        "values": decoded_values,
-    }
+    if dtype in (_DTYPE_F32, _DTYPE_F64, _DTYPE_U64):
+        raise TypeError(f"cannot decode tensor dtype {dtype} into local Tensor backend")
+
+    raise TypeError(f"unsupported tensor dtype {dtype}")
 
 
 def _decode_collections(payload: object) -> object:

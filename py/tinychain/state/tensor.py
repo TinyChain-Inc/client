@@ -1,8 +1,16 @@
 from __future__ import annotations
 
 from collections.abc import Iterable as IterableABC
+from numbers import Number as NumberABC
 from ..uri import URI, uri
-from .scalar import Bool, Comparable, Number, Scalar, Tuple, autobox
+from .scalar import (
+    Bool,
+    Comparable,
+    Number,
+    Scalar,
+    Tuple,
+    autobox,
+)
 
 
 def _params(**kwargs: object) -> dict[str, Scalar]:
@@ -32,11 +40,26 @@ class Tensor(Comparable):
 
     __uri__: URI = uri("state", "collection", "tensor")
 
-    def __init__(self, form: object = None, *, ref=None, native: object = None):
+    def __init__(
+        self,
+        form: object = None,
+        *,
+        ref=None,
+        native: object = None,
+    ):
         if native is not None and (form is not None or ref is not None):
             raise TypeError("Tensor accepts either native data or symbolic form/ref")
         super().__init__(form, ref=ref)
         self._native = native
+
+    def _tensor_post(
+        self,
+        operator_segment: str,
+        params: dict[str, object],
+        *,
+        rtype,
+    ):
+        return self._post(operator_segment, params, rtype=rtype)
 
     @property
     def native(self) -> object | None:
@@ -50,9 +73,9 @@ class Tensor(Comparable):
 
     @property
     def dtype(self) -> object:
-        native = self._native_attr("dtype")
-        if native is not None:
-            return native
+        dtype = self._native_attr("dtype")
+        if dtype is not None:
+            return dtype
         return self._post("dtype", rtype=Scalar)
 
     @property
@@ -61,9 +84,9 @@ class Tensor(Comparable):
 
     @property
     def shape(self) -> object:
-        native = self._native_attr("shape")
-        if native is not None:
-            return native
+        shape = self._native_attr("shape")
+        if shape is not None:
+            return shape
         return self._post("shape", rtype=Tuple)
 
     @property
@@ -125,19 +148,22 @@ class Tensor(Comparable):
         return self._put(autobox(value), rtype=Tensor)
 
     def matmul(self, other: object) -> "Tensor":
-        return self._post("matmul", {"r": autobox(other)}, rtype=Tensor)
+        right = autobox(other)
+        result = self._tensor_post("matmul", {"r": right}, rtype=Tensor)
+        return result
 
     def logical_and(self, other: object) -> "Tensor":
-        return self._post("and", {"r": autobox(other)}, rtype=Tensor)
+        return self._binary_tensor("and", other)
 
     def logical_not(self) -> "Tensor":
-        return self._post("not", rtype=Tensor)
+        result = self._tensor_post("not", {}, rtype=Tensor)
+        return result
 
     def logical_or(self, other: object) -> "Tensor":
-        return self._post("or", {"r": autobox(other)}, rtype=Tensor)
+        return self._binary_tensor("or", other)
 
     def logical_xor(self, other: object) -> "Tensor":
-        return self._post("xor", {"r": autobox(other)}, rtype=Tensor)
+        return self._binary_tensor("xor", other)
 
     def tile(self, multiples: object) -> "Tensor":
         return Tensor._post_ref(str(uri(Tensor, "tile")), {"tensor": self, "multiples": autobox(multiples)})
@@ -148,8 +174,10 @@ class Tensor(Comparable):
     def __matmul__(self, other: object) -> "Tensor":
         return self.matmul(other)
 
-    def _binary_tensor(self, op_name: str, other: object) -> "Tensor":
-        return self._post(op_name, {"r": autobox(other)}, rtype=Tensor)
+    def _binary_tensor(self, operator_segment: str, other: object) -> "Tensor":
+        left = self
+        right = autobox(other)
+        return left._tensor_post(operator_segment, {"r": right}, rtype=Tensor)
 
     def __add__(self, other: object) -> "Tensor":
         return self._binary_tensor("add", other)
@@ -164,16 +192,26 @@ class Tensor(Comparable):
         return self._binary_tensor("div", other)
 
     def __radd__(self, other: object) -> "Tensor":
-        return autobox(other)._post("add", {"r": self}, rtype=Tensor)
+        return self._binary_tensor("add", other)
 
     def __rsub__(self, other: object) -> "Tensor":
-        return autobox(other)._post("sub", {"r": self}, rtype=Tensor)
+        left = autobox(other)
+        if isinstance(left, Tensor):
+            return left._binary_tensor("sub", self)
+        if isinstance(other, NumberABC):
+            raise TypeError("Tensor reverse subtraction requires Tensor lhs; literal promotion is not implemented")
+        raise TypeError(f"unsupported Tensor reverse subtraction operand {type(other).__name__}")
 
     def __rmul__(self, other: object) -> "Tensor":
-        return autobox(other)._post("mul", {"r": self}, rtype=Tensor)
+        return self._binary_tensor("mul", other)
 
     def __rtruediv__(self, other: object) -> "Tensor":
-        return autobox(other)._post("div", {"r": self}, rtype=Tensor)
+        left = autobox(other)
+        if isinstance(left, Tensor):
+            return left._binary_tensor("div", self)
+        if isinstance(other, NumberABC):
+            raise TypeError("Tensor reverse division requires Tensor lhs; literal promotion is not implemented")
+        raise TypeError(f"unsupported Tensor reverse division operand {type(other).__name__}")
 
     @property
     def values(self) -> object:

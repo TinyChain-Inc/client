@@ -4,7 +4,13 @@ from functools import lru_cache
 from typing import Any, Iterator, Mapping, Sequence, cast
 
 from ...uri import URI, path, uri
-from .opdef import DeleteOpDef, GetOpDef, OpDef, PostOpDef, PutOpDef
+from .opdef import (
+    DeleteOpDef,
+    GetOpDef,
+    OpDef,
+    PostOpDef,
+    PutOpDef,
+)
 from .ops import Delete, Get, Op, Post, Put
 from .refs import (
     OPREF_DELETE_TAG,

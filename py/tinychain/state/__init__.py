@@ -1,3 +1,5 @@
+from typing import TypeAlias
+
 from .scalar import (
     Op,
     Cond,
@@ -36,6 +38,8 @@ from .context import Context, ContextResult, context, scoped_context, current_co
 from .tensor import Tensor, concatenate, einsum, split, tile
 from .value import Bool, C64, C128, Complex, F32, F64, Float, I64, Integer, Link, Map, Null, Number, String, Tuple, U64, Value
 
+Numeric: TypeAlias = Scalar | Tensor
+
 __all__ = [
     "Op",
     "Cond",
@@ -55,6 +59,7 @@ __all__ = [
     "PutOpDef",
     "PutOpRef",
     "Scalar",
+    "Numeric",
     "TCRef",
     "While",
     "ForEach",

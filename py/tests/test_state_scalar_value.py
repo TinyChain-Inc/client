@@ -252,6 +252,10 @@ def test_number_deferred_arithmetic_builds_oprefs():
         assert sub.op.subject.endswith("/sub")
         assert mul.op.subject.endswith("/mul")
         assert div.op.subject.endswith("/div")
+        assert add.op.args == {"r": 2}
+        assert sub.op.args == {"r": 2}
+        assert mul.op.args == {"r": 2}
+        assert div.op.args == {"r": 2}
 
 
 def test_reduce_infers_item_binding_name_from_reducer_inputs():

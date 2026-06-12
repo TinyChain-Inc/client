@@ -348,19 +348,66 @@ def delete(
 ):
     return _decorate("DELETE", form)
 
+_AUTODIFF_GRAD_ROUTE = _uri("lib", "std", "autodiff", "0.1.0", "grad").path
+
+
+def _normalize_wrt(wrt: object) -> list[str]:
+    if wrt is None:
+        raise TypeError("tc.grad requires `wrt` names")
+
+    if isinstance(wrt, str):
+        names = [wrt]
+    elif isinstance(wrt, (list, tuple)):
+        names = list(wrt)
+    else:
+        raise TypeError("tc.grad `wrt` must be a string or sequence of strings")
+
+    if not names:
+        raise TypeError("tc.grad `wrt` must not be empty")
+
+    for name in names:
+        if not isinstance(name, str) or not name:
+            raise TypeError("tc.grad `wrt` entries must be non-empty strings")
+
+    return names
+
+
+def _grad_payload_target(target: object) -> tuple[str, object]:
+    if isinstance(target, OpDef):
+        return "op", target
+
+    if callable(target):
+        route = getattr(target, "__tc_route__", None)
+        route_instance = getattr(target, "__tc_instance__", None)
+        route_name = getattr(route, "name", None)
+        if isinstance(route_instance, Library) and isinstance(route_name, str):
+            return "route", _route_path(route_instance, route_name)
+
+        library_instance = getattr(target, "__self__", None)
+        route_form = getattr(target, "__func__", None)
+        if isinstance(library_instance, Library) and callable(route_form):
+            return "route", _route_path(library_instance, route_form.__name__)
+
+        raise TypeError("tc.grad is a call-site transform and cannot be used as a route decorator")
+
+    return "target", autobox(target)
+
 
 def grad(target: object, *, wrt: object = None) -> object:
-    """Return the TinyChain autodiff transform for a route/ref/op.
+    """Return the runtime autodiff transform for a route/ref/op.
 
-    This is intentionally shaped like JAX's call-site transform API rather than
-    route metadata. The route defines the computation; the autodiff compiler
-    decides traversal, fanout, accumulation, and the differentiation target.
+    This is intentionally shaped like JAX's call-site transform API. It forwards
+    the transform request to the runtime library route and does not execute any
+    autodiff compiler logic in the Python client runtime.
     """
 
-    raise NotImplementedError(
-        "tc.grad is the reserved call-site autodiff transform; the autodiff "
-        "compiler is not implemented yet"
-    )
+    payload_key, payload_value = _grad_payload_target(target)
+    payload = {
+        payload_key: payload_value,
+        "wrt": tuple(_normalize_wrt(wrt)),
+    }
+
+    return Scalar(ref=TCRef(PostOpRef(_AUTODIFF_GRAD_ROUTE, payload)))
 
 
 def _capture_source(form: Callable[..., Any]) -> str | None:

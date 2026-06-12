@@ -1,5 +1,6 @@
 import inspect
 
+import pytest
 import tinychain as tc
 import tinychain.state.tensor as tensor_module
 
@@ -67,3 +68,51 @@ def test_tensor_wrapper_uses_canonical_ref_builders():
     assert "PutOpRef(" not in source
     assert "DeleteOpRef(" not in source
     assert ".path" not in source
+
+
+def test_tensor_reverse_add_and_mul_use_tensor_subject():
+    x = tc.state.Tensor(ref=tc.state.TCRef(tc.state.IdRef("x")))
+
+    assert _json(1 + x) == {"$x/add": {"r": 1}}
+    assert _json(2 * x) == {"$x/mul": {"r": 2}}
+
+
+def test_tensor_reverse_sub_and_div_require_tensor_lhs():
+    x = tc.state.Tensor(ref=tc.state.TCRef(tc.state.IdRef("x")))
+
+    with pytest.raises(TypeError, match="reverse subtraction"):
+        _ = 1 - x
+
+    with pytest.raises(TypeError, match="reverse division"):
+        _ = 1 / x
+
+
+def test_tensor_binary_ops_emit_minimal_payload_when_known():
+    x = tc.state.Tensor(ref=tc.state.TCRef(tc.state.IdRef("x")))
+    y = tc.state.Tensor(ref=tc.state.TCRef(tc.state.IdRef("y")))
+
+    assert _json(x + y) == {
+        "$x/add": {
+            "r": {"$y": []},
+        }
+    }
+
+
+def test_tensor_matmul_emits_minimal_payload_when_known():
+    lhs = tc.state.Tensor(ref=tc.state.TCRef(tc.state.IdRef("lhs")))
+    rhs = tc.state.Tensor(ref=tc.state.TCRef(tc.state.IdRef("rhs")))
+
+    assert _json(lhs @ rhs) == {
+        "$lhs/matmul": {
+            "r": {"$rhs": []},
+        }
+    }
+
+
+def test_tensor_logical_not_emits_minimal_payload_when_known():
+    tensor = tc.state.Tensor(ref=tc.state.TCRef(tc.state.IdRef("tensor")))
+
+    assert _json(tensor.logical_not()) == {
+        "$tensor/not": {
+        }
+    }
