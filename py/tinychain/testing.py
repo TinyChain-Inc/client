@@ -43,20 +43,6 @@ def repo_root(start: Optional[pathlib.Path] = None) -> pathlib.Path:
     raise RuntimeError("unable to locate repo root (expected `tc-server/` and `tc-wasm/`)")
 
 
-def rjwt_install_token_bin(root: Optional[pathlib.Path] = None) -> Optional[pathlib.Path]:
-    base = repo_root(root)
-    candidates = [
-        base / "target" / "debug" / "examples" / "rjwt_install_token",
-        base / "target" / "release" / "examples" / "rjwt_install_token",
-        base / "tc-server" / "target" / "debug" / "examples" / "rjwt_install_token",
-        base / "tc-server" / "target" / "release" / "examples" / "rjwt_install_token",
-    ]
-    for path in candidates:
-        if path.exists() and path.is_file():
-            return path
-    return None
-
-
 def start_rust_example(
     name: str,
     *,

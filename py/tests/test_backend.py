@@ -4,7 +4,7 @@ import pytest
 import tinychain as tc
 import tinychain.testing as tc_testing
 
-from .support import rjwt_install_token
+from .support import install_token
 
 
 def _failing_stub(_request):
@@ -31,11 +31,11 @@ def test_kernel_handle_installs_library_via_rust_handlers(tmp_path: pathlib.Path
         def hello(self):
             return "hello"
 
-    token = rjwt_install_token(Hello.class_id().path, Updated.class_id().path)
+    token = install_token(Hello.class_id().path, Updated.class_id().path)
     kernel = tc.kernel.with_library(
         Hello(),
         data_dir=tmp_path,
-        token=tc.auth.SignedBearerToken(**token),
+        token=token,
     )
 
     get_request = tc.KernelRequest("GET", Hello.class_id().path, None, None)
@@ -43,7 +43,7 @@ def test_kernel_handle_installs_library_via_rust_handlers(tmp_path: pathlib.Path
     assert response.status == 200
     assert tc_testing.decode_json_body(response)["version"] == "0.1.0"
 
-    put_response = tc.install(Updated, kernel=kernel, token=tc.auth.SignedBearerToken(**token))
+    put_response = tc.install(Updated, kernel=kernel, token=token)
     assert put_response.status == 204
 
     response_after = kernel.dispatch(tc.KernelRequest("GET", Updated.class_id().path, None, None))

@@ -64,9 +64,6 @@ Guardrails:
 
 ## Maintenance backlog
 
-- Defer replacing the `rjwt_install_token` Rust-example minting path with the
-  Python `rjwt` package until the in-progress `rjwt` rewrite stabilizes; keep
-  migration work tracked but out of the immediate implementation queue.
 - Keep `tinychain._autograph` internal until the transformer is validated as a
   public API.
 - Keep `tc.Host.request` as a low-level primitive but avoid presenting it as the

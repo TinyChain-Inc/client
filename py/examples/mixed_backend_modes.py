@@ -8,14 +8,14 @@ Shows all three modes together:
 3) one idiomatic backend execution context (`with tc.backend(kernel): ...`)
 
 Auth model demonstrated:
-- mint minimal-scope RJWT bearer tokens from an Ed25519 private key
+- mint minimal-scope RJWT bearer tokens through the framework auth helper
 - use a short-lived install token (claim: local `/lib/.../a/...`)
 
 Prerequisites:
 - tinychain-local installed
 - remote Rust host example binary built (`http_rpc_native_host`)
 - WASM example built (`opref_to_remote.wasm`)
-- `cargo` available, or `rjwt_install_token` binary already built
+- `rjwt` PyO3 package installed
 """
 
 from __future__ import annotations
@@ -35,7 +35,6 @@ except ImportError as exc:  # pragma: no cover
     ) from exc
 
 REPO_ROOT = tc_testing.repo_root()
-DEFAULT_SECRET_KEY_B64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 
 
 class Example(tc.Library):
@@ -78,6 +77,7 @@ def _start_remote_host(*, actor_id: str, secret_key_b64: str):
         args=(
             "--bind=127.0.0.1:0",
             f"--actor-id={actor_id}",
+            "--alg=falcon512",
             f"--secret-key-b64={secret_key_b64}",
         ),
         root=REPO_ROOT,
@@ -121,7 +121,7 @@ def run_demo(
 
     host_link = tc.origin(authority)
 
-    mint_secret = secret_key_b64 or DEFAULT_SECRET_KEY_B64
+    mint_secret = secret_key_b64 or tc.auth.generate_actor_secret(actor_id)
 
     install_token = tc.auth.mint_rjwt_token(
         host=host_link,
@@ -129,7 +129,6 @@ def run_demo(
         libs=[a_root],
         ttl_secs=ttl_secs,
         secret_key_b64=mint_secret,
-        repo_root=REPO_ROOT,
     )
     runtime_token = tc.auth.mint_rjwt_token(
         host=host_link,
@@ -137,7 +136,6 @@ def run_demo(
         libs=[b_root, a_root],
         ttl_secs=ttl_secs,
         secret_key_b64=mint_secret,
-        repo_root=REPO_ROOT,
     )
 
     print("minted install token claims:", [a_root])
@@ -204,7 +202,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument(
         "--secret-key-b64",
         default=None,
-        help="Optional Ed25519 secret key (base64). If omitted, an ephemeral keypair is generated.",
+        help="Optional Falcon-512 secret key (base64) for spawned-host demos.",
     )
     parser.add_argument(
         "--ttl-secs",
@@ -219,18 +217,25 @@ def main(argv: Optional[list[str]] = None) -> int:
     authority = args.authority
     try:
         if authority is None:
+            secret_key_b64 = args.secret_key_b64 or tc.auth.generate_actor_secret(args.actor_id)
             proc, addr = _start_remote_host(
                 actor_id=args.actor_id,
-                secret_key_b64=args.secret_key_b64 or DEFAULT_SECRET_KEY_B64,
+                secret_key_b64=secret_key_b64,
             )
             authority = addr
+        else:
+            secret_key_b64 = args.secret_key_b64
+            if secret_key_b64 is None:
+                raise RuntimeError(
+                    "--secret-key-b64 is required when --authority points to an existing host"
+                )
 
         wasm_path = _ensure_opref_wasm()
         run_demo(
             authority,
             wasm_path,
             actor_id=args.actor_id,
-            secret_key_b64=args.secret_key_b64,
+            secret_key_b64=secret_key_b64,
             ttl_secs=args.ttl_secs,
         )
     finally:

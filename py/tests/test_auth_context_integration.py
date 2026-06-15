@@ -9,7 +9,6 @@ import tinychain.testing as tc_testing
 from .support import REPO_ROOT, ensure_wasm_example_built
 
 
-DEFAULT_SECRET_KEY_B64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 ACTOR_ID = "example-admin"
 
 
@@ -48,12 +47,14 @@ def test_framework_auth_context_available_in_local_and_wasm_routes(tmp_path: pat
         pytest.skip("tinychain-local does not support canonical library definitions")
 
     wasm_path = ensure_wasm_example_built("opref_to_remote")
+    secret_key_b64 = tc.auth.generate_actor_secret(ACTOR_ID)
     proc, authority = tc_testing.start_rust_example(
         "http_rpc_native_host",
         args=(
             "--bind=127.0.0.1:0",
             f"--actor-id={ACTOR_ID}",
-            f"--secret-key-b64={DEFAULT_SECRET_KEY_B64}",
+            "--alg=falcon512",
+            f"--secret-key-b64={secret_key_b64}",
         ),
         root=REPO_ROOT,
         prefer_binary=True,
@@ -73,16 +74,14 @@ def test_framework_auth_context_available_in_local_and_wasm_routes(tmp_path: pat
             actor_id=ACTOR_ID,
             libs=[a_root],
             ttl_secs=300,
-            secret_key_b64=DEFAULT_SECRET_KEY_B64,
-            repo_root=REPO_ROOT,
+            secret_key_b64=secret_key_b64,
         )
         runtime_token = tc.auth.mint_rjwt_token(
             host=host_link,
             actor_id=ACTOR_ID,
             libs=[b_root, a_root],
             ttl_secs=300,
-            secret_key_b64=DEFAULT_SECRET_KEY_B64,
-            repo_root=REPO_ROOT,
+            secret_key_b64=secret_key_b64,
         )
 
         data_dir = tmp_path / "tc-data"

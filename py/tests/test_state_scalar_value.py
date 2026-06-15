@@ -15,14 +15,11 @@ def test_value_roundtrip_typed_maps():
     assert isinstance(tc.state.Value.from_json(None), tc.state.Null)
 
 
-def test_value_bool_is_distinct_from_number():
-    b = tc.Bool(True)
+def test_value_bool_decodes_as_number():
+    b = tc.Number(True)
     assert tc.state.Value.from_json(b.to_json()) == b
-    assert isinstance(tc.state.Value.from_json(True), tc.Bool)
+    assert isinstance(tc.state.Value.from_json(True), tc.Number)
     assert isinstance(tc.state.Value.from_json(1), tc.Number)
-
-    with pytest.raises(TypeError, match="bool is not a number"):
-        tc.Number(True)
 
 
 def test_value_map_and_tuple_roundtrip():
@@ -40,12 +37,12 @@ def test_value_map_and_tuple_roundtrip():
 
 def test_value_subtype_constructors_and_from_json_types():
     assert isinstance(tc.Number(3), tc.Number)
-    assert isinstance(tc.Bool(False), tc.Bool)
+    assert isinstance(tc.Number(False), tc.Number)
     assert isinstance(tc.Map({"x": 1}), tc.Map)
     assert isinstance(tc.Tuple([1, 2]), tc.Tuple)
 
     assert isinstance(tc.state.Value.from_json(3), tc.Number)
-    assert isinstance(tc.state.Value.from_json(True), tc.Bool)
+    assert isinstance(tc.state.Value.from_json(True), tc.Number)
     assert isinstance(tc.state.Value.from_json({"x": 1}), tc.Map)
     assert isinstance(tc.state.Value.from_json([1, 2]), tc.Tuple)
 
@@ -57,7 +54,7 @@ def test_map_and_tuple_literal_iteration_helpers():
 
     t = tc.Tuple([1, "x", True])
     assert len(t) == 3
-    assert [type(v).__name__ for v in t] == ["Number", "String", "Bool"]
+    assert [type(v).__name__ for v in t] == ["Number", "String", "Number"]
 
 
 def test_scalar_roundtrip_nested_map_and_tuple():
@@ -84,7 +81,7 @@ def test_scalar_opref_encoding_get_put_post_delete():
     }
 
     matmul = tc.uri("class", "tinychain", "numeric", "0.1.0", "matmul").path
-    post = tc.state.Post(matmul)({"transpose_a": tc.Bool(False)}).to_json()
+    post = tc.state.Post(matmul)({"transpose_a": tc.Number(False)}).to_json()
     assert post == {
         matmul: {"transpose_a": False}
     }
