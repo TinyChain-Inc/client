@@ -274,7 +274,6 @@ def test_with_library_accepts_single_token_object(tmp_path, monkeypatch):
         host="http://127.0.0.1:8702",
         actor_id="example-admin",
         public_key_b64="pubkey",
-        secret_key_b64="secret",
         bearer_token="bearer",
     )
 

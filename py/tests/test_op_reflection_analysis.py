@@ -5,7 +5,7 @@ import pathlib
 import tinychain as tc
 import tinychain.testing as tc_testing
 
-from .support import rjwt_install_token, require_cargo
+from .support import install_token, require_cargo
 
 
 def test_op_reflection_analysis(tmp_path: pathlib.Path) -> None:
@@ -130,11 +130,11 @@ def test_op_reflection_analysis(tmp_path: pathlib.Path) -> None:
         b = B()
         c = C()
 
-        token = rjwt_install_token(A.class_id().path, B.class_id().path, C.class_id().path)
+        token = install_token(A.class_id().path, B.class_id().path, C.class_id().path)
         kernel = tc.kernel.with_library(
             c,
             data_dir=tmp_path,
-            token=tc.auth.SignedBearerToken(**token),
+            token=token,
         )
 
         for library in (A, B, C):
@@ -142,7 +142,7 @@ def test_op_reflection_analysis(tmp_path: pathlib.Path) -> None:
                 library,
                 kernel=kernel,
                 data_dir=tmp_path,
-                token=tc.auth.SignedBearerToken(**token),
+                token=token,
             )
             assert resp.status == 204
 

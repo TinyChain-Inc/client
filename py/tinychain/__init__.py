@@ -98,35 +98,18 @@ def execute(op: "OpRef | Ref") -> object:
         raise AssertionError(f"unexpected status {status}: {message}")
     raise AssertionError(f"unexpected status {status}")
 
-# Optional local (PyO3) backend. When installed, re-export its public classes at the top level
-# so `import tinychain as tc` works for both HTTP and in-process execution.
+# Optional local (PyO3) backend. Keep bridge-specific classes private to
+# `tinychain_local`; public Python APIs use `tc.backend`, `tc.kernel`, and `tc.Host`.
 try:  # pragma: no cover
     import tinychain_local as local  # type: ignore
 
-    KernelHandle = local.KernelHandle
     Backend = local.Backend
+    KernelHandle = local.KernelHandle
     KernelRequest = local.KernelRequest
     KernelResponse = local.KernelResponse
-    StateHandle = local.StateHandle
     State = local.State
-    Scalar = local.Scalar
-    Collection = local.Collection
+    StateHandle = local.StateHandle
     LocalTensor = local.Tensor
-    Value = local.Value
-
-    __all__ += [
-        "local",
-        "KernelHandle",
-        "Backend",
-        "KernelRequest",
-        "KernelResponse",
-        "StateHandle",
-        "State",
-        "Scalar",
-        "Collection",
-        "LocalTensor",
-        "Value",
-    ]
 except ImportError:  # pragma: no cover
     local = None
 
@@ -137,45 +120,19 @@ except ImportError:  # pragma: no cover
         def __getattr__(self, _attr: str):
             raise ImportError(
                 f"`tinychain.{self._name}` requires the optional local backend. "
-                "Install `tinychain-local` (or the equivalent extra) to enable PyO3 eager execution."
+                "Install `tinychain-local` to enable PyO3 eager execution."
             )
 
         def __call__(self, *args, **kwargs):
             raise ImportError(
                 f"`tinychain.{self._name}` requires the optional local backend. "
-                "Install `tinychain-local` (or the equivalent extra) to enable PyO3 eager execution."
+                "Install `tinychain-local` to enable PyO3 eager execution."
             )
 
-        def __repr__(self) -> str:
-            return f"<missing tinychain-local: {self._name}>"
-
-    KernelHandle = _MissingBackend("KernelHandle")
     Backend = _MissingBackend("Backend")
+    KernelHandle = _MissingBackend("KernelHandle")
     KernelRequest = _MissingBackend("KernelRequest")
     KernelResponse = _MissingBackend("KernelResponse")
-    StateHandle = _MissingBackend("StateHandle")
     State = _MissingBackend("State")
-    Scalar = _MissingBackend("Scalar")
-    Collection = _MissingBackend("Collection")
+    StateHandle = _MissingBackend("StateHandle")
     LocalTensor = _MissingBackend("LocalTensor")
-    Value = _MissingBackend("Value")
-
-
-def __getattr__(name: str):  # pragma: no cover
-    if name in {
-        "KernelHandle",
-        "Backend",
-        "KernelRequest",
-        "KernelResponse",
-        "StateHandle",
-        "State",
-        "Scalar",
-        "Collection",
-        "LocalTensor",
-        "Value",
-    }:
-        raise ImportError(
-            f"`tinychain.{name}` requires the optional local backend. "
-            "Install `tinychain-local` (or the equivalent extra) to enable PyO3 eager execution."
-        )
-    raise AttributeError(name)

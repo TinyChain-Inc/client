@@ -135,8 +135,10 @@ tc.install(greeter, remote=host)
 print(host.url(greeter, "hello", name="Ada"))
 ```
 
-The token can be pre-generated for a short video, or minted from key material
-with `tc.auth.mint_rjwt_token(..., ttl_secs=3)`. `tc.install(...)` derives the
+The token can be pre-generated for a short video, or minted with
+`tc.auth.mint_rjwt_token(..., ttl_secs=3)`. TinyChain v0.17 mints Falcon-512
+RJWT tokens by default via the `rjwt` PyO3 package; Ed25519 is retained only for
+legacy credential rotation. `tc.install(...)` derives the
 canonical `/lib` definition from the `Library` class; application code should not
 construct schemas, artifacts, status wrappers, or request bodies by hand. For
 WASM-backed libraries, pass `wasm=...` to the same install helper and keep the
@@ -267,10 +269,12 @@ Migration for ILC-style routes:
 2. replace body-based auth parsing with `tc.auth.context()` (or `txn.auth_context()` in Rust),
 3. keep route signatures focused on domain inputs only.
 
-Run it from the runtime repo root after building the Rust examples:
+Run it from the runtime repo root after installing the local Python extensions and
+building the WASM example:
 
 ```bash
-cargo build --manifest-path tc-server/Cargo.toml --example http_rpc_native_host --example rjwt_install_token
+maturin develop --manifest-path deps/rjwt/rjwt-py/Cargo.toml
+cargo build --manifest-path tc-server/Cargo.toml --example http_rpc_native_host
 cargo build --manifest-path tc-wasm/Cargo.toml --example opref_to_remote --target wasm32-unknown-unknown --release
 
 ./.venv/bin/python client/py/examples/mixed_backend_modes.py \
@@ -306,7 +310,7 @@ with tc.backend(kernel, token=runtime_token):
 Build the Rust host and WASM example first:
 
 ```bash
-cargo build --manifest-path tc-server/Cargo.toml --example http_rpc_native_host --example rjwt_install_token
+cargo build --manifest-path tc-server/Cargo.toml --example http_rpc_native_host
 cargo build --manifest-path tc-wasm/Cargo.toml --example opref_to_remote --target wasm32-unknown-unknown --release
 ```
 
