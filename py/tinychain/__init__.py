@@ -101,16 +101,41 @@ def execute(op: "OpRef | Ref") -> object:
         raise AssertionError(f"unexpected status {status}: {message}")
     raise AssertionError(f"unexpected status {status}")
 
-def __getattr__(name: str):  # pragma: no cover
-    if name in {
-        "Backend",
-        "KernelHandle",
-        "KernelRequest",
-        "KernelResponse",
-        "State",
-        "StateHandle",
-    }:
-        raise AttributeError(
-            f"`tinychain.{name}` is an internal PyO3 backend type and is not part of the public API"
-        )
-    raise AttributeError(name)
+# Optional local (PyO3) backend. Keep bridge-specific classes private to
+# `tinychain_local`; public Python APIs use `tc.backend`, `tc.kernel`, and `tc.Host`.
+try:  # pragma: no cover
+    import tinychain_local as local  # type: ignore
+
+    Backend = local.Backend
+    KernelHandle = local.KernelHandle
+    KernelRequest = local.KernelRequest
+    KernelResponse = local.KernelResponse
+    State = local.State
+    StateHandle = local.StateHandle
+    LocalTensor = local.Tensor
+except ImportError:  # pragma: no cover
+    local = None
+
+    class _MissingBackend:
+        def __init__(self, name: str) -> None:
+            self._name = name
+
+        def __getattr__(self, _attr: str):
+            raise ImportError(
+                f"`tinychain.{self._name}` requires the optional local backend. "
+                "Install `tinychain-local` to enable PyO3 eager execution."
+            )
+
+        def __call__(self, *args, **kwargs):
+            raise ImportError(
+                f"`tinychain.{self._name}` requires the optional local backend. "
+                "Install `tinychain-local` to enable PyO3 eager execution."
+            )
+
+    Backend = _MissingBackend("Backend")
+    KernelHandle = _MissingBackend("KernelHandle")
+    KernelRequest = _MissingBackend("KernelRequest")
+    KernelResponse = _MissingBackend("KernelResponse")
+    State = _MissingBackend("State")
+    StateHandle = _MissingBackend("StateHandle")
+    LocalTensor = _MissingBackend("LocalTensor")

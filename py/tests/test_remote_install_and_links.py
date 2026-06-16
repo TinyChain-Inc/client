@@ -44,7 +44,6 @@ def test_host_carries_default_auth_and_builds_route_url(monkeypatch):
         host="https://tokens.example",
         actor_id="demo",
         public_key_b64="pub",
-        secret_key_b64="secret",
         bearer_token="token-123",
     )
     host = tc.Host("https://testnet.example", token=token)
@@ -82,7 +81,6 @@ def test_install_python_library_to_remote_uses_canonical_payload_and_auth(monkey
         host="https://tokens.example",
         actor_id="demo",
         public_key_b64="pub",
-        secret_key_b64="secret",
         bearer_token="token-123",
     )
     host = tc.Host("https://testnet.example", token=token)

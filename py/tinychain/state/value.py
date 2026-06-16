@@ -30,7 +30,7 @@ class Value(Scalar):
         if obj is None:
             return Null()
         if isinstance(obj, bool):
-            return Bool(obj)
+            return Number(obj)
         if isinstance(obj, (int, float)):
             return Number(obj)
         if isinstance(obj, str):
@@ -194,49 +194,19 @@ def _is_literal_render_value(value: object) -> bool:
     return isinstance(value, (str, bool, int, float, URI))
 
 
-class Bool(Value):
-    __slots__ = ("op",)
-
-    __uri__: URI = uri(Value, "bool")
-
-    def __init__(self, value: bool | object):
-        op = _as_opref(value)
-        if op is not None:
-            super().__init__(None)
-            object.__setattr__(self, "op", op)
-            return
-
-        if not isinstance(value, bool):
-            raise TypeError("expected bool value")
-
-        super().__init__(value)
-        object.__setattr__(self, "op", None)
-
-    def to_json(self) -> object:
-        return form_of(self)
-
-    @classmethod
-    def _from_json(cls, obj: Any) -> "Bool":
-        if not isinstance(obj, bool):
-            raise TypeError("expected bool value")
-        return cls(obj)
-
-
 class Number(Value):
     __slots__ = ("op",)
 
     __uri__: URI = uri(Value, "number")
 
-    def __init__(self, value: int | float | object):
+    def __init__(self, value: bool | int | float | object):
         op = _as_opref(value)
         if op is not None:
             super().__init__(None)
             object.__setattr__(self, "op", op)
             return
 
-        if isinstance(value, bool):
-            raise TypeError("bool is not a number; use Value.bool")
-        if not isinstance(value, (int, float)):
+        if not isinstance(value, (bool, int, float)):
             raise TypeError("expected number value")
 
         super().__init__(value)
@@ -247,8 +217,6 @@ class Number(Value):
 
     @classmethod
     def _from_json(cls, obj: Any) -> "Number":
-        if isinstance(obj, bool):
-            raise TypeError("expected number value")
         return cls(obj)
 
     def _scalar(self):
@@ -509,6 +477,10 @@ class C128(Complex):
     __slots__ = ()
 
     __uri__: URI = uri(Complex, "128")
+
+
+# Backward-compatible alias: bool literals are represented as Number values.
+Bool = Number
 
 
 class Map(Value):

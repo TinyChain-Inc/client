@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import pathlib
-import subprocess
+import base64
+import time
 from dataclasses import dataclass
 from typing import Sequence
-
-from . import testing
 
 
 @dataclass(frozen=True, slots=True)
@@ -14,6 +12,7 @@ class SignedBearerToken:
     actor_id: str
     public_key_b64: str
     bearer_token: str
+    alg: str = "falcon512"
     secret_key_b64: str = ""
 
 
@@ -35,32 +34,39 @@ def context():
     return tc.Ref(tc.opref.get(tc.uri("host", "auth", "context").path))
 
 
-def _resolve_minter_command(
-    *,
-    repo_root: pathlib.Path,
-    binary: str | pathlib.Path | None,
-) -> list[str]:
-    if binary is not None:
-        return [str(binary)]
+def _rjwt():
+    try:
+        import rjwt
+    except ImportError as err:
+        raise RuntimeError(
+            "rjwt is required to mint TinyChain bearer tokens. Install the PyO3 package with "
+            "`maturin develop --manifest-path deps/rjwt/rjwt-py/Cargo.toml`."
+        ) from err
 
-    built = testing.rjwt_install_token_bin(repo_root)
-    if built is not None:
-        return [str(built)]
+    return rjwt
 
-    if testing.cargo_available():
-        return [
-            "cargo",
-            "run",
-            "--manifest-path",
-            str(repo_root / "tc-server" / "Cargo.toml"),
-            "--example",
-            "rjwt_install_token",
-            "--",
-        ]
 
-    raise RuntimeError(
-        "cannot mint token: no `rjwt_install_token` binary found and `cargo` is unavailable"
-    )
+def generate_actor_secret(actor_id: str, *, alg: str = "falcon512") -> str:
+    if not actor_id.strip():
+        raise ValueError("actor_id must be non-empty")
+
+    rjwt = _rjwt()
+    actor = _actor(rjwt, actor_id, None, alg.strip().lower())
+    if not hasattr(actor, "private_key_bytes"):
+        raise RuntimeError("installed rjwt package does not expose private key export")
+
+    return base64.b64encode(actor.private_key_bytes()).decode("ascii")
+
+
+def _actor(rjwt, actor_id: str, secret_key_b64: str | None, alg: str):
+    if secret_key_b64:
+        key = base64.b64decode(secret_key_b64)
+        return rjwt.Actor.with_keypair(actor_id, key, alg)
+
+    if alg == "falcon512" and hasattr(rjwt.Actor, "new_falcon512"):
+        return rjwt.Actor.new_falcon512(actor_id)
+
+    return rjwt.Actor(actor_id)
 
 
 def mint_rjwt_token(
@@ -70,9 +76,12 @@ def mint_rjwt_token(
     libs: Sequence[str],
     ttl_secs: int = 3600,
     secret_key_b64: str | None = None,
-    repo_root: pathlib.Path | None = None,
-    binary: str | pathlib.Path | None = None,
+    alg: str = "falcon512",
+    repo_root: object | None = None,
+    binary: object | None = None,
 ) -> SignedBearerToken:
+    if repo_root is not None or binary is not None:
+        raise ValueError("`repo_root` and `binary` are obsolete; token minting uses rjwt directly")
     if not libs:
         raise ValueError("minted token requires at least one `libs` claim")
     if not host.strip():
@@ -80,46 +89,24 @@ def mint_rjwt_token(
     if not actor_id.strip():
         raise ValueError("minted token actor_id must be non-empty")
 
-    root = repo_root or testing.repo_root()
-    cmd = _resolve_minter_command(repo_root=root, binary=binary)
-    cmd.extend(["--host", host, "--actor", actor_id])
-    if secret_key_b64:
-        cmd.extend(["--secret-key-b64", secret_key_b64])
-    for lib in libs:
-        cmd.extend(["--lib", lib])
-
-    try:
-        result = subprocess.run(
-            cmd,
-            cwd=root,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except subprocess.CalledProcessError as err:
-        detail = err.stderr or err.stdout or str(err)
-        raise RuntimeError(f"failed to mint token:\n{detail}") from err
-
-    values: dict[str, str] = {}
-    for line in result.stdout.splitlines():
-        if ": " not in line:
-            continue
-        key, value = line.split(": ", 1)
-        if key in {"host", "actor_id", "public_key_b64", "secret_key_b64", "bearer_token"}:
-            values[key] = value.strip()
-
-    required = ("host", "actor_id", "public_key_b64", "secret_key_b64", "bearer_token")
-    missing = [field for field in required if field not in values]
-    if missing:
-        missing_csv = ", ".join(missing)
-        raise RuntimeError(
-            f"minted token output missing field(s): {missing_csv}\nstdout:\n{result.stdout}"
-        )
+    rjwt = _rjwt()
+    alg = alg.strip().lower()
+    actor = _actor(rjwt, actor_id, secret_key_b64, alg)
+    now = time.time()
+    claims = {lib: 0o200 for lib in libs}
+    token = rjwt.Token(host, now, float(ttl_secs), actor_id, claims)
+    signed = actor.sign_token(token)
+    secret_key_b64 = secret_key_b64 or (
+        base64.b64encode(actor.private_key_bytes()).decode("ascii")
+        if hasattr(actor, "private_key_bytes")
+        else ""
+    )
 
     return SignedBearerToken(
-        host=values["host"],
-        actor_id=values["actor_id"],
-        public_key_b64=values["public_key_b64"],
-        secret_key_b64=values["secret_key_b64"],
-        bearer_token=values["bearer_token"],
+        host=token.issuer() if hasattr(token, "issuer") else host,
+        actor_id=actor_id,
+        public_key_b64=base64.b64encode(actor.public_key_bytes()).decode("ascii"),
+        alg=alg,
+        secret_key_b64=secret_key_b64,
+        bearer_token=signed.jwt(),
     )
