@@ -86,14 +86,6 @@ def test_execute_decodes_canonical_scalar_array(monkeypatch):
 
 
 def test_execute_decodes_typed_tensor_when_available(monkeypatch):
-    try:
-        has_tensor = hasattr(tc, "LocalTensor") and hasattr(tc.LocalTensor, "dense_u64")
-    except ImportError:
-        has_tensor = False
-
-    if not has_tensor:
-        pytest.skip("local Tensor type unavailable")
-
     payload = {
         tc.uri("state", "collection", "tensor").path: [
             [tc.uri("state", "scalar", "value", "number", "uint", "64").path, [2]],
@@ -103,10 +95,45 @@ def test_execute_decodes_typed_tensor_when_available(monkeypatch):
     monkeypatch.setattr(tc, "_dispatch_execute", lambda _op: _Response(payload, status=200))
 
     result = tc.execute(tc.opref.get("/state/tensor"))
-    assert isinstance(result, tc.LocalTensor)
-    assert result.dtype() == "u64"
-    assert result.shape() == [2]
-    assert result.values() == [10, 11]
+    assert isinstance(result, tc.Tensor)
+    assert result.dtype == "u64"
+    assert result.shape == [2]
+    assert result.values == [10, 11]
+
+
+def test_execute_decodes_f64_tensor_when_available(monkeypatch):
+    payload = {
+        tc.uri("state", "collection", "tensor").path: [
+            [tc.uri("state", "scalar", "value", "number", "float", "64").path, [2]],
+            [1.25, 2.5],
+        ]
+    }
+    monkeypatch.setattr(tc, "_dispatch_execute", lambda _op: _Response(payload, status=200))
+
+    local = tc._local.backend()
+    native_tensor = getattr(local, "Tensor", None)
+    if native_tensor is not None and hasattr(native_tensor, "dense_f64"):
+        result = tc.execute(tc.opref.get("/state/tensor"))
+        assert isinstance(result, tc.Tensor)
+        assert result.dtype == "f64"
+        assert result.shape == [2]
+        assert result.values == [1.25, 2.5]
+    else:
+        with pytest.raises(TypeError, match="cannot decode tensor dtype"):
+            tc.execute(tc.opref.get("/state/tensor"))
+
+
+def test_execute_rejects_unknown_tensor_dtype(monkeypatch):
+    payload = {
+        tc.uri("state", "collection", "tensor").path: [
+            [tc.uri("state", "scalar", "value", "number", "int", "64").path, [2]],
+            [1, 2],
+        ]
+    }
+    monkeypatch.setattr(tc, "_dispatch_execute", lambda _op: _Response(payload, status=200))
+
+    with pytest.raises(TypeError, match="unsupported tensor dtype"):
+        tc.execute(tc.opref.get("/state/tensor"))
 
 
 def test_execute_decodes_opdef_map_to_python_opdef(monkeypatch):

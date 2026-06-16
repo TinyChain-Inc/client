@@ -4,7 +4,13 @@ from functools import lru_cache
 from typing import Any, Iterator, Mapping, Sequence, cast
 
 from ...uri import URI, path, uri
-from .opdef import DeleteOpDef, GetOpDef, OpDef, PostOpDef, PutOpDef
+from .opdef import (
+    DeleteOpDef,
+    GetOpDef,
+    OpDef,
+    PostOpDef,
+    PutOpDef,
+)
 from .ops import Delete, Get, Op, Post, Put
 from .refs import (
     OPREF_DELETE_TAG,
@@ -195,6 +201,13 @@ def _scalar_class_for_hint(hint: object) -> type["Scalar"]:
     _, ValueBool, _, ValueMap, ValueNumber, ValueString, ValueTuple, _ = _value_runtime()
 
     if isinstance(hint, type):
+        try:
+            from ..tensor import Tensor
+        except ImportError:
+            Tensor = None
+
+        if Tensor is not None and issubclass(hint, Tensor):
+            return Tensor
         if issubclass(hint, ValueNumber):
             return Number
         if issubclass(hint, ValueBool):
@@ -520,25 +533,84 @@ class Scalar:
     def to_json(self) -> object:
         return _json_of(form_of(self))
 
+    @classmethod
+    def _from_opref(cls, opref: OpRef) -> "Scalar":
+        return cls(ref=TCRef(opref))
+
+    @classmethod
+    def _get_ref(cls, subject: str, key: "Scalar | Value | object" = None) -> "Scalar":
+        return cls._from_opref(GetOpRef(subject, key))
+
+    @classmethod
+    def _put_ref(
+        cls,
+        subject: str,
+        key: "Scalar | Value | object",
+        value: "Scalar | Value | object",
+    ) -> "Scalar":
+        return cls._from_opref(PutOpRef(subject, key, value))
+
+    @classmethod
+    def _post_ref(
+        cls,
+        subject: str,
+        params: Mapping[str, "Scalar | Value | object"] | None = None,
+    ) -> "Scalar":
+        return cls._from_opref(PostOpRef(subject, params or {}))
+
+    @classmethod
+    def _delete_ref(cls, subject: str, key: "Scalar | Value | object" = None) -> "Scalar":
+        return cls._from_opref(DeleteOpRef(subject, key))
+
+    def _subject_ref(self, method: str | None = None) -> str:
+        subject = self._subject()
+        return f"{subject}/{method}" if method else subject
+
+    def _get(
+        self,
+        method: str | None = None,
+        key: "Scalar | Value | object" = None,
+        *,
+        rtype: type["Scalar"] | None = None,
+    ) -> "Scalar":
+        cls = rtype or type(self)
+        return cls._get_ref(self._subject_ref(method), key)
+
+    def _put(
+        self,
+        value: "Scalar | Value | object",
+        method: str | None = None,
+        key: "Scalar | Value | object" = None,
+        *,
+        rtype: type["Scalar"] | None = None,
+    ) -> "Scalar":
+        cls = rtype or type(self)
+        return cls._put_ref(self._subject_ref(method), key, value)
+
+    def _post(
+        self,
+        method: str | None = None,
+        params: Mapping[str, "Scalar | Value | object"] | None = None,
+        *,
+        rtype: type["Scalar"] | None = None,
+    ) -> "Scalar":
+        cls = rtype or type(self)
+        return cls._post_ref(self._subject_ref(method), params)
+
     def class_(self) -> "Scalar":
-        opref = PostOpRef(SCALAR_REFLECT_CLASS, {"scalar": self})
-        return Scalar(ref=TCRef(opref))
+        return Scalar._post_ref(SCALAR_REFLECT_CLASS, {"scalar": self})
 
     def ref_parts(self) -> "Tuple":
-        opref = PostOpRef(SCALAR_REFLECT_REF_PARTS, {"scalar": self})
-        return Tuple(ref=TCRef(opref))
+        return Tuple._post_ref(SCALAR_REFLECT_REF_PARTS, {"scalar": self})
 
     def reflect_form(self) -> "Tuple":
-        opref = PostOpRef(OPDEF_REFLECT_FORM, {"op": self})
-        return Tuple(ref=TCRef(opref))
+        return Tuple._post_ref(OPDEF_REFLECT_FORM, {"op": self})
 
     def reflect_last_id(self) -> "String":
-        opref = PostOpRef(OPDEF_REFLECT_LAST_ID, {"op": self})
-        return String(ref=TCRef(opref))
+        return String._post_ref(OPDEF_REFLECT_LAST_ID, {"op": self})
 
     def reflect_scalars(self) -> "Tuple":
-        opref = PostOpRef(OPDEF_REFLECT_SCALARS, {"op": self})
-        return Tuple(ref=TCRef(opref))
+        return Tuple._post_ref(OPDEF_REFLECT_SCALARS, {"op": self})
 
     def _subject(self) -> str:
         form = form_of(self)

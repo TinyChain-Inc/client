@@ -3,6 +3,7 @@ import json
 import pytest
 
 import tinychain as tc
+import tinychain._local as tc_local
 import tinychain.testing as tc_testing
 
 
@@ -10,7 +11,7 @@ def test_pyo3_kernel_resolves_opref_over_http_gateway(tmp_path):
     if not tc_testing.cargo_available():
         pytest.skip("`cargo` not found; install Rust tooling to run this test")
     try:
-        _ = tc.KernelHandle.with_library_definition
+        _ = tc_local.kernel_handle().with_library_definition
     except (ImportError, AttributeError):
         pytest.skip("`tinychain-local` not installed; skipping PyO3 kernel gateway test")
 
@@ -39,7 +40,7 @@ def test_pyo3_kernel_resolves_opref_over_http_gateway(tmp_path):
         with pytest.raises(ValueError):
             kernel.resolve_get(
                 b_hello,
-                tc.StateHandle(json.dumps("World").encode("utf-8")),
+                tc_local.state_handle(json.dumps("World").encode("utf-8")),
             )
 
         with pytest.raises(ValueError):
@@ -63,7 +64,8 @@ def test_kernel_with_library_does_not_read_auth_env(monkeypatch, tmp_path):
             )
             return "kernel-handle"
 
-    monkeypatch.setattr(tc, "KernelHandle", _KernelHandle)
+    import tinychain._local as tc_local
+    monkeypatch.setattr(tc_local, "kernel_handle", lambda:  _KernelHandle)
     monkeypatch.setenv("TC_TOKEN_HOST", "https://tokens.example.test")
     monkeypatch.setenv("TC_ACTOR_ID", "example-admin")
     monkeypatch.setenv("TC_PUBLIC_KEY_B64", "pubkey")

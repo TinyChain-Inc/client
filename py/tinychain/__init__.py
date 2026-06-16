@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .library import Library, delete, get, install, post, put
+from .library import Library, delete, get, grad, install, post, put
 from .codec import decode_response_body
 from .executor import Executor, backend
 from .executor import execute as _dispatch_execute
@@ -14,6 +14,7 @@ from . import compute
 from . import state
 from . import kernel
 from . import auth
+from . import std
 from .cond import cond
 from .after import after
 from .host import Host
@@ -51,7 +52,9 @@ __all__ = [
     "state",
     "kernel",
     "install",
+    "std",
     "get",
+    "grad",
     "put",
     "post",
     "delete",

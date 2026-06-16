@@ -4,7 +4,7 @@ import inspect
 
 import pytest
 import tinychain as tc
-from tinychain.library import compile_ir
+from tinychain.library import compile_ir, library_definition
 
 
 def test_library_routes_return_typed_refs():
@@ -112,6 +112,69 @@ def test_library_routes_compile_opdef_routes():
 
     route = next(route for route in ir["routes"] if route["path"] == "/echo")
     assert "opdef" in route
+
+
+def test_library_routes_preserve_all_dict_return_keys():
+    class A(tc.Library):
+        publisher = "example-devco"
+        version = "0.1.0"
+
+        @tc.post
+        def stats(self, x: tc.Number):
+            return {"min": x, "max": x}
+
+    ir = compile_ir(A)
+    route = next(route for route in ir["routes"] if route["path"] == "/stats")
+    opdef = route["opdef"]["/state/scalar/op/post"]
+
+    assert [name for name, _ in opdef] == ["min", "max"]
+
+
+def test_grad_is_call_site_transform_stub_not_route_decorator():
+    class A(tc.Library):
+        publisher = "example-devco"
+        version = "0.1.0"
+
+        @tc.post
+        def identity(self, x: tc.Number) -> tc.Number:
+            return x
+
+    routes = {route["path"]: route for route in compile_ir(A)["routes"]}
+
+    assert "grad" not in routes["/identity"]
+    grad_ref = tc.grad(A().identity, wrt=("x",))
+    grad_form = tc.state.form_of(grad_ref)
+    assert isinstance(grad_form, tc.state.TCRef)
+    opref = tc.state.tcref_form_of(grad_form)
+    assert isinstance(opref, tc.state.PostOpRef)
+    assert opref.subject == tc.uri("lib", "std", "autodiff", "0.1.0", "grad").path
+    assert opref.args["route"].endswith("/identity")
+    assert opref.args["wrt"] == ["x"]
+
+
+def test_grad_cannot_be_used_as_route_metadata_decorator():
+    class A(tc.Library):
+        publisher = "example-devco"
+        version = "0.1.0"
+
+        @tc.post
+        def identity(self, x: tc.Number) -> tc.Number:
+            return x
+
+    with pytest.raises(TypeError, match="call-site transform"):
+
+        class B(tc.Library):
+            publisher = "example-devco"
+            version = "0.1.0"
+
+            @tc.post
+            @tc.grad
+            def bad(self, x: tc.Number) -> tc.Number:
+                return x
+
+    definition = library_definition(A)
+    route = definition[A.class_id().path]["identity"]
+    assert "/state/scalar/op/post" in route
 
 
 def test_library_routes_use_decorator_time_source_capture(monkeypatch):

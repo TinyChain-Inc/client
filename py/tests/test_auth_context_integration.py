@@ -40,10 +40,12 @@ def test_framework_auth_context_available_in_local_and_wasm_routes(tmp_path: pat
     if not tc_testing.cargo_available():
         pytest.skip("`cargo` not found; install Rust tooling to run auth context integration")
     try:
-        _ = tc.KernelHandle.local
+        import tinychain._local as tc_local
+
+        _ = tc_local.kernel_handle().local
     except (ImportError, AttributeError):
         pytest.skip("`tinychain-local` not installed")
-    if not hasattr(tc.KernelHandle, "with_library_definition"):
+    if not hasattr(tc_local.kernel_handle(), "with_library_definition"):
         pytest.skip("tinychain-local does not support canonical library definitions")
 
     wasm_path = ensure_wasm_example_built("opref_to_remote")

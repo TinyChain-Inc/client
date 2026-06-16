@@ -168,11 +168,60 @@ The runtime type rules are:
 - `str` normalizes to `tc.String`.
 - numeric and boolean primitives normalize to `tc.state.Value`.
 - mixed unions normalize to their greatest common TinyChain value ancestor.
+- explicit `tc.Tensor` remains a symbolic `/state/collection/tensor` value for
+  deferred planning and route reflection.
 - explicit `tc.Ref` remains `tc.Ref` for op/reflection routes.
 
 `tc.String` is the value-module `String(Value)` type. It is the only value type
 with `render(...)`; use it for string templating instead of custom payload logic
 or placeholder `Ref[str]` wrappers.
+
+### Tensor Method Surface
+
+Use `tc.Tensor` in route signatures and method bodies for symbolic tensor
+authoring. Its methods mirror the v1 Tensor ergonomics while compiling to
+canonical TinyChain op references:
+
+```python
+class Math(tc.Library):
+    publisher = "demo"
+    version = "0.1.0"
+
+    @tc.post
+    def mm(self, left: tc.Tensor, right: tc.Tensor) -> tc.Tensor:
+        return (left @ right).reshape([2, 2])
+```
+
+The initial v2 port covers the method-definition surface only: `shape`, `dtype`,
+`ndim`, `size`, `all`, `any`, `broadcast`, `cast`, `copy`, `expand_dims`,
+`cond`, `max`, `min`, `mean`, `norm`, `product`, `reshape`, `slice`, `std`,
+`sum`, `transpose`, `write`, arithmetic operators, logical operators,
+`matmul`, `tile`, `split`, `concatenate`, and `einsum`. Do not add per-package
+Tensor wrappers or deferred flags; execution mode still comes from
+`tc.backend(..., mode=...)`.
+
+### Autodiff Transform
+
+```python
+class Math(tc.Library):
+    publisher = "demo"
+    version = "0.1.0"
+
+    @tc.post
+    def matmul(self, left: tc.Tensor, right: tc.Tensor) -> tc.Tensor:
+        return left @ right
+
+with tc.backend(mode="deferred"):
+    op = Math().matmul(left=tc.state.id("left"), right=tc.state.id("right"))
+    grad_op = tc.grad(op, wrt=("left", "right"))
+```
+
+Autodiff follows a JAX-like call-site transform model: routes define ordinary
+TinyChain computation, and the autodiff compiler decides `wrt`, traversal,
+fanout, and accumulation when `tc.grad(...)` is called. Do not create
+autodiff-specific `get`/`post` decorators or route-level `rule`/`wrt` metadata.
+The current `tc.grad(...)` surface is a reserved stub until the compiler pass is
+implemented.
 
 Python route implementations are compiled by `tinychain._autograph`, which lowers
 method source code into TinyChain IR. Route decorators capture source at definition
@@ -246,7 +295,7 @@ TinyChain state envelopes into typed Python values:
 - self-describing scalar values (`"hello"`, `7`, `true`, `null`) -> Python primitives
 - self-describing state maps/objects (`{"k": ...}`) -> `dict`
 - self-describing state tuples/arrays (`[...]`) -> `list`/`tuple` as appropriate
-- `/state/collection/tensor` -> `tc.Tensor` (when local backend types are available)
+- `/state/collection/tensor` -> `tc.Tensor` with materialized backing data
 - `/state/scalar/op/*` -> `tc.state.OpDef` (decoded transparently)
 
 This means callers should expect typed responses by default, not ad-hoc JSON/status parsing
@@ -353,20 +402,33 @@ in PyO3 as soon as the kernel loads the same directory tree.
 
 ## Selecting the PyO3 backend
 
-This workspace ships a pure-Python `tinychain` package and an optional in-process PyO3 backend (`tinychain-local`). Transaction IDs are minted and validated server-side; client code must not mint or manage transaction lifecycles directly. To exercise the in-process backend, install `tinychain-local` and drive requests directly against the shared kernel:
+This workspace ships a pure-Python `tinychain` package and an optional
+in-process PyO3 backend (`tinychain-local`). Application code should not import
+or reference `tinychain-local` classes directly. Use the public TinyChain API and
+let `tc.backend(...)` select local eager execution:
 
 ```python
 import tinychain as tc
 
-kernel = tc.KernelHandle.local(data_dir="path/to/data")
-health = kernel.dispatch(tc.KernelRequest("GET", tc.uri.healthz(), None, None))
-print(health.status())  # 200 when the kernel is wired correctly
+class Greeter(tc.Library):
+    publisher = "demo"
+    version = "0.1.0"
+
+    @tc.get
+    def hello(self, name: str) -> tc.String:
+        return tc.String("Hello, {{name}}!").render(name=name)
+
+kernel = tc.kernel.with_library(Greeter(), data_dir=data_dir, token=install_token)
+
+with tc.backend(kernel, token=runtime_token):
+    print(Greeter().hello("Ada"))
 ```
 
-`tc.Backend` wraps the same handle and adds the `healthz` helper. Transaction
-helpers (`begin_txn`, `commit_txn`, etc.) are **not** exposed via PyO3; the
-kernel remains the only owner of transaction state. Always point both HTTP and
-PyO3 adapters at the **same `data_dir`** so they share the txfs state.
+The private `tinychain._local` bridge exists only for framework internals and
+low-level tests. Transaction helpers (`begin_txn`, `commit_txn`, etc.) are **not**
+exposed via PyO3; the kernel remains the only owner of transaction state. Always
+point both HTTP and PyO3 adapters at the **same `data_dir`** so they share the
+txfs state.
 
 ## Deferred client-side `Library` definitions
 
@@ -486,23 +548,6 @@ under `/state/media/...`; the queue row only stores the reference.
 
 Use these side-by-side examples when updating docs or answering contributor
 questions about the canonical eager/deferred client model.
-
-**Read a collection element with a low-level host request**
-
-Prefer library route calls in application packages. Use `Host.request` for
-adapter diagnostics or direct collection probes.
-
-```python
-import tinychain as tc
-
-table = tc.uri.state(
-    namespace="demo",
-    path=("users",),
-)
-host = tc.Host("http://localhost:8702")
-entry = host.request("GET", tc.uri(table, "user:123"))
-name = entry["name"]
-```
 
 **Switch route calls between eager and deferred mode**
 
@@ -668,6 +713,18 @@ FK inference, explicit override hooks, and versioned taxonomy metadata.
 For schema/model upgrades, the client submits policy/config inputs, but
 authoritative canary/soak/rollback orchestration remains in
 `/service/std/rollout` on the control-plane.
+
+Planned Tensor datastore integration follows the same contract boundaries:
+
+- Tensor-backed persistent fields participate in typed ORM/query planning, but
+  Tensor payload bindings are not implicit model foreign-key edges.
+- Sparse Tensor components (coordinates/indices and values) follow the same
+  taxonomy safety model: unclassified user-supplied components default to PII
+  classification until explicitly classified.
+- Tensor query predicates remain typed and parameterized; raw expression-string
+  execution is not part of the primary client API.
+- Implementation sequencing remains planner/taxonomy contract first, then
+  client ergonomic expansion.
 
 ## Transaction handles
 

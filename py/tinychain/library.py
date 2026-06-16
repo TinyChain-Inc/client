@@ -68,6 +68,8 @@ def _runtime_type_hint(type_hint: object, default: type = Value) -> type:
             return type_hint
         if issubclass(type_hint, Value):
             return type_hint
+        if issubclass(type_hint, Scalar):
+            return type_hint
 
     return default
 
@@ -345,6 +347,71 @@ def delete(
     form: Optional[Callable[..., Any]] = None,
 ):
     return _decorate("DELETE", form)
+
+_AUTODIFF_GRAD_ROUTE = _uri("lib", "std", "autodiff", "0.1.0", "grad").path
+
+
+def _normalize_wrt(wrt: object) -> list[str]:
+    if wrt is None:
+        raise TypeError("tc.grad requires `wrt` names")
+
+    if isinstance(wrt, str):
+        names = [wrt]
+    elif isinstance(wrt, (list, tuple)):
+        names = list(wrt)
+    else:
+        raise TypeError("tc.grad `wrt` must be a string or sequence of strings")
+
+    if not names:
+        raise TypeError("tc.grad `wrt` must not be empty")
+
+    for name in names:
+        if not isinstance(name, str) or not name:
+            raise TypeError("tc.grad `wrt` entries must be non-empty strings")
+
+    return names
+
+
+def _grad_payload_target(target: object) -> tuple[str, object]:
+    if isinstance(target, OpDef):
+        return "op", target
+
+    if callable(target):
+        route = getattr(target, "__tc_route__", None)
+        route_instance = getattr(target, "__tc_instance__", None)
+        route_name = getattr(route, "name", None)
+        if isinstance(route_instance, Library) and isinstance(route_name, str):
+            return "route", _route_path(route_instance, route_name)
+
+        library_instance = getattr(target, "__self__", None)
+        route_form = getattr(target, "__func__", None)
+        if isinstance(library_instance, Library) and callable(route_form):
+            return "route", _route_path(library_instance, route_form.__name__)
+
+        raise TypeError("tc.grad is a call-site transform and cannot be used as a route decorator")
+
+    return "target", autobox(target)
+
+
+def grad(target: object, *, wrt: object = None) -> object:
+    """Reserved experimental stub for the runtime autodiff transform.
+
+    Constructs a deferred call to the ``std.autodiff.grad`` route. This stub
+    is intentionally shaped like JAX's call-site transform API.
+
+    **Non-functional until derivative IR generation is implemented.**
+    The ``std.autodiff.grad`` route raises ``autodiff_not_implemented`` when
+    executed. Do not use this in production until T-04 (client VJP engine) is
+    complete and the route is replaced with a real derivative IR transform.
+    """
+
+    payload_key, payload_value = _grad_payload_target(target)
+    payload = {
+        payload_key: payload_value,
+        "wrt": tuple(_normalize_wrt(wrt)),
+    }
+
+    return Scalar(ref=TCRef(PostOpRef(_AUTODIFF_GRAD_ROUTE, payload)))
 
 
 def _capture_source(form: Callable[..., Any]) -> str | None:
@@ -667,7 +734,7 @@ def _compile_opdef_route(
         for key, value in result.items():
             if not isinstance(key, str):
                 raise TypeError("opdef form keys must be strings")
-        form.append((key, autobox(value)))
+            form.append((key, autobox(value)))
         opdef = _opdef_from_method(route.method, arg_names, form)
         opdef = _inline_opref_refs(opdef)
         _validate_opdef(opdef, set(arg_names))
@@ -865,12 +932,11 @@ def install(
     if remote is not None:
         return _submit_remote_library_definition(remote, definition, token=token)
 
-    local = _local_backend()
-    kernel = _kernel_for_library_install(local, kernel=kernel, data_dir=data_dir)
+    kernel = _kernel_for_library_install(kernel=kernel, data_dir=data_dir)
     bearer_token = _bearer_token(token)
     if bearer_token is None:
         raise ValueError("expected `token` for library installs")
-    return _submit_local_library_definition(local, kernel, definition, bearer_token=bearer_token)
+    return _submit_local_library_definition(kernel, definition, bearer_token=bearer_token)
 
 
 def library_definition(library: Library | type[Library]) -> dict:
@@ -902,16 +968,7 @@ def _submit_remote_library_definition(
     return host.request("PUT", _uri("lib").path, body=definition)
 
 
-def _local_backend():
-    try:
-        import tinychain_local as local  # type: ignore
-    except ImportError as exc:  # pragma: no cover
-        raise ImportError("install requires the optional `tinychain-local` backend") from exc
-    return local
-
-
 def _kernel_for_library_install(
-    local: object,
     *,
     kernel: object | None,
     data_dir: pathlib.Path | None,
@@ -930,13 +987,17 @@ def _kernel_for_library_install(
             if isinstance(library, Library)
             else _library_class(library).class_id().path
         )
-        return local.KernelHandle.with_library_definition(
+        from . import _local
+
+        return _local.kernel_with_library_definition(
             json.dumps({library_id: {}}, separators=(",", ":")),
             token=token,
             data_dir=str(data_dir),
         )
 
-    return local.KernelHandle.local(data_dir=str(data_dir))
+    from . import _local
+
+    return _local.local_kernel(data_dir=str(data_dir))
 
 
 def _header_value(response: object, name: str) -> str | None:
@@ -951,13 +1012,13 @@ def _header_value(response: object, name: str) -> str | None:
     return None
 
 
-def _submit_local_library_definition(
-    local: object, kernel: object, definition: dict, *, bearer_token: str
-) -> object:
+def _submit_local_library_definition(kernel: object, definition: dict, *, bearer_token: str) -> object:
+    from . import _local
+
     install_path = _uri("lib").path
     body = json.dumps(definition, separators=(",", ":"))
     headers = [("authorization", f"Bearer {bearer_token}")]
-    request = local.KernelRequest("PUT", install_path, headers, local.StateHandle(body))
+    request = _local.kernel_request("PUT", install_path, headers, _local.state_handle(body))
     return kernel.dispatch(request)
 
 
@@ -996,13 +1057,11 @@ def _install_compiled_wasm_library(
     data_dir: Optional[pathlib.Path] = None,
     token: object | None = None,
 ) -> object:
-    local = _local_backend()
     bearer_token = _bearer_token(token)
     if bearer_token is None:
         raise ValueError("expected `token` for WASM installs")
 
     kernel = _kernel_for_library_install(
-        local,
         kernel=kernel,
         data_dir=data_dir,
         library=library,

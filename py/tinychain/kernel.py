@@ -137,23 +137,19 @@ def with_library(
     Routes are inferred from `library.dependencies` plus any authority-qualified runtime bindings
     on the library instance/class.
     """
-    import tinychain as tc
-
-    if not hasattr(tc, "KernelHandle"):
-        raise ImportError("`tc.kernel.with_library` requires the optional `tinychain-local` backend")
+    from . import _local
 
     routes = _dependency_routes_for_library(library)
 
     _token_parts(token)
 
-    with_definition = getattr(tc.KernelHandle, "with_library_definition", None)
-    if not callable(with_definition):
+    if not callable(getattr(_local.kernel_handle(), "with_library_definition", None)):
         raise RuntimeError(
             "tinychain-local backend does not support canonical library definitions; "
             "expected `KernelHandle.with_library_definition`"
         )
 
-    return with_definition(
+    return _local.kernel_with_library_definition(
         json.dumps({library.id().path: {}}, separators=(",", ":")),
         routes=routes,
         token=token,

@@ -7,6 +7,7 @@ from .uri import path
 
 _COLLECTION_TENSOR = path("state", "collection", "tensor")
 _DTYPE_F32 = path("state", "scalar", "value", "number", "float", "32")
+_DTYPE_F64 = path("state", "scalar", "value", "number", "float", "64")
 _DTYPE_U64 = path("state", "scalar", "value", "number", "uint", "64")
 
 
@@ -26,24 +27,30 @@ def _decode_tensor(payload: object) -> object:
     decoded_values = [decode_payload(value) for value in values] if isinstance(values, list) else values
 
     try:
-        import tinychain as tc
-    except ImportError:
-        tc = None
+        from . import _local
+        from .state.tensor import Tensor
 
-    if tc is not None and hasattr(tc, "LocalTensor"):
+        local = _local.backend()
+        native_tensor = getattr(local, "Tensor", None)
+    except ImportError:
+        native_tensor = None
+        Tensor = None  # type: ignore[assignment]
+
+    if native_tensor is not None and Tensor is not None:
         try:
             if dtype == _DTYPE_F32:
-                return tc.LocalTensor.dense_f32(shape, [float(value) for value in decoded_values])
+                return Tensor(native=native_tensor.dense_f32(shape, [float(value) for value in decoded_values]))
+            if dtype == _DTYPE_F64:
+                return Tensor(native=native_tensor.dense_f64(shape, [float(value) for value in decoded_values]))
             if dtype == _DTYPE_U64:
-                return tc.LocalTensor.dense_u64(shape, [int(value) for value in decoded_values])
-        except (TypeError, ValueError):
+                return Tensor(native=native_tensor.dense_u64(shape, [int(value) for value in decoded_values]))
+        except (AttributeError, TypeError, ValueError):
             pass
 
-    return {
-        "dtype": dtype,
-        "shape": shape,
-        "values": decoded_values,
-    }
+    if dtype in (_DTYPE_F32, _DTYPE_F64, _DTYPE_U64):
+        raise TypeError(f"cannot decode tensor dtype {dtype} into local Tensor backend")
+
+    raise TypeError(f"unsupported tensor dtype {dtype}")
 
 
 def _decode_collections(payload: object) -> object:

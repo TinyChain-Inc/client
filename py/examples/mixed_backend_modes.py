@@ -63,7 +63,9 @@ class A(tc.Library):
 
 def _require_local_backend() -> None:
     try:
-        _ = tc.KernelHandle.local
+        import tinychain._local as tc_local
+
+        _ = tc_local.kernel_handle().local
     except Exception as exc:  # pragma: no cover
         raise RuntimeError(
             "tinychain-local is required for local backend execution. "
