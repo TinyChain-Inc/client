@@ -42,9 +42,10 @@ class DualOperator(Operator):
 class Autodiff(tc.Library):
     """Runtime autodiff library stub.
 
-    This is a fill-in skeleton for runtime autodiff routes. The default
-    implementations are no-op placeholders so the manifest surface can be
-     installed and iterated independently of client-side compiler logic.
+    The `trace`, `grad`, and `vjp` methods are reserved stubs that will be
+    replaced by real derivative IR transform implementations in a future
+    release. Calling any of them raises `NotImplementedError` with the
+    category `autodiff_not_implemented` until that work is complete.
 
      Operator handling guidance:
      1. Use `Operator` subclasses in this module to encode transform-time rule
@@ -58,20 +59,23 @@ class Autodiff(tc.Library):
     publisher = "std"
     version = "0.1.0"
 
-    @tc.post
     def trace(self, op: tc.state.OpDef) -> tc.state.OpDef:
-        # Placeholder: return normalized forward graph once implemented.
-        return op
+        raise NotImplementedError(
+            "autodiff_not_implemented: trace requires derivative IR generation; "
+            "not yet implemented"
+        )
 
-    @tc.post
     def grad(self, target: tc.state.Scalar, wrt: tc.Tuple) -> tc.state.OpDef:
-        # Placeholder: return a gradient OpDef transform for `target` and `wrt`.
-        return tc.state.PostOpDef([("result", target)])
+        raise NotImplementedError(
+            "autodiff_not_implemented: grad requires derivative IR generation; "
+            "not yet implemented"
+        )
 
-    @tc.post
     def vjp(self, target: tc.state.Scalar, wrt: tc.Tuple, cotangent: tc.state.Scalar) -> tc.state.OpDef:
-        # Placeholder: return vector-Jacobian product OpDef once implemented.
-        return tc.state.PostOpDef([("result", cotangent)])
+        raise NotImplementedError(
+            "autodiff_not_implemented: vjp requires derivative IR generation; "
+            "not yet implemented"
+        )
 
 
 __all__ = [
