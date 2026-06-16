@@ -394,11 +394,15 @@ def _grad_payload_target(target: object) -> tuple[str, object]:
 
 
 def grad(target: object, *, wrt: object = None) -> object:
-    """Return the runtime autodiff transform for a route/ref/op.
+    """Reserved experimental stub for the runtime autodiff transform.
 
-    This is intentionally shaped like JAX's call-site transform API. It forwards
-    the transform request to the runtime library route and does not execute any
-    autodiff compiler logic in the Python client runtime.
+    Constructs a deferred call to the ``std.autodiff.grad`` route. This stub
+    is intentionally shaped like JAX's call-site transform API.
+
+    **Non-functional until derivative IR generation is implemented.**
+    The ``std.autodiff.grad`` route raises ``autodiff_not_implemented`` when
+    executed. Do not use this in production until T-04 (client VJP engine) is
+    complete and the route is replaced with a real derivative IR transform.
     """
 
     payload_key, payload_value = _grad_payload_target(target)
