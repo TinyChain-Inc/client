@@ -62,6 +62,45 @@ Guardrails:
 - Do not reintroduce `tc.Json`, `tc.define`, `tc.deferred`, `tc.wasm.install`,
   top-level `tc.testing`, or top-level IR compiler helpers.
 
+## Migration notes (v2 autodiff package)
+
+### Removed PyO3 top-level re-exports
+
+`Backend`, `KernelHandle`, `KernelRequest`, `KernelResponse`, `State`, `StateHandle`,
+and `LocalTensor` are no longer re-exported from the top-level `tinychain` namespace
+in source form. They are stubs that raise `ImportError` when `tinychain-local` is
+absent. Application code must not import or reference these names directly; use the
+public `tc.backend`, `tc.kernel`, and `tc.Host` APIs instead.
+
+### Changed `tc.Tensor` identity
+
+`tc.Tensor` is a pure symbolic wrapper that emits TinyChain IR op references. It no
+longer wraps a native tensor via PyO3 bindings directly. Materialized data is accessed
+via `Tensor(native=...)` (requires `tinychain-local`; see the README note on tensor
+response decoding). Symbolic `tc.Tensor` instances remain fully usable for deferred
+planning and route definitions without the local backend.
+
+### `tc.grad` reserved stub
+
+`tc.grad(target, wrt=...)` is a reserved stub for the JAX-like autodiff transform API.
+It does not return identity-like placeholder gradients; it raises
+`NotImplementedError("autodiff_not_implemented: ...")`. The real compiler pass will be
+implemented in the client autodiff package (T-04). Do not add autodiff-specific route
+decorators or `rule`/`wrt` metadata to route definitions in anticipation of this API.
+
+### Tensor graph extraction (Phase 1)
+
+`tinychain.autodiff.TensorGraphBuilder` is the Phase 1 authoring context for capturing
+`add`, `matmul`, and `transpose` operations as a typed `TensorGraph`. Use it as a
+context manager::
+
+    with tc.autodiff.TensorGraphBuilder() as builder:
+        z = x + y
+    graph = builder.build()
+
+Reduction methods (`sum`, `mean`, `product`, `norm`, `std`, `max`, `min`) return
+`Scalar` and are not supported for VJP planning in Phase 1.
+
 ## Maintenance backlog
 
 - Keep `tinychain._autograph` internal until the transformer is validated as a
