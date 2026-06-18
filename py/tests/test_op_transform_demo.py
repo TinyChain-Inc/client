@@ -78,6 +78,20 @@ def test_op_transform_autodiff_demo(tmp_path: pathlib.Path) -> None:
 
     a = A()
     c = C()
+    double_op = tc.state.PostOpDef([
+        ("result", 14),
+    ])
+    triple_chain_op = tc.state.PostOpDef([
+        ("a", 7),
+        ("b", 14),
+        ("result", 21),
+    ])
+    fanout_quad_op = tc.state.PostOpDef([
+        ("x", 7),
+        ("x2", 14),
+        ("x4", 28),
+        ("result", 28),
+    ])
 
     token = install_token(A.class_id().path, C.class_id().path)
     kernel = tc.kernel.with_library(
@@ -96,21 +110,21 @@ def test_op_transform_autodiff_demo(tmp_path: pathlib.Path) -> None:
         assert resp.status == 204
 
     with tc.backend(kernel):
-        double_nodes = tc_testing.run_with_timeout(20, lambda: c.reflected_form_size(a.double))
-        fanout_nodes = tc_testing.run_with_timeout(20, lambda: c.reflected_form_size(a.fanout_quad))
+        double_nodes = tc_testing.run_with_timeout(20, lambda: c.reflected_form_size(double_op))
+        fanout_nodes = tc_testing.run_with_timeout(20, lambda: c.reflected_form_size(fanout_quad_op))
         assert fanout_nodes > double_nodes
 
         primal = tc_testing.run_with_timeout(20, lambda: a.double(7))
         assert primal == 14
 
-        grad = tc_testing.run_with_timeout(20, lambda: c.autodiff_linear_demo(a.double, 7))
+        grad = tc_testing.run_with_timeout(20, lambda: c.autodiff_linear_demo(double_op, 7))
         assert grad == 2
 
         chain_primal = tc_testing.run_with_timeout(20, lambda: a.triple_chain(7))
         assert chain_primal == 21
 
-        chain_grad = tc_testing.run_with_timeout(20, lambda: c.autodiff_chain_demo(a.triple_chain, 7))
+        chain_grad = tc_testing.run_with_timeout(20, lambda: c.autodiff_chain_demo(triple_chain_op, 7))
         assert chain_grad == 3
 
-        fanout_grad = tc_testing.run_with_timeout(20, lambda: c.autodiff_fanout_demo(a.fanout_quad, 7))
+        fanout_grad = tc_testing.run_with_timeout(20, lambda: c.autodiff_fanout_demo(fanout_quad_op, 7))
         assert fanout_grad == 28

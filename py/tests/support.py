@@ -16,6 +16,36 @@ def require_cargo() -> None:
         pytest.skip("`cargo` not found")
 
 
+def require_tinychain_local(*, require_library_definition: bool = False):
+    try:
+        import tinychain._local as tc_local
+    except ImportError as err:
+        pytest.fail(f"tinychain-local is required for this test: {err}")
+
+    try:
+        handle = tc_local.kernel_handle()
+        _ = handle.local
+    except (AttributeError, RuntimeError, TypeError) as err:
+        pytest.fail(f"tinychain-local kernel runtime is unavailable: {err}")
+
+    if require_library_definition and not hasattr(handle, "with_library_definition"):
+        pytest.fail("tinychain-local does not support canonical library definitions")
+
+    return tc_local, handle
+
+
+def require_local_tensor_backend() -> tuple[object, object]:
+    _, _ = require_tinychain_local()
+
+    try:
+        dense_u64 = tc.LocalTensor.dense_u64
+        dense_f64 = tc.LocalTensor.dense_f64
+    except Exception as err:
+        pytest.fail(f"tinychain-local tensor backend is required for this test: {err}")
+
+    return dense_u64, dense_f64
+
+
 def wasm_example_artifact(example_name: str) -> pathlib.Path:
     return (
         REPO_ROOT

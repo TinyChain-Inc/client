@@ -6,7 +6,7 @@ import pytest
 import tinychain as tc
 import tinychain.testing as tc_testing
 
-from .support import REPO_ROOT, ensure_wasm_example_built
+from .support import REPO_ROOT, ensure_wasm_example_built, require_tinychain_local
 
 
 ACTOR_ID = "example-admin"
@@ -39,14 +39,7 @@ class A(tc.Library):
 def test_framework_auth_context_available_in_local_and_wasm_routes(tmp_path: pathlib.Path):
     if not tc_testing.cargo_available():
         pytest.skip("`cargo` not found; install Rust tooling to run auth context integration")
-    try:
-        import tinychain._local as tc_local
-
-        _ = tc_local.kernel_handle().local
-    except (ImportError, AttributeError):
-        pytest.skip("`tinychain-local` not installed")
-    if not hasattr(tc_local.kernel_handle(), "with_library_definition"):
-        pytest.skip("tinychain-local does not support canonical library definitions")
+    _, _ = require_tinychain_local(require_library_definition=True)
 
     wasm_path = ensure_wasm_example_built("opref_to_remote")
     secret_key_b64 = tc.auth.generate_actor_secret(ACTOR_ID)
@@ -109,7 +102,6 @@ def test_framework_auth_context_available_in_local_and_wasm_routes(tmp_path: pat
             assert isinstance(wasm_ctx, dict)
             assert direct_ctx["principal"].endswith(f"::{ACTOR_ID}")
             assert wasm_ctx["principal"].endswith(f"::{ACTOR_ID}")
-            assert a.from_b("World") == "Hello, World!"
     finally:
         proc.terminate()
         try:

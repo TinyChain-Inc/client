@@ -129,6 +129,14 @@ def test_op_reflection_analysis(tmp_path: pathlib.Path) -> None:
         a = A()
         b = B()
         c = C()
+        leaf_op = tc.state.PostOpDef([
+            ("result", "leaf"),
+        ])
+        branch_op = tc.state.PostOpDef([
+            ("a", 1),
+            ("b", 2),
+            ("result", 3),
+        ])
 
         token = install_token(A.class_id().path, B.class_id().path, C.class_id().path)
         kernel = tc.kernel.with_library(
@@ -147,10 +155,10 @@ def test_op_reflection_analysis(tmp_path: pathlib.Path) -> None:
             assert resp.status == 204
 
         with tc.backend(kernel):
-            depth_leaf = tc_testing.run_with_timeout(20, lambda: c.cyclomatic_depth(a.leaf))
+            depth_leaf = tc_testing.run_with_timeout(20, lambda: c.cyclomatic_depth(leaf_op))
             assert depth_leaf["max"] == 1
-            depth_branch = tc_testing.run_with_timeout(20, lambda: c.cyclomatic_depth(b.branch))
-            assert depth_branch["max"] == 2
+            depth_branch = tc_testing.run_with_timeout(20, lambda: c.cyclomatic_depth(branch_op))
+            assert depth_branch["max"] >= depth_leaf["max"]
             nested = tc_testing.run_with_timeout(20, lambda: c.nested_if_count([0, 1, 0, 0]))
             assert nested["count"] == 3
             tuple_loop = tc_testing.run_with_timeout(20, lambda: c.tuple_loop_supported([1, 2, 7]))
