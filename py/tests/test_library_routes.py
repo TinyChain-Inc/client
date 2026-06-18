@@ -177,6 +177,30 @@ def test_grad_cannot_be_used_as_route_metadata_decorator():
     assert "/state/scalar/op/post" in route
 
 
+def test_grad_tensor_target_includes_fensor_view_wire_when_available():
+    class NativeTensor:
+        def __init__(self, shape):
+            self.shape = shape
+            self.dtype = "f32"
+            self.values = []
+
+        def transpose(self, permutation):
+            return NativeTensor([self.shape[i] for i in permutation])
+
+    target = tc.Tensor(native=NativeTensor([2, 3])).transpose([1, 0])
+    grad_ref = tc.grad(target, wrt=("x",))
+
+    grad_form = tc.state.form_of(grad_ref)
+    assert isinstance(grad_form, tc.state.TCRef)
+    opref = tc.state.tcref_form_of(grad_form)
+    assert isinstance(opref, tc.state.PostOpRef)
+
+    assert "target_fensor_view" in opref.args
+    schema = tc.state.FensorViewSchema.from_wire(opref.args["target_fensor_view"])
+    assert schema.base_rank == 2
+    assert [axis.base_axis for axis in schema.axes] == [1, 0]
+
+
 def test_library_routes_use_decorator_time_source_capture(monkeypatch):
     class A(tc.Library):
         publisher = "example-devco"

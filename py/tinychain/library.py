@@ -393,6 +393,17 @@ def _grad_payload_target(target: object) -> tuple[str, object]:
     return "target", autobox(target)
 
 
+def _try_grad_target_fensor_view_wire(target: object) -> object | None:
+    to_wire = getattr(target, "to_fensor_view_wire", None)
+    if not callable(to_wire):
+        return None
+
+    try:
+        return to_wire()
+    except (TypeError, ValueError, NotImplementedError):
+        return None
+
+
 def grad(target: object, *, wrt: object = None) -> object:
     """Reserved experimental stub for the runtime autodiff transform.
 
@@ -410,6 +421,10 @@ def grad(target: object, *, wrt: object = None) -> object:
         payload_key: payload_value,
         "wrt": tuple(_normalize_wrt(wrt)),
     }
+
+    target_fensor_view = _try_grad_target_fensor_view_wire(target)
+    if target_fensor_view is not None:
+        payload["target_fensor_view"] = target_fensor_view
 
     return Scalar(ref=TCRef(PostOpRef(_AUTODIFF_GRAD_ROUTE, payload)))
 
