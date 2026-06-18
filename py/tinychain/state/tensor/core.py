@@ -16,9 +16,10 @@ from ..scalar import (
     tcref_form_of,
 )
 from ._common import infer_broadcast_axes, normalize_permutation, normalize_shape, params, reduce_args
-from .backend import FensorWireTensorBackend, TensorBackend
+from ._wire import encode_view_schema
+from .backend import TensorBackend, TensorWireTensorBackend
 from .routes import TENSOR_CLASS_URI, tensor_route
-from .schema import FensorLayoutSchema, FensorTensorSchema, FensorViewSchema
+from .schema import TensorStorageLayout, TensorStorageSchema, TensorViewSchema
 from .view_ops import BroadcastViewOp, ReshapeViewOp, SliceViewOp, TensorViewOp, TransposeViewOp
 from .view_spec import TensorViewSpec
 
@@ -88,26 +89,23 @@ class Tensor(Comparable):
     def view_spec(self) -> TensorViewSpec:
         return TensorViewSpec(ops=self._view_ops)
 
-    def to_fensor_view_schema(self, *, base_shape: object | None = None) -> FensorViewSchema:
+    def to_view_schema(self, *, base_shape: object | None = None) -> TensorViewSchema:
         if base_shape is None:
             inferred = self._native_attr("shape")
             if inferred is None:
                 raise TypeError("base_shape is required for symbolic tensors")
             base_shape = inferred
 
-        return self.view_spec().to_fensor_view_schema(base_shape=base_shape)
+        return self.view_spec().to_view_schema(base_shape=base_shape)
 
-    def to_fensor_view_wire(self, *, base_shape: object | None = None) -> tuple[int, list[tuple[int, tuple[int, list[int]]]], list[int | None]]:
-        return self.to_fensor_view_schema(base_shape=base_shape).to_wire()
-
-    def to_fensor_tensor_schema(
+    def to_storage_schema(
         self,
         *,
         base_shape: object | None = None,
         dtype: str = "f32",
         layout: Literal["dense", "sparse"] = "dense",
         sparse_axis: int | None = None,
-    ) -> FensorTensorSchema:
+    ) -> TensorStorageSchema:
         if base_shape is None:
             inferred = self._native_attr("shape")
             if inferred is None:
@@ -120,23 +118,9 @@ class Tensor(Comparable):
         if not normalized:
             raise ValueError("base_shape must not be empty")
 
-        layout_schema = FensorLayoutSchema(kind=layout, sparse_axis=sparse_axis)
-        return FensorTensorSchema(dtype=dtype, shape=normalized, layout=layout_schema)
+        layout_schema = TensorStorageLayout(kind=layout, sparse_axis=sparse_axis)
+        return TensorStorageSchema(dtype=dtype, shape=normalized, layout=layout_schema)
 
-    def to_fensor_tensor_wire(
-        self,
-        *,
-        base_shape: object | None = None,
-        dtype: str = "f32",
-        layout: Literal["dense", "sparse"] = "dense",
-        sparse_axis: int | None = None,
-    ) -> tuple[str, list[int], tuple[int, int | None]]:
-        return self.to_fensor_tensor_schema(
-            base_shape=base_shape,
-            dtype=dtype,
-            layout=layout,
-            sparse_axis=sparse_axis,
-        ).to_wire()
 
     def _transform_get(self, method: str, arg: object) -> "Tensor":
         if self._subject_root is None:
@@ -306,12 +290,12 @@ class Tensor(Comparable):
         if not spec.ops:
             return self
 
-        if isinstance(self._native, FensorWireTensorBackend):
+        if isinstance(self._native, TensorWireTensorBackend):
             try:
                 base_shape = self._native_attr("shape")
                 if base_shape is not None:
-                    wire = spec.to_fensor_view_wire(base_shape=base_shape)
-                    native = self._native.apply_fensor_view_wire(wire)
+                    wire = encode_view_schema(spec.to_view_schema(base_shape=base_shape))
+                    native = self._native.apply_view_wire(wire)
                     return Tensor(
                         native=native,
                         view_ops=self._view_ops,

@@ -1,26 +1,22 @@
-from .backend import FensorWireTensorBackend, TensorBackend
+from .backend import TensorBackend, TensorWireTensorBackend
 from .core import Tensor
 from .ops import concatenate, einsum, split, tile
 from .schema import (
-    FensorLayoutSchema,
-    FensorTensorSchema,
-    FensorViewAxis,
-    FensorViewAxisMap,
-    FensorViewSchema,
+    TensorViewAxis,
+    TensorViewAxisMap,
+    TensorViewSchema,
 )
 from .view_ops import BroadcastViewOp, ReshapeViewOp, SliceViewOp, TensorViewOp, TransposeViewOp
 from .view_spec import TensorViewSpec
 
 __all__ = [
     "Tensor",
-    "FensorLayoutSchema",
-    "FensorTensorSchema",
-    "FensorViewAxisMap",
-    "FensorViewAxis",
-    "FensorViewSchema",
+    "TensorViewAxisMap",
+    "TensorViewAxis",
+    "TensorViewSchema",
     "TensorViewSpec",
     "TensorBackend",
-    "FensorWireTensorBackend",
+    "TensorWireTensorBackend",
     "TensorViewOp",
     "TransposeViewOp",
     "BroadcastViewOp",

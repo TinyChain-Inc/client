@@ -14,6 +14,7 @@ from .opref import OpRef
 from .ref import Ref
 from . import _autograph
 from .state import ContextResult, DeleteOpDef, DeleteOpRef, GetOpDef, GetOpRef, IdRef, OpDef, OpRef as StateOpRef, PostOpDef, PostOpRef, PutOpDef, PutOpRef, Scalar, TCRef, autobox, context, current_context, form_of, map_of as scalar_map_of, scalar_for_hint, scoped_context, tcref_form_of, tuple_of as scalar_tuple_of
+from .state.tensor._wire import encode_view_schema
 from .state.value import Bool, Map, Number, String, Tuple, Value
 from .uri import URI, _class_resource_name, _segment, uri as _uri
 
@@ -393,13 +394,13 @@ def _grad_payload_target(target: object) -> tuple[str, object]:
     return "target", autobox(target)
 
 
-def _try_grad_target_fensor_view_wire(target: object) -> object | None:
-    to_wire = getattr(target, "to_fensor_view_wire", None)
-    if not callable(to_wire):
+def _try_grad_target_view_wire(target: object) -> object | None:
+    to_schema = getattr(target, "to_view_schema", None)
+    if not callable(to_schema):
         return None
 
     try:
-        return to_wire()
+        return encode_view_schema(to_schema())
     except (TypeError, ValueError, NotImplementedError):
         return None
 
@@ -422,9 +423,9 @@ def grad(target: object, *, wrt: object = None) -> object:
         "wrt": tuple(_normalize_wrt(wrt)),
     }
 
-    target_fensor_view = _try_grad_target_fensor_view_wire(target)
-    if target_fensor_view is not None:
-        payload["target_fensor_view"] = target_fensor_view
+    target_view = _try_grad_target_view_wire(target)
+    if target_view is not None:
+        payload["target_view"] = target_view
 
     return Scalar(ref=TCRef(PostOpRef(_AUTODIFF_GRAD_ROUTE, payload)))
 

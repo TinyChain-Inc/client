@@ -177,7 +177,7 @@ def test_grad_cannot_be_used_as_route_metadata_decorator():
     assert "/state/scalar/op/post" in route
 
 
-def test_grad_tensor_target_includes_fensor_view_wire_when_available():
+def test_grad_tensor_target_includes_view_wire_when_available():
     class NativeTensor:
         def __init__(self, shape):
             self.shape = shape
@@ -195,10 +195,15 @@ def test_grad_tensor_target_includes_fensor_view_wire_when_available():
     opref = tc.state.tcref_form_of(grad_form)
     assert isinstance(opref, tc.state.PostOpRef)
 
-    assert "target_fensor_view" in opref.args
-    schema = tc.state.FensorViewSchema.from_wire(opref.args["target_fensor_view"])
-    assert schema.base_rank == 2
-    assert [axis.base_axis for axis in schema.axes] == [1, 0]
+    assert "target_view" in opref.args
+    wire = opref.args["target_view"]
+    assert isinstance(wire, (tuple, list)) and len(wire) == 3
+
+    base_rank, axes, base_fixed = wire
+    assert base_rank == 2
+    assert isinstance(axes, (tuple, list))
+    assert [axis[0] for axis in axes] == [1, 0]
+    assert list(base_fixed) == [None, None]
 
 
 def test_library_routes_use_decorator_time_source_capture(monkeypatch):
