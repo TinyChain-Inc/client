@@ -70,6 +70,11 @@ def test_tensor_wrapper_uses_canonical_ref_builders():
     assert ".path" not in source
 
 
+def test_tensor_internal_route_helpers_are_not_public_api():
+    assert not hasattr(tensor_module, "tensor_route")
+    assert not hasattr(tensor_module, "TENSOR_CLASS_URI")
+
+
 def test_tensor_reverse_add_and_mul_use_tensor_subject():
     x = tc.state.Tensor(ref=tc.state.TCRef(tc.state.IdRef("x")))
 
