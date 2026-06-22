@@ -117,6 +117,10 @@ staying thin and well-documented for new users.
   route method calls inside `tc.backend(...)` contexts are the default,
   while `tc.execute`, `tc.Host.execute`, and `tc.Host.request` remain
   advanced/low-level APIs.
+- Keep public tensor/client APIs backend-neutral: never expose storage-engine-
+  specific names (e.g., `fensor`, `ha-ndarray`, filesystem labels) in exported
+  types, method names, or payload keys. Backend wire details may exist internally
+  but must stay behind neutral interfaces.
 
 ## Gap triage guardrails
 

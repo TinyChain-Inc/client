@@ -3,17 +3,15 @@ import json
 import pytest
 
 import tinychain as tc
-import tinychain._local as tc_local
 import tinychain.testing as tc_testing
+
+from .support import require_tinychain_local
 
 
 def test_pyo3_kernel_resolves_opref_over_http_gateway(tmp_path):
     if not tc_testing.cargo_available():
         pytest.skip("`cargo` not found; install Rust tooling to run this test")
-    try:
-        _ = tc_local.kernel_handle().with_library_definition
-    except (ImportError, AttributeError):
-        pytest.skip("`tinychain-local` not installed; skipping PyO3 kernel gateway test")
+    tc_local, _ = require_tinychain_local(require_library_definition=True)
 
     proc, addr = tc_testing.start_rust_example(
         "http_rpc_native_host",
@@ -22,7 +20,7 @@ def test_pyo3_kernel_resolves_opref_over_http_gateway(tmp_path):
     )
     try:
         b_root = tc.uri("lib", "example-devco", "example", "0.1.0").path
-        b_hello = tc.uri("lib", "example-devco", "example", "0.1.0", "hello").path
+        b_hello = tc.uri("lib", "example-devco", "example", "0.1.0", "example-devco", "example", "0.1.0", "hello").path
 
         class Local(tc.Library):
             publisher = "example-devco"
