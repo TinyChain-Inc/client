@@ -51,7 +51,7 @@ def rhs():
     (OP_MATMUL, "matmul"),
     (OP_TRANSPOSE, "transpose"),
 ])
-def test_op_constant_matches_tc_ir(constant, expected):
+def test_op_constant_value(constant, expected):
     assert constant == expected
 
 

@@ -32,7 +32,7 @@ class TensorNodeRecord:
 
 @dataclass(frozen=True)
 class TensorGraph:
-    """Python-native mirror of tc-ir TensorGraph; Phase 1 authoring/transform representation."""
+    """Python-owned derivative program representation for Phase 1 autodiff graph construction."""
 
     nodes: list[TensorNodeRecord]
     inputs: list[tuple[str, Optional[dict]]]
