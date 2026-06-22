@@ -18,7 +18,7 @@ def get_active_builder() -> Optional[TensorGraphBuilder]:
     return _active_builder.get()
 
 
-@dataclass
+@dataclass(frozen=True)
 class TensorNodeRecord:
     """Single recorded computation step captured by TensorGraphBuilder."""
 
@@ -30,7 +30,7 @@ class TensorNodeRecord:
     output_typespec: Optional[dict] = None
 
 
-@dataclass
+@dataclass(frozen=True)
 class TensorGraph:
     """Python-native mirror of tc-ir TensorGraph; Phase 1 authoring/transform representation."""
 
