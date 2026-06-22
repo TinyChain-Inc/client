@@ -16,13 +16,13 @@ class TensorBackend(Protocol):
 
 
 @runtime_checkable
-class FensorWireTensorBackend(Protocol):
-    """Optional backend hook for canonical fensor wire view transforms."""
+class TensorWireTensorBackend(Protocol):
+    """Optional backend hook for canonical tensor wire view transforms."""
 
-    def apply_fensor_view_wire(
+    def apply_view_wire(
         self,
         wire: tuple[int, list[tuple[int, tuple[int, list[int]]]], list[int | None]],
     ) -> object: ...
 
 
-__all__ = ["TensorBackend", "FensorWireTensorBackend"]
+__all__ = ["TensorBackend", "TensorWireTensorBackend"]

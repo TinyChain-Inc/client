@@ -196,7 +196,7 @@ def test_tensor_materialize_view_spec_uses_backend_adapter_if_supported():
     assert z.native.shape == [3, 2]
 
 
-def test_tensor_materialize_view_spec_prefers_fensor_wire_backend_hook():
+def test_tensor_materialize_view_spec_prefers_wire_backend_hook():
     class Adapter:
         def __init__(self, shape):
             self.shape = shape
@@ -208,7 +208,7 @@ def test_tensor_materialize_view_spec_prefers_fensor_wire_backend_hook():
         def apply_view_spec(self, spec):
             raise AssertionError("legacy view_spec path should not be used")
 
-        def apply_fensor_view_wire(self, wire):
+        def apply_view_wire(self, wire):
             self.wire = wire
             return Adapter([6])
 
@@ -221,11 +221,11 @@ def test_tensor_materialize_view_spec_prefers_fensor_wire_backend_hook():
     assert z.native.shape == [6]
 
 
-def test_view_spec_compiles_transpose_and_broadcast_to_fensor_schema():
+def test_view_spec_compiles_transpose_and_broadcast_to_view_schema():
     x = tc.state.Tensor(ref=tc.state.TCRef(tc.state.IdRef("x")))
     spec = x.transpose([1, 0]).broadcast([3, 2]).view_spec()
 
-    schema = spec.to_fensor_view_schema(base_shape=[1, 3])
+    schema = spec.to_view_schema(base_shape=[1, 3])
     schema_json = schema.to_json()
 
     assert schema.base_rank == 2
@@ -235,18 +235,14 @@ def test_view_spec_compiles_transpose_and_broadcast_to_fensor_schema():
         {"base_axis": 0, "map": {"affine": {"start": 0, "step": 0}}},
     ]
 
-    wire = schema.to_wire()
-    assert tc.state.FensorViewSchema.from_wire(wire) == schema
-
-
-def test_tensor_to_fensor_view_schema_requires_base_shape_for_symbolic_tensors():
+def test_tensor_to_view_schema_requires_base_shape_for_symbolic_tensors():
     x = tc.state.Tensor(ref=tc.state.TCRef(tc.state.IdRef("x"))).transpose([1, 0])
 
     with pytest.raises(TypeError, match="base_shape"):
-        x.to_fensor_view_schema()
+        x.to_view_schema()
 
 
-def test_tensor_to_fensor_view_schema_uses_native_shape_when_available():
+def test_tensor_to_view_schema_uses_native_shape_when_available():
     class NativeTensor:
         def __init__(self, shape):
             self.shape = shape
@@ -255,7 +251,7 @@ def test_tensor_to_fensor_view_schema_uses_native_shape_when_available():
             return NativeTensor([self.shape[i] for i in permutation])
 
     x = tc.state.Tensor(native=NativeTensor([2, 3])).transpose([1, 0])
-    schema = x.to_fensor_view_schema()
+    schema = x.to_view_schema()
     schema_json = schema.to_json()
 
     assert schema.base_rank == 2
@@ -265,11 +261,11 @@ def test_tensor_to_fensor_view_schema_uses_native_shape_when_available():
     ]
 
 
-def test_view_spec_compiles_slice_at_and_in_to_fensor_schema():
+def test_view_spec_compiles_slice_at_and_in_to_view_schema():
     x = tc.state.Tensor(ref=tc.state.TCRef(tc.state.IdRef("x")))
     spec = x.slice([1, (0, 4, 2)]).view_spec()
 
-    schema = spec.to_fensor_view_schema(base_shape=[3, 4])
+    schema = spec.to_view_schema(base_shape=[3, 4])
     schema_json = schema.to_json()
 
     assert schema.base_rank == 2
@@ -284,39 +280,15 @@ def test_view_spec_slice_rank_mismatch_raises():
     spec = x.slice([0]).view_spec()
 
     with pytest.raises(ValueError, match="rank"):
-        spec.to_fensor_view_schema(base_shape=[2, 3])
+        spec.to_view_schema(base_shape=[2, 3])
 
 
-def test_tensor_fensor_tensor_schema_wire_roundtrip():
+def test_tensor_storage_schema_compiles_concrete_shape_and_layout():
     x = tc.state.Tensor(ref=tc.state.TCRef(tc.state.IdRef("x")))
 
-    schema = x.to_fensor_tensor_schema(base_shape=[2, 3], layout="sparse", sparse_axis=1)
-    wire = schema.to_wire()
+    schema = x.to_storage_schema(base_shape=[2, 3], layout="sparse", sparse_axis=1)
 
-    assert wire == ("f32", [2, 3], (1, 1))
-    assert tc.state.FensorTensorSchema.from_wire(wire) == schema
-
-
-def test_fensor_layout_schema_dense_and_sparse_wire_roundtrip():
-    dense = tc.state.FensorLayoutSchema(kind="dense")
-    sparse = tc.state.FensorLayoutSchema(kind="sparse", sparse_axis=2)
-
-    assert dense.to_wire() == (0, None)
-    assert sparse.to_wire() == (1, 2)
-    assert tc.state.FensorLayoutSchema.from_wire((0, None)) == dense
-    assert tc.state.FensorLayoutSchema.from_wire((1, 2)) == sparse
-
-
-def test_fensor_view_schema_wire_contract_shape():
-    x = tc.state.Tensor(ref=tc.state.TCRef(tc.state.IdRef("x")))
-    wire = x.transpose([1, 0]).broadcast([3, 2]).to_fensor_view_wire(base_shape=[1, 3])
-
-    assert wire == (
-        2,
-        [
-            (1, (0, [])),
-            (0, (1, [0, 0])),
-        ],
-        [None, None],
-    )
-    assert tc.state.FensorViewSchema.from_wire(wire).to_wire() == wire
+    assert schema.dtype == "f32"
+    assert schema.shape == (2, 3)
+    assert schema.layout.kind == "sparse"
+    assert schema.layout.sparse_axis == 1

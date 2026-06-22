@@ -4,7 +4,7 @@ from collections.abc import Iterable as IterableABC
 from dataclasses import dataclass
 
 from ._common import normalize_shape
-from .schema import FensorViewAxis, FensorViewAxisMap, FensorViewSchema
+from .schema import TensorViewAxis, TensorViewAxisMap, TensorViewSchema
 from .view_ops import BroadcastViewOp, ReshapeViewOp, SliceViewOp, TensorViewOp, TransposeViewOp
 
 
@@ -18,8 +18,8 @@ class TensorViewSpec:
 
     ops: tuple[TensorViewOp, ...]
 
-    def to_fensor_view_schema(self, *, base_shape: object) -> FensorViewSchema:
-        """Compile this view plan to a fensor-compatible view schema payload.
+    def to_view_schema(self, *, base_shape: object) -> TensorViewSchema:
+        """Compile this view plan to a canonical tensor view schema payload.
 
         This intentionally supports the minimal, high-value subset needed for
         current Autodiff planning: `transpose` and rank-preserving `broadcast`.
@@ -91,15 +91,11 @@ class TensorViewSpec:
 
             raise TypeError(f"unsupported view op type {type(op).__name__}")
 
-        return FensorViewSchema(
+        return TensorViewSchema(
             base_rank=base_rank,
             axes=tuple(axis.to_schema() for axis in axes),
             base_fixed=tuple(base_fixed),
         )
-
-    def to_fensor_view_wire(self, *, base_shape: object) -> tuple[int, list[tuple[int, tuple[int, list[int]]]], list[int | None]]:
-        return self.to_fensor_view_schema(base_shape=base_shape).to_wire()
-
 
 @dataclass(frozen=True, slots=True)
 class _AxisMapState:
@@ -157,15 +153,15 @@ class _AxisMapState:
 
         raise TypeError(f"unsupported axis map kind {self.kind}")
 
-    def to_schema(self) -> FensorViewAxisMap:
+    def to_schema(self) -> TensorViewAxisMap:
         if self.kind == "identity":
-            return FensorViewAxisMap(kind="identity")
+            return TensorViewAxisMap(kind="identity")
 
         if self.kind == "affine":
-            return FensorViewAxisMap(kind="affine", start=self.start, step=self.step)
+            return TensorViewAxisMap(kind="affine", start=self.start, step=self.step)
 
         if self.kind == "gather":
-            return FensorViewAxisMap(kind="gather", gather=self.gather)
+            return TensorViewAxisMap(kind="gather", gather=self.gather)
 
         raise TypeError(f"unsupported axis map kind {self.kind}")
 
@@ -178,8 +174,8 @@ class _ViewAxisState:
     def broadcasted(self) -> "_ViewAxisState":
         return _ViewAxisState(base_axis=self.base_axis, map=self.map.broadcasted())
 
-    def to_schema(self) -> FensorViewAxis:
-        return FensorViewAxis(base_axis=self.base_axis, map=self.map.to_schema())
+    def to_schema(self) -> TensorViewAxis:
+        return TensorViewAxis(base_axis=self.base_axis, map=self.map.to_schema())
 
 
 def _normalize_slice_axis_bound(bound: object, axis_dim: int) -> tuple[str, int, int, int]:
