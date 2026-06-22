@@ -4,6 +4,7 @@ import inspect
 
 import pytest
 import tinychain as tc
+from tinychain.autodiff import AutodiffError
 from tinychain.library import compile_ir, library_definition
 
 
@@ -142,14 +143,10 @@ def test_grad_is_call_site_transform_stub_not_route_decorator():
     routes = {route["path"]: route for route in compile_ir(A)["routes"]}
 
     assert "grad" not in routes["/identity"]
-    grad_ref = tc.grad(A().identity, wrt=("x",))
-    grad_form = tc.state.form_of(grad_ref)
-    assert isinstance(grad_form, tc.state.TCRef)
-    opref = tc.state.tcref_form_of(grad_form)
-    assert isinstance(opref, tc.state.PostOpRef)
-    assert opref.subject == tc.uri("lib", "std", "autodiff", "0.1.0", "grad").path
-    assert opref.args["route"].endswith("/identity")
-    assert opref.args["wrt"] == ["x"]
+    with pytest.raises(AutodiffError) as exc:
+        tc.grad(A().identity, wrt=("x",))
+
+    assert exc.value.category == "autodiff_not_implemented"
 
 
 def test_grad_cannot_be_used_as_route_metadata_decorator():
@@ -177,7 +174,7 @@ def test_grad_cannot_be_used_as_route_metadata_decorator():
     assert "/state/scalar/op/post" in route
 
 
-def test_grad_tensor_target_includes_view_wire_when_available():
+def test_grad_tensor_target_fails_until_route_tracing_is_implemented():
     class NativeTensor:
         def __init__(self, shape):
             self.shape = shape
@@ -188,22 +185,11 @@ def test_grad_tensor_target_includes_view_wire_when_available():
             return NativeTensor([self.shape[i] for i in permutation])
 
     target = tc.Tensor(native=NativeTensor([2, 3])).transpose([1, 0])
-    grad_ref = tc.grad(target, wrt=("x",))
 
-    grad_form = tc.state.form_of(grad_ref)
-    assert isinstance(grad_form, tc.state.TCRef)
-    opref = tc.state.tcref_form_of(grad_form)
-    assert isinstance(opref, tc.state.PostOpRef)
+    with pytest.raises(AutodiffError) as exc:
+        tc.grad(target, wrt=("x",))
 
-    assert "target_view" in opref.args
-    wire = opref.args["target_view"]
-    assert isinstance(wire, (tuple, list)) and len(wire) == 3
-
-    base_rank, axes, base_fixed = wire
-    assert base_rank == 2
-    assert isinstance(axes, (tuple, list))
-    assert [axis[0] for axis in axes] == [1, 0]
-    assert list(base_fixed) == [None, None]
+    assert exc.value.category == "autodiff_not_implemented"
 
 
 def test_library_routes_use_decorator_time_source_capture(monkeypatch):
