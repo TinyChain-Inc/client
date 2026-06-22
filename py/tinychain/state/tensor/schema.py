@@ -16,6 +16,13 @@ class TensorStorageSchema:
     shape: tuple[int, ...]
     layout: TensorStorageLayout
 
+    def __post_init__(self) -> None:
+        if not self.shape:
+            raise ValueError("shape must not be empty")
+
+        if any(dim <= 0 for dim in self.shape):
+            raise ValueError("shape dimensions must be positive")
+
 
 @dataclass(frozen=True, slots=True)
 class TensorViewAxisMap:

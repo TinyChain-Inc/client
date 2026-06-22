@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 import tinychain as tc
 from tinychain.state.tensor._wire import (
     decode_storage_layout,
@@ -9,7 +10,7 @@ from tinychain.state.tensor._wire import (
     encode_storage_schema,
     encode_view_schema,
 )
-from tinychain.state.tensor.schema import TensorStorageLayout
+from tinychain.state.tensor.schema import TensorStorageLayout, TensorStorageSchema
 
 
 def test_storage_schema_wire_roundtrip():
@@ -30,6 +31,24 @@ def test_storage_layout_wire_roundtrip():
     assert encode_storage_layout(sparse) == (1, 2)
     assert decode_storage_layout((0, None)) == dense
     assert decode_storage_layout((1, 2)) == sparse
+
+
+def test_storage_schema_rejects_empty_shape():
+    with pytest.raises(ValueError, match="shape must not be empty"):
+        TensorStorageSchema(
+            dtype="f32",
+            shape=(),
+            layout=TensorStorageLayout(kind="dense"),
+        )
+
+
+def test_storage_schema_rejects_non_positive_dimensions():
+    with pytest.raises(ValueError, match="shape dimensions must be positive"):
+        TensorStorageSchema(
+            dtype="f32",
+            shape=(2, 0),
+            layout=TensorStorageLayout(kind="dense"),
+        )
 
 
 def test_view_schema_wire_contract_shape():

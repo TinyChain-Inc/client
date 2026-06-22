@@ -36,6 +36,8 @@ from .scalar import (
 )
 from .context import Context, ContextResult, context, scoped_context, current_context
 from .tensor import (
+    TensorStorageLayout,
+    TensorStorageSchema,
     TensorViewAxis,
     TensorViewAxisMap,
     TensorViewSchema,
@@ -95,6 +97,8 @@ __all__ = [
     "Tensor",
     "TensorViewSpec",
     "TensorBackend",
+    "TensorStorageLayout",
+    "TensorStorageSchema",
     "TensorViewAxisMap",
     "TensorViewAxis",
     "TensorViewSchema",
