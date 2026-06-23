@@ -400,6 +400,21 @@ There is no PyO3-specific registration step; the shared txfs layout is the singl
 source of truth for both adapters. If a route resolves via HTTP, it will resolve
 in PyO3 as soon as the kernel loads the same directory tree.
 
+## Tensor response decoding without `tinychain-local`
+
+`Tensor(native=...)` decoding — converting a server-returned tensor payload into a
+Python object with materialized `.values`, `.dtype`, and `.shape` — requires the
+`tinychain-local` PyO3 backend. When `tinychain-local` is not installed:
+
+- Route responses that contain tensor payloads are returned as symbolic `tc.Tensor`
+  references backed by the server-side IR ref; `.values` will raise `AttributeError`.
+- HTTP-only users receive symbolic refs for tensor results and can pass those refs
+  into further route calls or deferred plans, but cannot access raw numeric data
+  client-side without installing the optional backend.
+
+Install `tinychain-local` (built from the runtime workspace) to enable eager tensor
+materialization via PyO3.
+
 ## Selecting the PyO3 backend
 
 This workspace ships a pure-Python `tinychain` package and an optional

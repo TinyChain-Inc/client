@@ -15,6 +15,7 @@ from ..scalar import (
     autobox,
     tcref_form_of,
 )
+from ...autodiff.graph import OP_ADD, OP_MATMUL, OP_TRANSPOSE, TensorNodeRecord, get_active_builder
 from ._common import infer_broadcast_axes, normalize_permutation, normalize_shape, params, reduce_args
 from ._wire import encode_view_schema
 from .backend import TensorBackend, TensorWireTensorBackend
@@ -233,18 +234,23 @@ class Tensor(Comparable):
         return self._post("cond", {"then": autobox(then), "or_else": autobox(or_else)}, rtype=Tensor)
 
     def max(self, axes: object = None, keepdims: bool = False) -> Scalar:
+        """Returns Scalar. Autodiff (VJP) for reductions is unsupported in Phase 1."""
         return self._post("max", reduce_args(axes, keepdims), rtype=Scalar)
 
     def min(self, axes: object = None, keepdims: bool = False) -> Scalar:
+        """Returns Scalar. Autodiff (VJP) for reductions is unsupported in Phase 1."""
         return self._post("min", reduce_args(axes, keepdims), rtype=Scalar)
 
     def mean(self, axes: object = None, keepdims: bool = False) -> Scalar:
+        """Returns Scalar. Autodiff (VJP) for reductions is unsupported in Phase 1."""
         return self._post("mean", reduce_args(axes, keepdims), rtype=Scalar)
 
     def norm(self, axis: object = None, keepdims: bool = False) -> Scalar:
+        """Returns Scalar. Autodiff (VJP) for reductions is unsupported in Phase 1."""
         return self._post("norm", params(axis=axis, keepdims=keepdims if keepdims else None), rtype=Scalar)
 
     def product(self, axes: object = None, keepdims: bool = False) -> Scalar:
+        """Returns Scalar. Autodiff (VJP) for reductions is unsupported in Phase 1."""
         return self._post("product", reduce_args(axes, keepdims), rtype=Scalar)
 
     def reshape(self, shape: object) -> "Tensor":
@@ -268,15 +274,29 @@ class Tensor(Comparable):
         )
 
     def std(self, axes: object = None, keepdims: bool = False) -> Scalar:
+        """Returns Scalar. Autodiff (VJP) for reductions is unsupported in Phase 1."""
         return self._post("std", reduce_args(axes, keepdims), rtype=Scalar)
 
     def sum(self, axes: object = None, keepdims: bool = False) -> Scalar:
+        """Returns Scalar. Autodiff (VJP) for reductions is unsupported in Phase 1."""
         return self._post("sum", reduce_args(axes, keepdims), rtype=Scalar)
 
     def transpose(self, permutation: object = None) -> "Tensor":
         op = TransposeViewOp(kind="transpose", permutation=normalize_permutation(permutation))
-
-        return self._apply_view_transform(method="transpose", arg=permutation, op=op)
+        result = self._apply_view_transform(method="transpose", arg=permutation, op=op)
+        _builder = get_active_builder()
+        if _builder is not None:
+            in_vid = _builder.register_value(self)
+            out_vid = _builder.register_value(result)
+            perm_list = list(permutation) if permutation is not None else []
+            _builder.record(TensorNodeRecord(
+                node_id=_builder._next_node_id(),
+                output_value_id=out_vid,
+                op_kind=OP_TRANSPOSE,
+                op_params={"perm": perm_list},
+                input_value_ids=[in_vid],
+            ))
+        return result
 
     def materialize_view_spec(self) -> "Tensor":
         """Apply the current view spec through the active backend if supported."""
@@ -323,6 +343,18 @@ class Tensor(Comparable):
     def matmul(self, other: object) -> "Tensor":
         right = autobox(other)
         result = self._tensor_post("matmul", {"r": right}, rtype=Tensor)
+        _builder = get_active_builder()
+        if _builder is not None:
+            lhs_vid = _builder.register_value(self)
+            rhs_vid = _builder.register_value(other) if isinstance(other, Tensor) else f"const_{id(other)}"
+            out_vid = _builder.register_value(result)
+            _builder.record(TensorNodeRecord(
+                node_id=_builder._next_node_id(),
+                output_value_id=out_vid,
+                op_kind=OP_MATMUL,
+                op_params={},
+                input_value_ids=[lhs_vid, rhs_vid],
+            ))
         return result
 
     def logical_and(self, other: object) -> "Tensor":
@@ -353,7 +385,20 @@ class Tensor(Comparable):
         return left._tensor_post(operator_segment, {"r": right}, rtype=Tensor)
 
     def __add__(self, other: object) -> "Tensor":
-        return self._binary_tensor("add", other)
+        result = self._binary_tensor("add", other)
+        _builder = get_active_builder()
+        if _builder is not None:
+            lhs_vid = _builder.register_value(self)
+            rhs_vid = _builder.register_value(other) if isinstance(other, Tensor) else f"const_{id(other)}"
+            out_vid = _builder.register_value(result)
+            _builder.record(TensorNodeRecord(
+                node_id=_builder._next_node_id(),
+                output_value_id=out_vid,
+                op_kind=OP_ADD,
+                op_params={},
+                input_value_ids=[lhs_vid, rhs_vid],
+            ))
+        return result
 
     def __sub__(self, other: object) -> "Tensor":
         return self._binary_tensor("sub", other)
