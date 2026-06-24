@@ -13,6 +13,11 @@ from .protocol import AutodiffError
 _COLLECTION_TENSOR = "/state/collection/tensor"
 _DEFAULT_ROUTE_ROOT = "/lib/std/autodiff/0.1.0"
 
+_DTYPE_WIRE = {
+    "f32": "/state/scalar/value/number/float/32",
+    "f64": "/state/scalar/value/number/float/64",
+}
+
 
 @dataclass(frozen=True)
 class TensorLiteral:
@@ -56,7 +61,8 @@ class TensorLiteral:
         )
 
     def to_json_literal(self) -> dict[str, object]:
-        return {_COLLECTION_TENSOR: [[self.dtype, list(self.shape)], list(self.values)]}
+        dtype_path = _DTYPE_WIRE.get(self.dtype, self.dtype)
+        return {_COLLECTION_TENSOR: [[dtype_path, list(self.shape)], list(self.values)]}
 
     def to_numpy(self) -> np.ndarray:
         dtype = np.float32 if "32" in self.dtype else np.float64
