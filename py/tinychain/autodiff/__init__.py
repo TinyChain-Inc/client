@@ -38,6 +38,15 @@ def generate(
     *,
     seed_typespec: dict[str, object] | None = None,
 ) -> DerivativeProgram:
+    """Build a reverse-mode derivative program from a recorded tensor graph.
+
+    ``seed`` is the value id of the upstream cotangent for ``output_value_id``:
+    the initial dL/d(output) tensor used to start reverse traversal. During
+    execution, callers must provide a concrete value for this id in the
+    scheduler environment. When ``seed_typespec`` is supplied, it is validated
+    against the selected output typespec and must have the same shape and a
+    differentiable floating dtype (f32/f64).
+    """
     return ReverseTraversal().build(
         graph=graph,
         output_value_id=output_value_id,

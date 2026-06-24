@@ -39,6 +39,13 @@ class SeedValidator:
         seed_typespec: dict[str, object] | None,
         output_typespec: dict[str, object] | None,
     ) -> None:
+        """Check that the seed can serve as dL/d(output).
+
+        Reverse traversal starts by assigning the seed value to the selected
+        output's gradient slot. A valid seed therefore has to be a tensor with
+        the same shape as that output, and both tensors must use a floating
+        dtype supported by Phase 1 autodiff.
+        """
         seed_dtype = typespec_dtype(seed_typespec)
         output_dtype = typespec_dtype(output_typespec)
         if seed_dtype not in self.floating_dtypes or output_dtype not in self.floating_dtypes:
