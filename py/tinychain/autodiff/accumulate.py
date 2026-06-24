@@ -38,7 +38,7 @@ class GradientAccumulator:
                 TensorNodeRecord(
                     node_id=next_node_id(),
                     output_value_id=current,
-                    op_kind=OP_ADD,
+                    operator=OP_ADD,
                     op_params={},
                     input_value_ids=[previous, contribution],
                     output_typespec=self.value_typespecs.get(value_id),

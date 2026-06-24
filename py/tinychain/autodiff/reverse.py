@@ -65,7 +65,7 @@ class ReverseTraversal:
             if upstream_id is None:
                 continue
 
-            rule = self._registry.lookup(node.op_kind)
+            rule = self._registry.lookup(node.operator)
             result = rule.apply(
                 VjpContext(
                     upstream_value_id=upstream_id,
@@ -106,6 +106,7 @@ class ReverseTraversal:
         )
 
     def _value_typespecs(self, graph: TensorGraph) -> dict[str, dict[str, object]]:
+        """Build value metadata used by seed checks, VJP shape planning, and accumulation."""
         typespecs: dict[str, dict[str, object]] = {}
         for value_id, typespec in graph.inputs:
             if typespec is not None:

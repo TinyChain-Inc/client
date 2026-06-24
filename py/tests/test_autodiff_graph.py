@@ -45,14 +45,14 @@ def rhs():
     return _make_tensor("rhs")
 
 
-@pytest.mark.parametrize("constant,expected", [
+@pytest.mark.parametrize("operator,expected", [
     (OP_ADD, "add"),
     (OP_BROADCAST_REDUCE, "broadcast_reduce"),
     (OP_MATMUL, "matmul"),
     (OP_TRANSPOSE, "transpose"),
 ])
-def test_op_constant_value(constant, expected):
-    assert constant == expected
+def test_operator_route_name(operator, expected):
+    assert operator.route_name == expected
 
 
 class TestBuilderContext:
@@ -84,7 +84,7 @@ class TestAddRecording:
         graph = builder.build()
         assert len(graph.nodes) == 1
         node = graph.nodes[0]
-        assert node.op_kind == OP_ADD
+        assert node.operator == OP_ADD
         assert node.op_params == {}
         assert len(node.input_value_ids) == 2
 
@@ -124,7 +124,7 @@ class TestMatmulRecording:
         graph = builder.build()
         assert len(graph.nodes) == 1
         node = graph.nodes[0]
-        assert node.op_kind == OP_MATMUL
+        assert node.operator == OP_MATMUL
         assert len(node.input_value_ids) == 2
 
     def test_matmul_assigns_distinct_value_ids(self, lhs, rhs):
@@ -148,7 +148,7 @@ class TestTransposeRecording:
         graph = builder.build()
         assert len(graph.nodes) == 1
         node = graph.nodes[0]
-        assert node.op_kind == OP_TRANSPOSE
+        assert node.operator == OP_TRANSPOSE
         assert node.op_params == {"perm": [1, 0]}
         assert len(node.input_value_ids) == 1
 
@@ -171,8 +171,8 @@ class TestMultiNodeGraph:
 
         graph = builder.build()
         assert len(graph.nodes) == 2
-        assert graph.nodes[0].op_kind == OP_ADD
-        assert graph.nodes[1].op_kind == OP_MATMUL
+        assert graph.nodes[0].operator == OP_ADD
+        assert graph.nodes[1].operator == OP_MATMUL
 
     def test_shared_input_registered_once(self, x, y, w):
         with TensorGraphBuilder() as builder:

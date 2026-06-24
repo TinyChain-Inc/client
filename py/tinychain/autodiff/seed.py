@@ -25,6 +25,12 @@ def typespec_shape(typespec: dict[str, object] | None) -> tuple[int, ...]:
 
 @dataclass(frozen=True)
 class SeedValidator:
+    """Validate the initial reverse-mode cotangent for a selected output.
+
+    The seed is the upstream dL/d(output) tensor that starts reverse traversal.
+    It must have the selected output shape and a differentiable floating dtype.
+    """
+
     floating_dtypes: tuple[str, ...] = FLOAT_DTYPES
 
     def validate(

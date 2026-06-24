@@ -4,7 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
-from .graph import OP_ADD, OP_BROADCAST_REDUCE, TensorNodeRecord
+from .graph import OP_ADD, OP_BROADCAST_REDUCE, AddOperator, TensorNodeRecord, TensorOperator
 from .protocol import AutodiffError
 from .seed import typespec_shape
 
@@ -25,7 +25,7 @@ class VjpResult:
 
 
 class VjpRule(Protocol):
-    op_kind: str
+    operator_type: type[TensorOperator]
 
     def apply(self, context: VjpContext) -> VjpResult:
         ...
@@ -33,16 +33,19 @@ class VjpRule(Protocol):
 
 class VjpRegistry:
     def __init__(self) -> None:
-        self._rules: dict[str, VjpRule] = {}
+        self._rules: dict[type[TensorOperator], VjpRule] = {}
 
     def register(self, rule: VjpRule) -> None:
-        self._rules[rule.op_kind] = rule
+        self._rules[rule.operator_type] = rule
 
-    def lookup(self, op_kind: str) -> VjpRule:
+    def lookup(self, operator: TensorOperator) -> VjpRule:
         try:
-            return self._rules[op_kind]
+            return self._rules[type(operator)]
         except KeyError as exc:
-            raise AutodiffError("unsupported_operator", f"no VJP rule registered for {op_kind}") from exc
+            raise AutodiffError(
+                "unsupported_operator",
+                f"no VJP rule registered for {operator.route_name}",
+            ) from exc
 
 
 @dataclass(frozen=True)
@@ -88,7 +91,7 @@ class BroadcastReductionPlanner:
 
 
 class AddVjpRule:
-    op_kind = OP_ADD
+    operator_type = AddOperator
 
     def __init__(self, planner: BroadcastReductionPlanner | None = None) -> None:
         self._planner = planner or BroadcastReductionPlanner()
@@ -112,7 +115,7 @@ class AddVjpRule:
                     TensorNodeRecord(
                         node_id=context.next_node_id(),
                         output_value_id=gradient_id,
-                        op_kind=OP_BROADCAST_REDUCE,
+                        operator=OP_BROADCAST_REDUCE,
                         op_params={
                             "target_shape": list(plan.operand_shape),
                         },

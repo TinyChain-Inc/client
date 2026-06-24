@@ -6,6 +6,7 @@ import pytest
 import tinychain as tc
 from tinychain.autodiff import AutodiffError
 from tinychain.library import compile_ir, library_definition
+from tinychain.state.scalar import OPDEF_POST
 
 
 def test_library_routes_return_typed_refs():
@@ -126,7 +127,7 @@ def test_library_routes_preserve_all_dict_return_keys():
 
     ir = compile_ir(A)
     route = next(route for route in ir["routes"] if route["path"] == "/stats")
-    opdef = route["opdef"]["/state/scalar/op/post"]
+    opdef = route["opdef"][OPDEF_POST]
 
     assert [name for name, _ in opdef] == ["min", "max"]
 
@@ -144,7 +145,7 @@ def test_grad_is_call_site_transform_stub_not_route_decorator():
 
     assert "grad" not in routes["/identity"]
     with pytest.raises(AutodiffError) as exc:
-        tc.grad(A().identity, wrt=("x",))
+        tc.grad(A().identity, wrt=("v0",))
 
     assert exc.value.category == "autodiff_not_implemented"
 
@@ -171,7 +172,7 @@ def test_grad_cannot_be_used_as_route_metadata_decorator():
 
     definition = library_definition(A)
     route = definition[A.class_id().path]["identity"]
-    assert "/state/scalar/op/post" in route
+    assert OPDEF_POST in route
 
 
 def test_grad_tensor_target_fails_until_route_tracing_is_implemented():
@@ -187,7 +188,7 @@ def test_grad_tensor_target_fails_until_route_tracing_is_implemented():
     target = tc.Tensor(native=NativeTensor([2, 3])).transpose([1, 0])
 
     with pytest.raises(AutodiffError) as exc:
-        tc.grad(target, wrt=("x",))
+        tc.grad(target, wrt=("v0",))
 
     assert exc.value.category == "autodiff_not_implemented"
 

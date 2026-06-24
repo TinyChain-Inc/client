@@ -2,12 +2,17 @@ from __future__ import annotations
 
 from .accumulate import GradientAccumulator
 from .executor import ExecutionScheduler
-from .http_dispatcher import TcServerDispatcher
+from .http_dispatcher import TcServerDispatcher, TensorLiteral
 from .graph import (
+    AddOperator,
+    BroadcastReduceOperator,
+    MatmulOperator,
     OP_ADD,
     OP_BROADCAST_REDUCE,
     OP_MATMUL,
     OP_TRANSPOSE,
+    TensorOperator,
+    TransposeOperator,
     TensorGraph,
     TensorGraphBuilder,
     TensorNodeRecord,
@@ -48,11 +53,14 @@ __all__ = [
     "AutodiffError",
     "AutodiffRequest",
     "AutodiffResult",
+    "AddOperator",
+    "BroadcastReduceOperator",
     "BroadcastReductionPlanner",
     "DerivativeMetadata",
     "DerivativeProgram",
     "ExecutionScheduler",
     "GradientAccumulator",
+    "MatmulOperator",
     "OP_ADD",
     "OP_BROADCAST_REDUCE",
     "OP_MATMUL",
@@ -60,7 +68,10 @@ __all__ = [
     "ReverseTraversal",
     "SeedValidator",
     "TcServerDispatcher",
+    "TensorLiteral",
     "TensorGraph",
+    "TensorOperator",
+    "TransposeOperator",
     "TensorGraphBuilder",
     "TensorNodeRecord",
     "VjpRegistry",

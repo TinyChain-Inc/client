@@ -354,21 +354,21 @@ _AUTODIFF_GRAD_ROUTE = _uri("lib", "std", "autodiff", "0.1.0", "grad").path
 
 def _normalize_wrt(wrt: object) -> list[str]:
     if wrt is None:
-        raise TypeError("tc.grad requires `wrt` names")
+        raise TypeError("tc.grad requires `wrt` value ids")
 
     if isinstance(wrt, str):
         names = [wrt]
     elif isinstance(wrt, (list, tuple)):
         names = list(wrt)
     else:
-        raise TypeError("tc.grad `wrt` must be a string or sequence of strings")
+        raise TypeError("tc.grad `wrt` must be a value id string or sequence of value id strings")
 
     if not names:
         raise TypeError("tc.grad `wrt` must not be empty")
 
     for name in names:
         if not isinstance(name, str) or not name:
-            raise TypeError("tc.grad `wrt` entries must be non-empty strings")
+            raise TypeError("tc.grad `wrt` entries must be non-empty value id strings")
 
     return names
 

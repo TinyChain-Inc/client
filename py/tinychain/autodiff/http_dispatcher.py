@@ -1,45 +1,83 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from dataclasses import dataclass
+from typing import Protocol
 
 import numpy as np
 import requests
 
+from .graph import AddOperator, BroadcastReduceOperator, TensorNodeRecord, TensorOperator
 from .protocol import AutodiffError
 
 _COLLECTION_TENSOR = "/state/collection/tensor"
-_OP_POST_ROUTE = "/state/scalar/op/post"
+_DEFAULT_ROUTE_ROOT = "/lib/std/autodiff/0.1.0"
 
 
-def _encode_tensor(tensor: Any) -> dict:
-    """Encode a tensor value as a TinyChain JSON literal for OpDef POST bodies.
+@dataclass(frozen=True)
+class TensorLiteral:
+    """HTTP execution tensor value that knows its TinyChain JSON literal form."""
 
-    Accepts:
-    - numpy.ndarray (float32 or float64)
-    - Objects with dtype_tag() -> str, shape() -> list[int], and
-      flattened_f32() / flattened_f64() -> iterable[float] methods
-      (e.g. tc_state::Tensor PyO3-bound objects returned by the server).
-    """
-    if isinstance(tensor, np.ndarray):
-        dtype_str = "f32" if tensor.dtype == np.float32 else "f64"
-        return {_COLLECTION_TENSOR: [[dtype_str, list(tensor.shape)], tensor.flatten().tolist()]}
-    if hasattr(tensor, "dtype_tag") and hasattr(tensor, "shape"):
-        dtype_str = tensor.dtype_tag()
-        shape = list(tensor.shape())
-        values = list(tensor.flattened_f32() if "32" in str(dtype_str) else tensor.flattened_f64())
-        return {_COLLECTION_TENSOR: [[dtype_str, shape], values]}
-    raise TypeError(
-        f"TcServerDispatcher: cannot encode tensor of type {type(tensor).__name__}; "
-        "expected numpy.ndarray or an object with dtype_tag()/shape()/flattened_f32()/flattened_f64()"
-    )
+    dtype: str
+    shape: tuple[int, ...]
+    values: tuple[float, ...]
+
+    @classmethod
+    def from_numpy(cls, tensor: np.ndarray) -> TensorLiteral:
+        if tensor.dtype == np.float32:
+            dtype = "f32"
+        elif tensor.dtype == np.float64:
+            dtype = "f64"
+        else:
+            raise TypeError("TensorLiteral supports only float32 and float64 numpy arrays")
+        return cls(
+            dtype=dtype,
+            shape=tuple(int(dim) for dim in tensor.shape),
+            values=tuple(float(value) for value in tensor.flatten().tolist()),
+        )
+
+    @classmethod
+    def from_backend_tensor(cls, tensor: object) -> TensorLiteral:
+        if not hasattr(tensor, "dtype_tag") or not hasattr(tensor, "shape"):
+            raise TypeError("expected tensor object with dtype_tag() and shape()")
+        dtype = str(tensor.dtype_tag())
+        is_f32 = dtype == "f32" or ("float" in dtype and "32" in dtype)
+        is_f64 = dtype == "f64" or ("float" in dtype and "64" in dtype)
+        if is_f32:
+            values = tensor.flattened_f32()
+        elif is_f64:
+            values = tensor.flattened_f64()
+        else:
+            raise TypeError(f"TensorLiteral supports only floating tensors, got {dtype}")
+        return cls(
+            dtype=dtype,
+            shape=tuple(int(dim) for dim in tensor.shape()),
+            values=tuple(float(value) for value in values),
+        )
+
+    def to_json_literal(self) -> dict[str, object]:
+        return {_COLLECTION_TENSOR: [[self.dtype, list(self.shape)], list(self.values)]}
+
+    def to_numpy(self) -> np.ndarray:
+        dtype = np.float32 if "32" in self.dtype else np.float64
+        return np.array(self.values, dtype=dtype).reshape(self.shape)
+
+    def __array__(self, dtype=None) -> np.ndarray:
+        array = self.to_numpy()
+        return array.astype(dtype) if dtype is not None else array
+
+
+def _tensor_literal(value: object) -> dict[str, object]:
+    to_json_literal = getattr(value, "to_json_literal", None)
+    if not callable(to_json_literal):
+        raise TypeError(
+            f"TcServerDispatcher expected TensorLiteral-compatible value, got {type(value).__name__}"
+        )
+    return to_json_literal()
 
 
 def _decode_tensor_response(payload: dict) -> np.ndarray:
-    """Decode a server tensor JSON response into a numpy array.
-
-    Handles both shorthand dtypes ("f32", "f64") and full TinyChain dtype paths.
-    """
+    """Decode a server tensor JSON response into a numpy array."""
     if not isinstance(payload, dict) or _COLLECTION_TENSOR not in payload:
         raise ValueError(f"TcServerDispatcher: unexpected response format: {payload!r}")
     meta, values = payload[_COLLECTION_TENSOR]
@@ -49,46 +87,70 @@ def _decode_tensor_response(payload: dict) -> np.ndarray:
     return np.array(values, dtype=dtype).reshape(shape)
 
 
+class HttpOperatorHandler(Protocol):
+    route_name: str
+
+    def build_body(self, node: TensorNodeRecord, args: list[object]) -> dict[str, object]:
+        ...
+
+
+@dataclass(frozen=True)
+class AddHttpHandler:
+    route_name: str = "add"
+
+    def build_body(self, node: TensorNodeRecord, args: list[object]) -> dict[str, object]:
+        return {
+            "x": _tensor_literal(args[0]),
+            "y": _tensor_literal(args[1]),
+        }
+
+
+@dataclass(frozen=True)
+class BroadcastReduceHttpHandler:
+    route_name: str = "broadcast_reduce"
+
+    def build_body(self, node: TensorNodeRecord, args: list[object]) -> dict[str, object]:
+        return {
+            "x": _tensor_literal(args[0]),
+            "target_shape": list(node.op_params["target_shape"]),
+        }
+
+
+_DEFAULT_HANDLERS: dict[type[TensorOperator], HttpOperatorHandler] = {
+    AddOperator: AddHttpHandler(),
+    BroadcastReduceOperator: BroadcastReduceHttpHandler(),
+}
+
+
 class TcServerDispatcher:
-    """RouteDispatcher that executes individual ops by POSTing OpDef requests to tc-server.
+    """RouteDispatcher that calls installed OpDef-backed tc-server routes."""
 
-    Supported op_kind values: "broadcast_reduce", "add".
-    Raises AutodiffError("unsupported_operator", ...) for anything else.
-    """
-
-    def __init__(self, host: str) -> None:
+    def __init__(
+        self,
+        host: str,
+        *,
+        route_root: str = _DEFAULT_ROUTE_ROOT,
+        handlers: dict[type[TensorOperator], HttpOperatorHandler] | None = None,
+    ) -> None:
         self._host = host.rstrip("/")
+        self._route_root = "/" + route_root.strip("/")
+        self._handlers = dict(_DEFAULT_HANDLERS if handlers is None else handlers)
 
-    def __call__(self, op_kind: str, op_params: dict, args: list) -> np.ndarray:
-        if op_kind == "broadcast_reduce":
-            return self._broadcast_reduce(op_params, args)
-        if op_kind == "add":
-            return self._add(op_params, args)
-        raise AutodiffError(
-            "unsupported_operator",
-            f"TcServerDispatcher: no handler for op_kind '{op_kind}'",
-        )
+    def __call__(self, node: TensorNodeRecord, args: list[object]) -> np.ndarray:
+        try:
+            handler = self._handlers[type(node.operator)]
+        except KeyError as exc:
+            raise AutodiffError(
+                "unsupported_operator",
+                f"TcServerDispatcher: no handler for operator '{node.operator.route_name}'",
+            ) from exc
+        return self._post(handler.route_name, handler.build_body(node, args))
 
-    def _broadcast_reduce(self, op_params: dict, args: list) -> np.ndarray:
-        body = [
-            ["x", _encode_tensor(args[0])],
-            ["result", {"$x/broadcast_reduce": {"target_shape": op_params["target_shape"]}}],
-        ]
-        return self._post(body)
-
-    def _add(self, op_params: dict, args: list) -> np.ndarray:
-        body = [
-            ["x", _encode_tensor(args[0])],
-            ["y", _encode_tensor(args[1])],
-            ["result", {"$x/add": {"r": {"$y": []}}}],
-        ]
-        return self._post(body)
-
-    def _post(self, body: list) -> np.ndarray:
-        url = f"{self._host}{_OP_POST_ROUTE}"
+    def _post(self, route: str, body: dict[str, object]) -> np.ndarray:
+        url = f"{self._host}{self._route_root}/{route}"
         response = requests.post(
             url,
-            data=json.dumps({_OP_POST_ROUTE: body}, separators=(",", ":")),
+            data=json.dumps(body, separators=(",", ":")),
             headers={"content-type": "application/json", "accept": "application/json"},
         )
         if response.status_code != 200:

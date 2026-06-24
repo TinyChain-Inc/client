@@ -4,10 +4,52 @@ import contextvars
 from dataclasses import dataclass, field
 from typing import Optional
 
-OP_ADD: str = "add"
-OP_BROADCAST_REDUCE: str = "broadcast_reduce"
-OP_MATMUL: str = "matmul"
-OP_TRANSPOSE: str = "transpose"
+
+@dataclass(frozen=True)
+class TensorOperator:
+    """Base tensor operator descriptor used by Python-owned autodiff graphs."""
+
+    route_name: str
+
+
+@dataclass(frozen=True)
+class AddOperator(TensorOperator):
+    def __init__(self) -> None:
+        object.__setattr__(self, "route_name", "add")
+
+
+@dataclass(frozen=True)
+class BroadcastReduceOperator(TensorOperator):
+    def __init__(self) -> None:
+        object.__setattr__(self, "route_name", "broadcast_reduce")
+
+
+@dataclass(frozen=True)
+class MatmulOperator(TensorOperator):
+    def __init__(self) -> None:
+        object.__setattr__(self, "route_name", "matmul")
+
+
+@dataclass(frozen=True)
+class TransposeOperator(TensorOperator):
+    def __init__(self) -> None:
+        object.__setattr__(self, "route_name", "transpose")
+
+
+OP_ADD: AddOperator = AddOperator()
+OP_BROADCAST_REDUCE: BroadcastReduceOperator = BroadcastReduceOperator()
+OP_MATMUL: MatmulOperator = MatmulOperator()
+OP_TRANSPOSE: TransposeOperator = TransposeOperator()
+_OPERATORS_BY_ROUTE: dict[str, TensorOperator] = {
+    OP_ADD.route_name: OP_ADD,
+    OP_BROADCAST_REDUCE.route_name: OP_BROADCAST_REDUCE,
+    OP_MATMUL.route_name: OP_MATMUL,
+    OP_TRANSPOSE.route_name: OP_TRANSPOSE,
+}
+
+
+def operator_for_route(route_name: str) -> TensorOperator:
+    return _OPERATORS_BY_ROUTE[route_name]
 
 _active_builder: contextvars.ContextVar[Optional[TensorGraphBuilder]] = contextvars.ContextVar(
     "_active_builder", default=None
@@ -18,16 +60,44 @@ def get_active_builder() -> Optional[TensorGraphBuilder]:
     return _active_builder.get()
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class TensorNodeRecord:
     """Single recorded computation step captured by TensorGraphBuilder."""
 
     node_id: str
     output_value_id: str
-    op_kind: str
+    operator: TensorOperator
     op_params: dict
     input_value_ids: list[str]
     output_typespec: Optional[dict] = None
+
+    def __init__(
+        self,
+        *,
+        node_id: str,
+        output_value_id: str,
+        operator: TensorOperator | str | None = None,
+        op_params: dict,
+        input_value_ids: list[str],
+        output_typespec: Optional[dict] = None,
+        op_kind: TensorOperator | str | None = None,
+    ) -> None:
+        selected = operator if operator is not None else op_kind
+        if selected is None:
+            raise TypeError("TensorNodeRecord requires an operator")
+        if isinstance(selected, str):
+            selected = operator_for_route(selected)
+
+        object.__setattr__(self, "node_id", node_id)
+        object.__setattr__(self, "output_value_id", output_value_id)
+        object.__setattr__(self, "operator", selected)
+        object.__setattr__(self, "op_params", op_params)
+        object.__setattr__(self, "input_value_ids", input_value_ids)
+        object.__setattr__(self, "output_typespec", output_typespec)
+
+    @property
+    def op_kind(self) -> str:
+        return self.operator.route_name
 
 
 @dataclass(frozen=True)

@@ -3,11 +3,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from .graph import TensorNodeRecord
 from .protocol import AutodiffResult
 from .reverse import DerivativeProgram
 
 
-RouteDispatcher = Callable[[str, dict[str, object], list[object]], object]
+RouteDispatcher = Callable[[TensorNodeRecord, list[object]], object]
 
 
 @dataclass(frozen=True)
@@ -23,11 +24,7 @@ class ExecutionScheduler:
         environment = dict(values)
         for node in program.nodes:
             args = [environment[value_id] for value_id in node.input_value_ids]
-            environment[node.output_value_id] = self.dispatch(
-                node.op_kind,
-                dict(node.op_params),
-                args,
-            )
+            environment[node.output_value_id] = self.dispatch(node, args)
 
         gradients = [
             environment[gradient_id] if gradient_id is not None else None

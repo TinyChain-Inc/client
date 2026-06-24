@@ -292,7 +292,7 @@ class Tensor(Comparable):
             _builder.record(TensorNodeRecord(
                 node_id=_builder._next_node_id(),
                 output_value_id=out_vid,
-                op_kind=OP_TRANSPOSE,
+                operator=OP_TRANSPOSE,
                 op_params={"perm": perm_list},
                 input_value_ids=[in_vid],
             ))
@@ -351,7 +351,7 @@ class Tensor(Comparable):
             _builder.record(TensorNodeRecord(
                 node_id=_builder._next_node_id(),
                 output_value_id=out_vid,
-                op_kind=OP_MATMUL,
+                operator=OP_MATMUL,
                 op_params={},
                 input_value_ids=[lhs_vid, rhs_vid],
             ))
@@ -394,7 +394,7 @@ class Tensor(Comparable):
             _builder.record(TensorNodeRecord(
                 node_id=_builder._next_node_id(),
                 output_value_id=out_vid,
-                op_kind=OP_ADD,
+                operator=OP_ADD,
                 op_params={},
                 input_value_ids=[lhs_vid, rhs_vid],
             ))
