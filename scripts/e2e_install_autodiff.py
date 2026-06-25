@@ -139,6 +139,16 @@ def library_definition() -> dict:
                     ["result", {"$x/broadcast_reduce": {"target_shape": {"$target_shape": []}}}],
                 ]
             },
+            "matmul": {
+                opdef_post: [
+                    ["result", {"$x/matmul": {"r": {"$y": []}}}],
+                ]
+            },
+            "transpose": {
+                opdef_post: [
+                    ["result", {"$x/transpose": [{"$perm": []}]}],
+                ]
+            },
         }
     }
 
@@ -159,7 +169,7 @@ def install_library(bearer_token: str) -> None:
 
 
 def verify_routes() -> None:
-    for route in ("add", "broadcast_reduce"):
+    for route in ("add", "broadcast_reduce", "matmul", "transpose"):
         url = f"{TC_SERVER_URL}{AUTODIFF_ROUTE_ROOT}/{route}"
         resp = requests.post(url, json={}, timeout=5)
         if resp.status_code == 404:
@@ -226,6 +236,7 @@ def main() -> None:
         print("Run in another terminal:")
         print()
         print("  python -m pytest py/tests/test_e2e_add_gradient.py -v")
+        print("  python -m pytest py/tests/test_e2e_matmul_gradient.py -v")
         print()
         print("Press Ctrl+C to stop the server.")
         print("=" * 60)

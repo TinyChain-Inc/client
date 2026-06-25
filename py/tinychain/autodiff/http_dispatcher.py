@@ -7,7 +7,7 @@ from typing import Protocol
 import numpy as np
 import requests
 
-from .graph import AddOperator, BroadcastReduceOperator, TensorNodeRecord, TensorOperator
+from .graph import AddOperator, BroadcastReduceOperator, MatmulOperator, TransposeOperator, TensorNodeRecord, TensorOperator
 from .protocol import AutodiffError
 
 _COLLECTION_TENSOR = "/state/collection/tensor"
@@ -82,15 +82,15 @@ def _tensor_literal(value: object) -> dict[str, object]:
     return to_json_literal()
 
 
-def _decode_tensor_response(payload: dict) -> np.ndarray:
-    """Decode a server tensor JSON response into a numpy array."""
+def _decode_tensor_response(payload: dict) -> TensorLiteral:
+    """Decode a server tensor JSON response into a TensorLiteral."""
     if not isinstance(payload, dict) or _COLLECTION_TENSOR not in payload:
         raise ValueError(f"TcServerDispatcher: unexpected response format: {payload!r}")
     meta, values = payload[_COLLECTION_TENSOR]
     dtype_str = str(meta[0])
-    shape = meta[1]
-    dtype = np.float32 if "32" in dtype_str else np.float64
-    return np.array(values, dtype=dtype).reshape(shape)
+    shape = tuple(int(d) for d in meta[1])
+    dtype = "f32" if "32" in dtype_str else "f64"
+    return TensorLiteral(dtype=dtype, shape=shape, values=tuple(float(v) for v in values))
 
 
 class HttpOperatorHandler(Protocol):
@@ -122,9 +122,33 @@ class BroadcastReduceHttpHandler:
         }
 
 
+@dataclass(frozen=True)
+class MatmulHttpHandler:
+    route_name: str = "matmul"
+
+    def build_body(self, node: TensorNodeRecord, args: list[object]) -> dict[str, object]:
+        return {
+            "x": _tensor_literal(args[0]),
+            "y": _tensor_literal(args[1]),
+        }
+
+
+@dataclass(frozen=True)
+class TransposeHttpHandler:
+    route_name: str = "transpose"
+
+    def build_body(self, node: TensorNodeRecord, args: list[object]) -> dict[str, object]:
+        return {
+            "x": _tensor_literal(args[0]),
+            "perm": list(node.op_params["perm"]),
+        }
+
+
 _DEFAULT_HANDLERS: dict[type[TensorOperator], HttpOperatorHandler] = {
     AddOperator: AddHttpHandler(),
     BroadcastReduceOperator: BroadcastReduceHttpHandler(),
+    MatmulOperator: MatmulHttpHandler(),
+    TransposeOperator: TransposeHttpHandler(),
 }
 
 

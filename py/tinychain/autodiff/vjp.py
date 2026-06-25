@@ -4,7 +4,16 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
-from .graph import OP_ADD, OP_BROADCAST_REDUCE, AddOperator, TensorNodeRecord, TensorOperator
+from .graph import (
+    OP_ADD,
+    OP_BROADCAST_REDUCE,
+    OP_MATMUL,
+    OP_TRANSPOSE,
+    AddOperator,
+    MatmulOperator,
+    TensorNodeRecord,
+    TensorOperator,
+)
 from .protocol import AutodiffError
 from .seed import typespec_shape
 
@@ -130,7 +139,140 @@ class AddVjpRule:
         return VjpResult(gradients=gradients, derivative_nodes=derivative_nodes)
 
 
+def _swap_last_two_dims(shape: tuple[int, ...]) -> tuple[int, ...]:
+    return shape[:-2] + (shape[-1], shape[-2])
+
+
+def _transpose_last_two_perm(rank: int) -> list[int]:
+    return list(range(rank - 2)) + [rank - 1, rank - 2]
+
+
+class MatmulVjpRule:
+    operator_type = MatmulOperator
+
+    def __init__(self, planner: BroadcastReductionPlanner | None = None) -> None:
+        self._planner = planner or BroadcastReductionPlanner()
+
+    def apply(self, context: VjpContext) -> VjpResult:
+        if len(context.node.input_value_ids) != 2:
+            raise AutodiffError("malformed_derivative_ir", "matmul VJP requires exactly two inputs")
+
+        lhs_id, rhs_id = context.node.input_value_ids
+        lhs_typespec = context.value_typespecs.get(lhs_id)
+        rhs_typespec = context.value_typespecs.get(rhs_id)
+        lhs_shape = typespec_shape(lhs_typespec)
+        rhs_shape = typespec_shape(rhs_typespec)
+
+        if len(lhs_shape) < 2 or len(rhs_shape) < 2:
+            raise AutodiffError("matmul_shape_mismatch", "matmul operands must have rank >= 2")
+        if lhs_shape[-1] != rhs_shape[-2]:
+            raise AutodiffError(
+                "matmul_shape_mismatch",
+                f"inner dimensions mismatch: A last dim {lhs_shape[-1]}, B second-to-last dim {rhs_shape[-2]}",
+            )
+
+        m, k, n = lhs_shape[-2], lhs_shape[-1], rhs_shape[-1]
+        result_shape = typespec_shape(context.node.output_typespec)
+        batch_z = result_shape[:-2]
+
+        dtype = lhs_typespec.get("dtype") if lhs_typespec else None
+        dz_id = context.upstream_value_id
+        derivative_nodes: list[TensorNodeRecord] = []
+        gradients: dict[str, str] = {}
+
+        # --- dA = matmul(dZ, B^T) ---
+        b_t_shape = _swap_last_two_dims(rhs_shape)
+        b_t_id = context.next_value_id()
+        b_t_typespec: dict[str, object] = {"shape": list(b_t_shape)}
+        if dtype is not None:
+            b_t_typespec["dtype"] = dtype
+        derivative_nodes.append(TensorNodeRecord(
+            node_id=context.next_node_id(),
+            output_value_id=b_t_id,
+            operator=OP_TRANSPOSE,
+            op_params={"perm": _transpose_last_two_perm(len(rhs_shape))},
+            input_value_ids=[rhs_id],
+            output_typespec=b_t_typespec,
+        ))
+
+        da_shape = batch_z + (m, k)
+        da_id = context.next_value_id()
+        da_typespec: dict[str, object] = {"shape": list(da_shape)}
+        if dtype is not None:
+            da_typespec["dtype"] = dtype
+        derivative_nodes.append(TensorNodeRecord(
+            node_id=context.next_node_id(),
+            output_value_id=da_id,
+            operator=OP_MATMUL,
+            op_params={},
+            input_value_ids=[dz_id, b_t_id],
+            output_typespec=da_typespec,
+        ))
+
+        plan_a = self._planner.plan(result_shape=da_shape, operand_shape=lhs_shape)
+        if plan_a.axes:
+            da_reduced_id = context.next_value_id()
+            derivative_nodes.append(TensorNodeRecord(
+                node_id=context.next_node_id(),
+                output_value_id=da_reduced_id,
+                operator=OP_BROADCAST_REDUCE,
+                op_params={"target_shape": list(lhs_shape)},
+                input_value_ids=[da_id],
+                output_typespec=lhs_typespec,
+            ))
+            gradients[lhs_id] = da_reduced_id
+        else:
+            gradients[lhs_id] = da_id
+
+        # --- dB = matmul(A^T, dZ) ---
+        a_t_shape = _swap_last_two_dims(lhs_shape)
+        a_t_id = context.next_value_id()
+        a_t_typespec: dict[str, object] = {"shape": list(a_t_shape)}
+        if dtype is not None:
+            a_t_typespec["dtype"] = dtype
+        derivative_nodes.append(TensorNodeRecord(
+            node_id=context.next_node_id(),
+            output_value_id=a_t_id,
+            operator=OP_TRANSPOSE,
+            op_params={"perm": _transpose_last_two_perm(len(lhs_shape))},
+            input_value_ids=[lhs_id],
+            output_typespec=a_t_typespec,
+        ))
+
+        db_shape = batch_z + (k, n)
+        db_id = context.next_value_id()
+        db_typespec: dict[str, object] = {"shape": list(db_shape)}
+        if dtype is not None:
+            db_typespec["dtype"] = dtype
+        derivative_nodes.append(TensorNodeRecord(
+            node_id=context.next_node_id(),
+            output_value_id=db_id,
+            operator=OP_MATMUL,
+            op_params={},
+            input_value_ids=[a_t_id, dz_id],
+            output_typespec=db_typespec,
+        ))
+
+        plan_b = self._planner.plan(result_shape=db_shape, operand_shape=rhs_shape)
+        if plan_b.axes:
+            db_reduced_id = context.next_value_id()
+            derivative_nodes.append(TensorNodeRecord(
+                node_id=context.next_node_id(),
+                output_value_id=db_reduced_id,
+                operator=OP_BROADCAST_REDUCE,
+                op_params={"target_shape": list(rhs_shape)},
+                input_value_ids=[db_id],
+                output_typespec=rhs_typespec,
+            ))
+            gradients[rhs_id] = db_reduced_id
+        else:
+            gradients[rhs_id] = db_id
+
+        return VjpResult(gradients=gradients, derivative_nodes=derivative_nodes)
+
+
 def default_vjp_registry() -> VjpRegistry:
     registry = VjpRegistry()
     registry.register(AddVjpRule())
+    registry.register(MatmulVjpRule())
     return registry
