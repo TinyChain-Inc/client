@@ -27,7 +27,7 @@ from .protocol import (
 )
 from .reverse import DerivativeProgram, ReverseTraversal
 from .seed import SeedValidator
-from .vjp import AddVjpRule, BroadcastReductionPlanner, MatmulVjpRule, VjpRegistry
+from .vjp import AddVjpRule, BroadcastReductionPlanner, MatmulVjpRule, TransposeVjpRule, VjpRegistry
 
 
 def generate(
@@ -38,7 +38,12 @@ def generate(
     *,
     seed_typespec: dict[str, object] | None = None,
 ) -> DerivativeProgram:
-    """Build a reverse-mode derivative program from a recorded tensor graph.
+    """Experimentally build a structured Python derivative program.
+
+    The returned ``DerivativeProgram`` contains derivative ``TensorNodeRecord``
+    objects, ordered output gradient value ids, and metadata. It is a pure data
+    structure for inspection or later execution by ``ExecutionScheduler``; this
+    function does not execute server routes and does not return Python callbacks.
 
     ``seed`` is the value id of the upstream cotangent for ``output_value_id``:
     the initial dL/d(output) tensor used to start reverse traversal. During
@@ -82,6 +87,7 @@ __all__ = [
     "TensorGraph",
     "TensorOperator",
     "TransposeOperator",
+    "TransposeVjpRule",
     "TensorGraphBuilder",
     "TensorNodeRecord",
     "VjpRegistry",

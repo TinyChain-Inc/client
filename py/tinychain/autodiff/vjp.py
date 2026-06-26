@@ -13,6 +13,7 @@ from .graph import (
     MatmulOperator,
     TensorNodeRecord,
     TensorOperator,
+    TransposeOperator,
 )
 from .protocol import AutodiffError
 from .seed import typespec_shape
@@ -271,8 +272,64 @@ class MatmulVjpRule:
         return VjpResult(gradients=gradients, derivative_nodes=derivative_nodes)
 
 
+def _validate_permutation(perm: object, rank: int) -> tuple[int, ...]:
+    if not isinstance(perm, (list, tuple)):
+        raise AutodiffError("invalid_permutation", "transpose permutation must be a list of axes")
+
+    axes: list[int] = []
+    for axis in perm:
+        if not isinstance(axis, int):
+            raise AutodiffError("invalid_permutation", "transpose permutation axes must be integers")
+        axes.append(axis)
+
+    if len(axes) != rank:
+        raise AutodiffError(
+            "invalid_permutation",
+            f"transpose permutation length {len(axes)} does not match rank {rank}",
+        )
+    if sorted(axes) != list(range(rank)):
+        raise AutodiffError(
+            "invalid_permutation",
+            f"transpose permutation must contain each axis 0..{rank - 1} exactly once",
+        )
+    return tuple(axes)
+
+
+def _inverse_permutation(perm: tuple[int, ...]) -> tuple[int, ...]:
+    inverse = [0] * len(perm)
+    for index, axis in enumerate(perm):
+        inverse[axis] = index
+    return tuple(inverse)
+
+
+class TransposeVjpRule:
+    operator_type = TransposeOperator
+
+    def apply(self, context: VjpContext) -> VjpResult:
+        if len(context.node.input_value_ids) != 1:
+            raise AutodiffError("malformed_derivative_ir", "transpose VJP requires exactly one input")
+
+        input_id = context.node.input_value_ids[0]
+        input_typespec = context.value_typespecs.get(input_id)
+        input_shape = typespec_shape(input_typespec)
+        perm = _validate_permutation(context.node.op_params.get("perm"), len(input_shape))
+        inverse_perm = _inverse_permutation(perm)
+
+        gradient_id = context.next_value_id()
+        gradient_node = TensorNodeRecord(
+            node_id=context.next_node_id(),
+            output_value_id=gradient_id,
+            operator=OP_TRANSPOSE,
+            op_params={"perm": list(inverse_perm)},
+            input_value_ids=[context.upstream_value_id],
+            output_typespec=input_typespec,
+        )
+        return VjpResult(gradients={input_id: gradient_id}, derivative_nodes=[gradient_node])
+
+
 def default_vjp_registry() -> VjpRegistry:
     registry = VjpRegistry()
     registry.register(AddVjpRule())
     registry.register(MatmulVjpRule())
+    registry.register(TransposeVjpRule())
     return registry

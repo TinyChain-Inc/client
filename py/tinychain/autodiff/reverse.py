@@ -49,6 +49,9 @@ class ReverseTraversal:
                 seed_typespec=seed_typespec,
                 output_typespec=output_typespec,
             )
+            value_typespecs[seed_value_id] = dict(seed_typespec)
+        elif output_typespec is not None:
+            value_typespecs[seed_value_id] = dict(output_typespec)
 
         nodes = self._topological_sort(graph)
         upstream = GradientAccumulator(value_typespecs=value_typespecs)
@@ -62,6 +65,7 @@ class ReverseTraversal:
                 next_node_id=self._next_node_id,
             )
             derivative_nodes.extend(accumulation_nodes)
+            self._record_node_typespecs(value_typespecs, accumulation_nodes)
             if upstream_id is None:
                 continue
 
@@ -76,6 +80,7 @@ class ReverseTraversal:
                 )
             )
             derivative_nodes.extend(result.derivative_nodes)
+            self._record_node_typespecs(value_typespecs, result.derivative_nodes)
             for value_id, gradient_id in result.gradients.items():
                 upstream.add(value_id, gradient_id)
 
@@ -88,8 +93,13 @@ class ReverseTraversal:
                 next_node_id=self._next_node_id,
             )
             derivative_nodes.extend(accumulation_nodes)
-            if gradient_id is not None:
-                gradients[value_id] = gradient_id
+            self._record_node_typespecs(value_typespecs, accumulation_nodes)
+            if gradient_id is None:
+                raise AutodiffError(
+                    "missing_derivative_behavior",
+                    f"no derivative was computed for wrt value {value_id!r}",
+                )
+            gradients[value_id] = gradient_id
             ordered.append(gradient_id)
 
         return DerivativeProgram(
@@ -115,6 +125,16 @@ class ReverseTraversal:
             if node.output_typespec is not None:
                 typespecs[node.output_value_id] = dict(node.output_typespec)
         return typespecs
+
+
+    def _record_node_typespecs(
+        self,
+        value_typespecs: dict[str, dict[str, object]],
+        nodes: list[TensorNodeRecord],
+    ) -> None:
+        for node in nodes:
+            if node.output_typespec is not None:
+                value_typespecs[node.output_value_id] = dict(node.output_typespec)
 
     def _topological_sort(self, graph: TensorGraph) -> list[TensorNodeRecord]:
         produced_by = {node.output_value_id: node for node in graph.nodes}
