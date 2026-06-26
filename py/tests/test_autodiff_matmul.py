@@ -7,10 +7,11 @@ from __future__ import annotations
 import pytest
 
 from tinychain.autodiff import (
-    OP_BROADCAST_REDUCE,
-    OP_MATMUL,
-    OP_TRANSPOSE,
+    AddOperator,
     AutodiffError,
+    BroadcastReduceOperator,
+    MatmulOperator,
+    TransposeOperator,
     MatmulVjpRule,
     ReverseTraversal,
     TensorGraph,
@@ -33,7 +34,7 @@ def _matmul_graph(lhs_shape, rhs_shape, out_shape):
     node = TensorNodeRecord(
         node_id="n0",
         output_value_id="v2",
-        operator=OP_MATMUL,
+        operator=MatmulOperator(),
         op_params={},
         input_value_ids=["v0", "v1"],
         output_typespec=_typespec(out_shape),
@@ -65,6 +66,10 @@ def test_transpose_last_two_perm_rank4():
 
 # --- MatmulVjpRule unit tests ---
 
+def _operator_types(nodes):
+    return [type(node.operator) for node in nodes]
+
+
 def _make_context(lhs_shape, rhs_shape, out_shape, dz_id="dZ"):
     value_typespecs = {
         "v0": _typespec(lhs_shape),
@@ -74,7 +79,7 @@ def _make_context(lhs_shape, rhs_shape, out_shape, dz_id="dZ"):
     node = TensorNodeRecord(
         node_id="n0",
         output_value_id="v2",
-        operator=OP_MATMUL,
+        operator=MatmulOperator(),
         op_params={},
         input_value_ids=["v0", "v1"],
         output_typespec=_typespec(out_shape),
@@ -109,8 +114,7 @@ def test_matmul_vjp_rank2_exact_shapes():
 
     # dA = matmul(dZ, B^T), dB = matmul(A^T, dZ)
     # No broadcast reduction needed — no batch dims
-    ops = [n.operator for n in result.derivative_nodes]
-    assert ops == [OP_TRANSPOSE, OP_MATMUL, OP_TRANSPOSE, OP_MATMUL]
+    assert _operator_types(result.derivative_nodes) == [TransposeOperator, MatmulOperator, TransposeOperator, MatmulOperator]
 
     # B^T node: perm [1, 0], shape (5, 4)
     b_t_node = result.derivative_nodes[0]
@@ -142,8 +146,7 @@ def test_matmul_vjp_batched_no_broadcast():
     ctx = _make_context((2, 3, 4), (2, 4, 5), (2, 3, 5))
     result = MatmulVjpRule().apply(ctx)
 
-    ops = [n.operator for n in result.derivative_nodes]
-    assert ops == [OP_TRANSPOSE, OP_MATMUL, OP_TRANSPOSE, OP_MATMUL]
+    assert _operator_types(result.derivative_nodes) == [TransposeOperator, MatmulOperator, TransposeOperator, MatmulOperator]
 
     b_t_node = result.derivative_nodes[0]
     assert b_t_node.op_params["perm"] == [0, 2, 1]
@@ -170,12 +173,10 @@ def test_matmul_vjp_batched_with_batch_broadcast_reduction():
     ctx = _make_context((3, 4), (2, 4, 5), (2, 3, 5))
     result = MatmulVjpRule().apply(ctx)
 
-    ops = [n.operator for n in result.derivative_nodes]
-    # transpose B, matmul dA-intermediate, reduce dA, transpose A, matmul dB
-    assert ops == [OP_TRANSPOSE, OP_MATMUL, OP_BROADCAST_REDUCE, OP_TRANSPOSE, OP_MATMUL]
+    assert _operator_types(result.derivative_nodes) == [TransposeOperator, MatmulOperator, BroadcastReduceOperator, TransposeOperator, MatmulOperator]
 
     da_reduced = result.derivative_nodes[2]
-    assert da_reduced.operator == OP_BROADCAST_REDUCE
+    assert isinstance(da_reduced.operator, BroadcastReduceOperator)
     assert da_reduced.op_params["target_shape"] == [3, 4]
 
     assert result.gradients["v0"] == da_reduced.output_value_id
@@ -189,9 +190,7 @@ def test_matmul_vjp_both_operands_broadcast_reduced():
     ctx = _make_context((3, 4), (4, 5), (2, 3, 5))
     result = MatmulVjpRule().apply(ctx)
 
-    ops = [n.operator for n in result.derivative_nodes]
-    # transpose B, matmul dA-int, reduce dA, transpose A, matmul dB-int, reduce dB
-    assert ops == [OP_TRANSPOSE, OP_MATMUL, OP_BROADCAST_REDUCE, OP_TRANSPOSE, OP_MATMUL, OP_BROADCAST_REDUCE]
+    assert _operator_types(result.derivative_nodes) == [TransposeOperator, MatmulOperator, BroadcastReduceOperator, TransposeOperator, MatmulOperator, BroadcastReduceOperator]
 
     da_reduced = result.derivative_nodes[2]
     assert da_reduced.op_params["target_shape"] == [3, 4]
@@ -222,27 +221,26 @@ def test_transpose_node_has_correct_dtype_propagated():
         assert node.output_typespec.get("dtype") == "f32"
 
 
-# --- ReverseTraversal dispatches OP_MATMUL ---
+# --- ReverseTraversal dispatches MatmulOperator ---
 
 def test_reverse_traversal_matmul_rank2():
     graph = _matmul_graph((3, 4), (4, 5), (3, 5))
     program = generate(graph, "v2", ["v0", "v1"], "seed")
 
     # No batch broadcast → 4 derivative nodes (2 transposes + 2 matmuls)
-    ops = [n.operator for n in program.nodes]
-    assert OP_TRANSPOSE in ops
-    assert OP_MATMUL in ops
+    operator_types = _operator_types(program.nodes)
+    assert TransposeOperator in operator_types
+    assert MatmulOperator in operator_types
     assert program.gradients["v0"] is not None
     assert program.gradients["v1"] is not None
 
 
 def test_reverse_traversal_matmul_does_not_break_add_path():
-    from tinychain.autodiff.graph import OP_ADD
     add_graph = TensorGraph(
         nodes=[TensorNodeRecord(
             node_id="n0",
             output_value_id="v2",
-            operator=OP_ADD,
+            operator=AddOperator(),
             op_params={},
             input_value_ids=["v0", "v1"],
             output_typespec=_typespec((2, 3)),

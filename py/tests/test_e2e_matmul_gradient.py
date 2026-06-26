@@ -13,7 +13,7 @@ import pytest
 
 from tinychain.autodiff import (
     ExecutionScheduler,
-    OP_MATMUL,
+    MatmulOperator,
     TensorGraph,
     TensorNodeRecord,
     generate,
@@ -29,7 +29,7 @@ def _matmul_graph(lhs_shape, rhs_shape, out_shape):
     node = TensorNodeRecord(
         node_id="n0",
         output_value_id="v2",
-        operator=OP_MATMUL,
+        operator=MatmulOperator(),
         op_params={},
         input_value_ids=["v0", "v1"],
         output_typespec=_typespec(out_shape),
@@ -61,6 +61,29 @@ def test_e2e_matmul_gradient_rank2(tc_server_url, tc_autodiff_route_root):
     da, db = result.gradients
     np.testing.assert_allclose(np.asarray(da), 2.0 * np.ones(a_shape, dtype=np.float32), rtol=1e-5)
     np.testing.assert_allclose(np.asarray(db), 2.0 * np.ones(b_shape, dtype=np.float32), rtol=1e-5)
+
+
+def test_e2e_matmul_gradient_single_wrt_fixed_rhs(tc_server_url, tc_autodiff_route_root):
+    """A fixed runtime rhs is available to VJP execution but is not differentiated.
+
+    This covers a non-wrt graph input, not a literal constant captured by
+    TensorGraphBuilder.
+    """
+    a_shape, b_shape, z_shape = (2, 3), (3, 2), (2, 2)
+    graph = _matmul_graph(a_shape, b_shape, z_shape)
+    program = generate(graph, "v2", ["v0"], "seed", seed_typespec=_typespec(z_shape))
+
+    a = TensorLiteral.from_numpy(np.ones(a_shape, dtype=np.float32))
+    b = TensorLiteral.from_numpy(np.ones(b_shape, dtype=np.float32))
+    seed = TensorLiteral.from_numpy(np.ones(z_shape, dtype=np.float32))
+
+    dispatcher = TcServerDispatcher(tc_server_url, route_root=tc_autodiff_route_root)
+    result = ExecutionScheduler(dispatcher).execute(program, values={"v0": a, "v1": b, "seed": seed})
+
+    assert set(program.gradients) == {"v0"}
+    assert len(result.gradients) == 1
+    (da,) = result.gradients
+    np.testing.assert_allclose(np.asarray(da), 2.0 * np.ones(a_shape, dtype=np.float32), rtol=1e-5)
 
 
 def test_e2e_matmul_gradient_rank3_no_broadcast(tc_server_url, tc_autodiff_route_root):

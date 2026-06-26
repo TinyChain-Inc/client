@@ -15,7 +15,7 @@ from ..scalar import (
     autobox,
     tcref_form_of,
 )
-from ...autodiff.graph import OP_ADD, OP_MATMUL, OP_TRANSPOSE, TensorNodeRecord, get_active_builder
+from ...autodiff.graph import AddOperator, MatmulOperator, TensorNodeRecord, TransposeOperator, get_active_builder
 from ._common import infer_broadcast_axes, normalize_permutation, normalize_shape, params, reduce_args
 from ._wire import encode_view_schema
 from .backend import TensorBackend, TensorWireTensorBackend
@@ -292,7 +292,7 @@ class Tensor(Comparable):
             _builder.record(TensorNodeRecord(
                 node_id=_builder._next_node_id(),
                 output_value_id=out_vid,
-                operator=OP_TRANSPOSE,
+                operator=TransposeOperator(),
                 op_params={"perm": perm_list},
                 input_value_ids=[in_vid],
             ))
@@ -351,7 +351,7 @@ class Tensor(Comparable):
             _builder.record(TensorNodeRecord(
                 node_id=_builder._next_node_id(),
                 output_value_id=out_vid,
-                operator=OP_MATMUL,
+                operator=MatmulOperator(),
                 op_params={},
                 input_value_ids=[lhs_vid, rhs_vid],
             ))
@@ -394,7 +394,7 @@ class Tensor(Comparable):
             _builder.record(TensorNodeRecord(
                 node_id=_builder._next_node_id(),
                 output_value_id=out_vid,
-                operator=OP_ADD,
+                operator=AddOperator(),
                 op_params={},
                 input_value_ids=[lhs_vid, rhs_vid],
             ))

@@ -36,20 +36,16 @@ class TransposeOperator(TensorOperator):
         object.__setattr__(self, "route_name", "transpose")
 
 
-OP_ADD: AddOperator = AddOperator()
-OP_BROADCAST_REDUCE: BroadcastReduceOperator = BroadcastReduceOperator()
-OP_MATMUL: MatmulOperator = MatmulOperator()
-OP_TRANSPOSE: TransposeOperator = TransposeOperator()
-_OPERATORS_BY_ROUTE: dict[str, TensorOperator] = {
-    OP_ADD.route_name: OP_ADD,
-    OP_BROADCAST_REDUCE.route_name: OP_BROADCAST_REDUCE,
-    OP_MATMUL.route_name: OP_MATMUL,
-    OP_TRANSPOSE.route_name: OP_TRANSPOSE,
+_OPERATOR_TYPES_BY_ROUTE: dict[str, type[TensorOperator]] = {
+    "add": AddOperator,
+    "broadcast_reduce": BroadcastReduceOperator,
+    "matmul": MatmulOperator,
+    "transpose": TransposeOperator,
 }
 
 
 def operator_for_route(route_name: str) -> TensorOperator:
-    return _OPERATORS_BY_ROUTE[route_name]
+    return _OPERATOR_TYPES_BY_ROUTE[route_name]()
 
 _active_builder: contextvars.ContextVar[Optional[TensorGraphBuilder]] = contextvars.ContextVar(
     "_active_builder", default=None

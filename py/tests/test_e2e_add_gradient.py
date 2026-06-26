@@ -12,8 +12,8 @@ import numpy as np
 import pytest
 
 from tinychain.autodiff import (
+    AddOperator,
     ExecutionScheduler,
-    OP_ADD,
     TensorGraph,
     TensorNodeRecord,
     generate,
@@ -29,7 +29,7 @@ def _add_graph(lhs_shape, rhs_shape, out_shape):
     node = TensorNodeRecord(
         node_id="n0",
         output_value_id="v2",
-        operator=OP_ADD,
+        operator=AddOperator(),
         op_params={},
         input_value_ids=["v0", "v1"],
         output_typespec=_typespec(out_shape),

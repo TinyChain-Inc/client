@@ -5,7 +5,7 @@ import json
 import numpy as np
 import pytest
 
-from tinychain.autodiff import OP_ADD, OP_BROADCAST_REDUCE, TensorNodeRecord, TensorOperator
+from tinychain.autodiff import AddOperator, BroadcastReduceOperator, TensorNodeRecord, TensorOperator
 from tinychain.autodiff.http_dispatcher import TcServerDispatcher, TensorLiteral
 from tinychain.autodiff.protocol import AutodiffError
 
@@ -37,7 +37,7 @@ def test_dispatcher_calls_installed_opdef_route(monkeypatch):
     node = TensorNodeRecord(
         node_id="n0",
         output_value_id="v2",
-        operator=OP_ADD,
+        operator=AddOperator(),
         op_params={},
         input_value_ids=["v0", "v1"],
     )
@@ -69,7 +69,7 @@ def test_dispatcher_calls_installed_broadcast_reduce_route(monkeypatch):
     node = TensorNodeRecord(
         node_id="dn0",
         output_value_id="dv0",
-        operator=OP_BROADCAST_REDUCE,
+        operator=BroadcastReduceOperator(),
         op_params={"target_shape": [1, 3]},
         input_value_ids=["seed"],
     )
@@ -105,7 +105,7 @@ def test_dispatcher_requires_preencoded_tensor_literals():
     node = TensorNodeRecord(
         node_id="n0",
         output_value_id="v2",
-        operator=OP_ADD,
+        operator=AddOperator(),
         op_params={},
         input_value_ids=["v0", "v1"],
     )

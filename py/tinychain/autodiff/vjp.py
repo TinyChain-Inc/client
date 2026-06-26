@@ -5,14 +5,12 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from .graph import (
-    OP_ADD,
-    OP_BROADCAST_REDUCE,
-    OP_MATMUL,
-    OP_TRANSPOSE,
     AddOperator,
+    BroadcastReduceOperator,
     MatmulOperator,
     TensorNodeRecord,
     TensorOperator,
+    TransposeOperator,
 )
 from .protocol import AutodiffError
 from .seed import typespec_shape
@@ -124,7 +122,7 @@ class AddVjpRule:
                     TensorNodeRecord(
                         node_id=context.next_node_id(),
                         output_value_id=gradient_id,
-                        operator=OP_BROADCAST_REDUCE,
+                        operator=BroadcastReduceOperator(),
                         op_params={
                             "target_shape": list(plan.operand_shape),
                         },
@@ -189,7 +187,7 @@ class MatmulVjpRule:
         derivative_nodes.append(TensorNodeRecord(
             node_id=context.next_node_id(),
             output_value_id=b_t_id,
-            operator=OP_TRANSPOSE,
+            operator=TransposeOperator(),
             op_params={"perm": _transpose_last_two_perm(len(rhs_shape))},
             input_value_ids=[rhs_id],
             output_typespec=b_t_typespec,
@@ -203,7 +201,7 @@ class MatmulVjpRule:
         derivative_nodes.append(TensorNodeRecord(
             node_id=context.next_node_id(),
             output_value_id=da_id,
-            operator=OP_MATMUL,
+            operator=MatmulOperator(),
             op_params={},
             input_value_ids=[dz_id, b_t_id],
             output_typespec=da_typespec,
@@ -215,7 +213,7 @@ class MatmulVjpRule:
             derivative_nodes.append(TensorNodeRecord(
                 node_id=context.next_node_id(),
                 output_value_id=da_reduced_id,
-                operator=OP_BROADCAST_REDUCE,
+                operator=BroadcastReduceOperator(),
                 op_params={"target_shape": list(lhs_shape)},
                 input_value_ids=[da_id],
                 output_typespec=lhs_typespec,
@@ -233,7 +231,7 @@ class MatmulVjpRule:
         derivative_nodes.append(TensorNodeRecord(
             node_id=context.next_node_id(),
             output_value_id=a_t_id,
-            operator=OP_TRANSPOSE,
+            operator=TransposeOperator(),
             op_params={"perm": _transpose_last_two_perm(len(lhs_shape))},
             input_value_ids=[lhs_id],
             output_typespec=a_t_typespec,
@@ -247,7 +245,7 @@ class MatmulVjpRule:
         derivative_nodes.append(TensorNodeRecord(
             node_id=context.next_node_id(),
             output_value_id=db_id,
-            operator=OP_MATMUL,
+            operator=MatmulOperator(),
             op_params={},
             input_value_ids=[a_t_id, dz_id],
             output_typespec=db_typespec,
@@ -259,7 +257,7 @@ class MatmulVjpRule:
             derivative_nodes.append(TensorNodeRecord(
                 node_id=context.next_node_id(),
                 output_value_id=db_reduced_id,
-                operator=OP_BROADCAST_REDUCE,
+                operator=BroadcastReduceOperator(),
                 op_params={"target_shape": list(rhs_shape)},
                 input_value_ids=[db_id],
                 output_typespec=rhs_typespec,

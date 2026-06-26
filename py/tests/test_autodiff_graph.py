@@ -1,15 +1,16 @@
 import pytest
 import tinychain as tc
 from tinychain.autodiff import (
-    OP_ADD,
-    OP_BROADCAST_REDUCE,
-    OP_MATMUL,
-    OP_TRANSPOSE,
+    AddOperator,
+    BroadcastReduceOperator,
+    MatmulOperator,
     TensorGraph,
+    TransposeOperator,
     TensorGraphBuilder,
     TensorNodeRecord,
     get_active_builder,
 )
+from tinychain.autodiff.graph import operator_for_route
 
 
 def _make_tensor(name: str) -> tc.Tensor:
@@ -45,14 +46,28 @@ def rhs():
     return _make_tensor("rhs")
 
 
-@pytest.mark.parametrize("operator,expected", [
-    (OP_ADD, "add"),
-    (OP_BROADCAST_REDUCE, "broadcast_reduce"),
-    (OP_MATMUL, "matmul"),
-    (OP_TRANSPOSE, "transpose"),
+@pytest.mark.parametrize(("operator_type", "expected"), [
+    (AddOperator, "add"),
+    (BroadcastReduceOperator, "broadcast_reduce"),
+    (MatmulOperator, "matmul"),
+    (TransposeOperator, "transpose"),
 ])
-def test_operator_route_name(operator, expected):
-    assert operator.route_name == expected
+def test_operator_route_name(operator_type, expected):
+    assert operator_type().route_name == expected
+
+
+@pytest.mark.parametrize(("route_name", "operator_type"), [
+    ("add", AddOperator),
+    ("broadcast_reduce", BroadcastReduceOperator),
+    ("matmul", MatmulOperator),
+    ("transpose", TransposeOperator),
+])
+def test_operator_for_route_creates_fresh_instance(route_name, operator_type):
+    first = operator_for_route(route_name)
+    second = operator_for_route(route_name)
+
+    assert isinstance(first, operator_type)
+    assert first is not second
 
 
 class TestBuilderContext:
@@ -84,7 +99,7 @@ class TestAddRecording:
         graph = builder.build()
         assert len(graph.nodes) == 1
         node = graph.nodes[0]
-        assert node.operator == OP_ADD
+        assert isinstance(node.operator, AddOperator)
         assert node.op_params == {}
         assert len(node.input_value_ids) == 2
 
@@ -124,7 +139,7 @@ class TestMatmulRecording:
         graph = builder.build()
         assert len(graph.nodes) == 1
         node = graph.nodes[0]
-        assert node.operator == OP_MATMUL
+        assert isinstance(node.operator, MatmulOperator)
         assert len(node.input_value_ids) == 2
 
     def test_matmul_assigns_distinct_value_ids(self, lhs, rhs):
@@ -148,7 +163,7 @@ class TestTransposeRecording:
         graph = builder.build()
         assert len(graph.nodes) == 1
         node = graph.nodes[0]
-        assert node.operator == OP_TRANSPOSE
+        assert isinstance(node.operator, TransposeOperator)
         assert node.op_params == {"perm": [1, 0]}
         assert len(node.input_value_ids) == 1
 
@@ -171,8 +186,21 @@ class TestMultiNodeGraph:
 
         graph = builder.build()
         assert len(graph.nodes) == 2
-        assert graph.nodes[0].operator == OP_ADD
-        assert graph.nodes[1].operator == OP_MATMUL
+        assert isinstance(graph.nodes[0].operator, AddOperator)
+        assert isinstance(graph.nodes[1].operator, MatmulOperator)
+
+    def test_chained_matmul_then_transpose_records_data_flow(self, lhs, rhs):
+        with tc.state.scoped_context():
+            with TensorGraphBuilder() as builder:
+                result = (lhs @ rhs).transpose([1, 0])
+
+        graph = builder.build()
+        matmul, transpose = graph.nodes
+        assert isinstance(matmul.operator, MatmulOperator)
+        assert isinstance(transpose.operator, TransposeOperator)
+        assert transpose.input_value_ids == [matmul.output_value_id]
+        assert graph.outputs == [transpose.output_value_id]
+        assert result is not None
 
     def test_shared_input_registered_once(self, x, y, w):
         with TensorGraphBuilder() as builder:
