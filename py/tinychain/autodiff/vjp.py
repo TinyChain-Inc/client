@@ -146,6 +146,8 @@ def _transpose_last_two_perm(rank: int) -> list[int]:
 
 
 class MatmulVjpRule:
+    """Build `dA = dZ @ B^T` and `dB = A^T @ dZ`, reducing broadcast batches."""
+
     operator_type = MatmulOperator
 
     def __init__(self, planner: BroadcastReductionPlanner | None = None) -> None:

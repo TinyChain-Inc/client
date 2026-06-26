@@ -259,4 +259,4 @@ def test_reverse_traversal_matmul_single_wrt():
     assert "v1" not in program.gradients
 
 
-# E2e matmul gradient tests live in test_e2e_matmul_gradient.py.
+# Transport-neutral numerical matmul tests live in test_execution_matmul_gradient.py.

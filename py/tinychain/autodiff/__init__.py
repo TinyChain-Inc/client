@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from .accumulate import GradientAccumulator
 from .executor import ExecutionScheduler
-from .http_dispatcher import TcServerDispatcher, TensorLiteral
 from .graph import (
     AddOperator,
     BroadcastReduceOperator,
@@ -69,8 +68,6 @@ __all__ = [
     "MatmulVjpRule",
     "ReverseTraversal",
     "SeedValidator",
-    "TcServerDispatcher",
-    "TensorLiteral",
     "TensorGraph",
     "TensorOperator",
     "TransposeOperator",
