@@ -3,6 +3,8 @@ name = "tinychain-local"
 version = "0.1.0"
 edition = "2024"
 
+[workspace]
+
 [lib]
 name = "tinychain_local"
 crate-type = ["cdylib"]
