@@ -10,7 +10,6 @@ from tinychain.autodiff import (
     TensorNodeRecord,
     get_active_builder,
 )
-from tinychain.autodiff.graph import operator_for_route
 
 
 def _make_tensor(name: str) -> tc.Tensor:
@@ -56,18 +55,15 @@ def test_operator_route_name(operator_type, expected):
     assert operator_type().route_name == expected
 
 
-@pytest.mark.parametrize(("route_name", "operator_type"), [
-    ("add", AddOperator),
-    ("broadcast_reduce", BroadcastReduceOperator),
-    ("matmul", MatmulOperator),
-    ("transpose", TransposeOperator),
-])
-def test_operator_for_route_creates_fresh_instance(route_name, operator_type):
-    first = operator_for_route(route_name)
-    second = operator_for_route(route_name)
-
-    assert isinstance(first, operator_type)
-    assert first is not second
+def test_tensor_node_requires_operator_instance():
+    with pytest.raises(TypeError, match="TensorOperator"):
+        TensorNodeRecord(
+            node_id="n0",
+            output_value_id="v1",
+            operator="add",
+            op_params={},
+            input_value_ids=["v0"],
+        )
 
 
 class TestBuilderContext:

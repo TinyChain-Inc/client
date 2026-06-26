@@ -36,17 +36,6 @@ class TransposeOperator(TensorOperator):
         object.__setattr__(self, "route_name", "transpose")
 
 
-_OPERATOR_TYPES_BY_ROUTE: dict[str, type[TensorOperator]] = {
-    "add": AddOperator,
-    "broadcast_reduce": BroadcastReduceOperator,
-    "matmul": MatmulOperator,
-    "transpose": TransposeOperator,
-}
-
-
-def operator_for_route(route_name: str) -> TensorOperator:
-    return _OPERATOR_TYPES_BY_ROUTE[route_name]()
-
 _active_builder: contextvars.ContextVar[Optional[TensorGraphBuilder]] = contextvars.ContextVar(
     "_active_builder", default=None
 )
@@ -72,28 +61,20 @@ class TensorNodeRecord:
         *,
         node_id: str,
         output_value_id: str,
-        operator: TensorOperator | str | None = None,
+        operator: TensorOperator,
         op_params: dict,
         input_value_ids: list[str],
         output_typespec: Optional[dict] = None,
-        op_kind: TensorOperator | str | None = None,
     ) -> None:
-        selected = operator if operator is not None else op_kind
-        if selected is None:
-            raise TypeError("TensorNodeRecord requires an operator")
-        if isinstance(selected, str):
-            selected = operator_for_route(selected)
+        if not isinstance(operator, TensorOperator):
+            raise TypeError("TensorNodeRecord operator must be a TensorOperator")
 
         object.__setattr__(self, "node_id", node_id)
         object.__setattr__(self, "output_value_id", output_value_id)
-        object.__setattr__(self, "operator", selected)
+        object.__setattr__(self, "operator", operator)
         object.__setattr__(self, "op_params", op_params)
         object.__setattr__(self, "input_value_ids", input_value_ids)
         object.__setattr__(self, "output_typespec", output_typespec)
-
-    @property
-    def op_kind(self) -> str:
-        return self.operator.route_name
 
 
 @dataclass(frozen=True)
