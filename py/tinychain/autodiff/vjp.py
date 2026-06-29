@@ -4,7 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
-from .graph import OP_ADD, OP_BROADCAST_REDUCE, AddOperator, TensorNodeRecord, TensorOperator
+from .graph import AddOperator, BroadcastReduceOperator, TensorNodeRecord, TensorOperator
 from .protocol import AutodiffError
 from .seed import typespec_shape
 
@@ -115,7 +115,7 @@ class AddVjpRule:
                     TensorNodeRecord(
                         node_id=context.next_node_id(),
                         output_value_id=gradient_id,
-                        operator=OP_BROADCAST_REDUCE,
+                        operator=BroadcastReduceOperator(),
                         op_params={
                             "target_shape": list(plan.operand_shape),
                         },

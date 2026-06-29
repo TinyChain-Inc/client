@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .graph import OP_ADD, TensorNodeRecord
+from .graph import AddOperator, TensorNodeRecord
 from .protocol import AutodiffError
 from .seed import typespec_shape
 
@@ -38,7 +38,7 @@ class GradientAccumulator:
                 TensorNodeRecord(
                     node_id=next_node_id(),
                     output_value_id=current,
-                    operator=OP_ADD,
+                    operator=AddOperator(),
                     op_params={},
                     input_value_ids=[previous, contribution],
                     output_typespec=self.value_typespecs.get(value_id),
