@@ -126,7 +126,6 @@ class ReverseTraversal:
                 typespecs[node.output_value_id] = dict(node.output_typespec)
         return typespecs
 
-
     def _record_node_typespecs(
         self,
         value_typespecs: dict[str, dict[str, object]],
