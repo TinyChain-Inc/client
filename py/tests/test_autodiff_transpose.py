@@ -101,6 +101,7 @@ def _transpose_context(perm, *, input_shape=(2, 3, 4), output_shape=(4, 2, 3)):
             "v1": _typespec(output_shape, "f64"),
             "dZ": _typespec(output_shape, "f64"),
         },
+        needed_input_value_ids=frozenset({"v0"}),
         next_value_id=_counter("dv"),
         next_node_id=_counter("dn"),
     )
@@ -135,6 +136,7 @@ def test_transpose_vjp_invalid_permutation_errors(perm):
         upstream_value_id=ctx.upstream_value_id,
         node=bad_node,
         value_typespecs=ctx.value_typespecs,
+        needed_input_value_ids=ctx.needed_input_value_ids,
         next_value_id=ctx.next_value_id,
         next_node_id=ctx.next_node_id,
     )
