@@ -4,10 +4,37 @@ import contextvars
 from dataclasses import dataclass, field
 from typing import Optional
 
-OP_ADD: str = "add"
-OP_BROADCAST_REDUCE: str = "broadcast_reduce"
-OP_MATMUL: str = "matmul"
-OP_TRANSPOSE: str = "transpose"
+
+@dataclass(frozen=True)
+class TensorOperator:
+    """Base tensor operator descriptor used by Python-owned autodiff graphs."""
+
+    route_name: str
+
+
+@dataclass(frozen=True)
+class AddOperator(TensorOperator):
+    def __init__(self) -> None:
+        object.__setattr__(self, "route_name", "add")
+
+
+@dataclass(frozen=True)
+class BroadcastReduceOperator(TensorOperator):
+    def __init__(self) -> None:
+        object.__setattr__(self, "route_name", "broadcast_reduce")
+
+
+@dataclass(frozen=True)
+class MatmulOperator(TensorOperator):
+    def __init__(self) -> None:
+        object.__setattr__(self, "route_name", "matmul")
+
+
+@dataclass(frozen=True)
+class TransposeOperator(TensorOperator):
+    def __init__(self) -> None:
+        object.__setattr__(self, "route_name", "transpose")
+
 
 _active_builder: contextvars.ContextVar[Optional[TensorGraphBuilder]] = contextvars.ContextVar(
     "_active_builder", default=None
@@ -18,16 +45,36 @@ def get_active_builder() -> Optional[TensorGraphBuilder]:
     return _active_builder.get()
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class TensorNodeRecord:
     """Single recorded computation step captured by TensorGraphBuilder."""
 
     node_id: str
     output_value_id: str
-    op_kind: str
+    operator: TensorOperator
     op_params: dict
     input_value_ids: list[str]
     output_typespec: Optional[dict] = None
+
+    def __init__(
+        self,
+        *,
+        node_id: str,
+        output_value_id: str,
+        operator: TensorOperator,
+        op_params: dict,
+        input_value_ids: list[str],
+        output_typespec: Optional[dict] = None,
+    ) -> None:
+        if not isinstance(operator, TensorOperator):
+            raise TypeError("TensorNodeRecord operator must be a TensorOperator")
+
+        object.__setattr__(self, "node_id", node_id)
+        object.__setattr__(self, "output_value_id", output_value_id)
+        object.__setattr__(self, "operator", operator)
+        object.__setattr__(self, "op_params", op_params)
+        object.__setattr__(self, "input_value_ids", input_value_ids)
+        object.__setattr__(self, "output_typespec", output_typespec)
 
 
 @dataclass(frozen=True)
@@ -54,6 +101,8 @@ class TensorGraphBuilder:
         self._value_map: dict[int, str] = {}
         self._token: Optional[contextvars.Token[Optional[TensorGraphBuilder]]] = None
 
+    # TODO(issue-13-followup): introduce scoped opaque NodeId/ValueId namespaces
+    # to prevent accidental cross-graph/context id reuse.
     def _next_value_id(self) -> str:
         return f"v{len(self._value_map)}"
 

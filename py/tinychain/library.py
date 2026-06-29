@@ -354,21 +354,21 @@ _AUTODIFF_GRAD_ROUTE = _uri("lib", "std", "autodiff", "0.1.0", "grad").path
 
 def _normalize_wrt(wrt: object) -> list[str]:
     if wrt is None:
-        raise TypeError("tc.grad requires `wrt` names")
+        raise TypeError("tc.grad requires `wrt` value ids")
 
     if isinstance(wrt, str):
         names = [wrt]
     elif isinstance(wrt, (list, tuple)):
         names = list(wrt)
     else:
-        raise TypeError("tc.grad `wrt` must be a string or sequence of strings")
+        raise TypeError("tc.grad `wrt` must be a value id string or sequence of value id strings")
 
     if not names:
         raise TypeError("tc.grad `wrt` must not be empty")
 
     for name in names:
         if not isinstance(name, str) or not name:
-            raise TypeError("tc.grad `wrt` entries must be non-empty strings")
+            raise TypeError("tc.grad `wrt` entries must be non-empty value id strings")
 
     return names
 
@@ -405,29 +405,45 @@ def _try_grad_target_view_wire(target: object) -> object | None:
         return None
 
 
-def grad(target: object, *, wrt: object = None) -> object:
-    """Reserved experimental stub for the runtime autodiff transform.
+def grad(
+    target: object,
+    *,
+    wrt: object = None,
+    seed: str = "seed",
+    output_value_id: str | None = None,
+    seed_typespec: dict[str, object] | None = None,
+) -> object:
+    """Generate a derivative program for Python-owned TensorGraph targets.
 
-    Constructs a deferred call to the ``std.autodiff.grad`` route. This stub
-    is intentionally shaped like JAX's call-site transform API.
-
-    **Non-functional until derivative IR generation is implemented.**
-    The ``std.autodiff.grad`` route raises ``autodiff_not_implemented`` when
-    executed. Do not use this in production until T-04 (client VJP engine) is
-    complete and the route is replaced with a real derivative IR transform.
+    The Phase 1 engine operates on ``tinychain.autodiff.TensorGraph`` records.
+    Other call-site forms fail clearly until route tracing/final API work lands.
     """
 
-    payload_key, payload_value = _grad_payload_target(target)
-    payload = {
-        payload_key: payload_value,
-        "wrt": tuple(_normalize_wrt(wrt)),
-    }
+    from .autodiff import AutodiffError, TensorGraph, generate
 
-    target_view = _try_grad_target_view_wire(target)
-    if target_view is not None:
-        payload["target_view"] = target_view
+    if callable(target) and wrt is None:
+        raise TypeError("tc.grad is a call-site transform and cannot be used as a route decorator")
 
-    return Scalar(ref=TCRef(PostOpRef(_AUTODIFF_GRAD_ROUTE, payload)))
+    if isinstance(target, TensorGraph):
+        if wrt is None:
+            raise TypeError("tc.grad requires wrt for TensorGraph targets")
+        selected_output = output_value_id
+        if selected_output is None:
+            if not target.outputs:
+                raise AutodiffError("malformed_derivative_ir", "TensorGraph has no outputs")
+            selected_output = target.outputs[0]
+        return generate(
+            target,
+            selected_output,
+            list(_normalize_wrt(wrt)),
+            seed,
+            seed_typespec=seed_typespec,
+        )
+
+    raise AutodiffError(
+        "autodiff_not_implemented",
+        "tc.grad currently requires a Python-owned TensorGraph target",
+    )
 
 
 def _capture_source(form: Callable[..., Any]) -> str | None:
