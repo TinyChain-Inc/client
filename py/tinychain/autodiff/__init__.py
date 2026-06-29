@@ -22,7 +22,7 @@ from .protocol import (
 )
 from .reverse import DerivativeProgram, ReverseTraversal
 from .seed import SeedValidator
-from .vjp import AddVjpRule, BroadcastReductionPlanner, MatmulVjpRule, VjpRegistry
+from .vjp import AddVjpRule, BroadcastReductionPlanner, MatmulVjpRule, TransposeVjpRule, VjpRegistry
 
 
 def generate(
@@ -76,6 +76,7 @@ __all__ = [
     "TensorGraph",
     "TensorOperator",
     "TransposeOperator",
+    "TransposeVjpRule",
     "TensorGraphBuilder",
     "TensorNodeRecord",
     "VjpRegistry",
