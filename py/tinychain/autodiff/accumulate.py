@@ -27,6 +27,7 @@ class GradientAccumulator:
         normalized: list[str] = []
         nodes: list[TensorNodeRecord] = []
 
+        # Sorted lexicographically for deterministic accumulation order, not numeric id order.
         for contribution in sorted(contributions):
             normalized_id, reduction_nodes = self._normalize_contribution(
                 contribution,

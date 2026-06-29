@@ -4,7 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from .graph import TensorNodeRecord
-from .protocol import AutodiffResult
+from .protocol import AutodiffError, AutodiffResult
 from .reverse import DerivativeProgram
 
 
@@ -30,11 +30,25 @@ class ExecutionScheduler:
     ) -> AutodiffResult:
         environment = dict(values)
         for node in program.nodes:
-            args = [environment[value_id] for value_id in node.input_value_ids]
+            args = []
+            for value_id in node.input_value_ids:
+                if value_id not in environment:
+                    raise AutodiffError(
+                        "missing_derivative_ir",
+                        f"missing input value {value_id!r} for node {node.node_id!r}",
+                    )
+                args.append(environment[value_id])
             environment[node.output_value_id] = self.dispatch(node, args)
 
-        gradients = [
-            environment[gradient_id] if gradient_id is not None else None
-            for gradient_id in program.output_gradients
-        ]
+        gradients = []
+        for gradient_id in program.output_gradients:
+            if gradient_id is None:
+                gradients.append(None)
+            elif gradient_id not in environment:
+                raise AutodiffError(
+                    "missing_derivative_ir",
+                    f"missing output-gradient value {gradient_id!r}",
+                )
+            else:
+                gradients.append(environment[gradient_id])
         return AutodiffResult(gradients=gradients, metadata=program.metadata)
