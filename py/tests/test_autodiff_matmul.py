@@ -16,6 +16,7 @@ from tinychain.autodiff import (
     ReverseTraversal,
     TensorGraph,
     TensorNodeRecord,
+    TensorOperator,
     generate,
 )
 from tinychain.autodiff.vjp import (
@@ -70,7 +71,7 @@ def _operator_types(nodes):
     return [type(node.operator) for node in nodes]
 
 
-def _make_context(lhs_shape, rhs_shape, out_shape, dz_id="dZ"):
+def _make_context(lhs_shape, rhs_shape, out_shape, dz_id="dZ", needed_input_value_ids=None):
     value_typespecs = {
         "v0": _typespec(lhs_shape),
         "v1": _typespec(rhs_shape),
@@ -102,6 +103,7 @@ def _make_context(lhs_shape, rhs_shape, out_shape, dz_id="dZ"):
         upstream_value_id=dz_id,
         node=node,
         value_typespecs=value_typespecs,
+        needed_input_value_ids=frozenset({"v0", "v1"} if needed_input_value_ids is None else needed_input_value_ids),
         next_value_id=nv,
         next_node_id=nn,
     )
@@ -221,6 +223,34 @@ def test_transpose_node_has_correct_dtype_propagated():
         assert node.output_typespec.get("dtype") == "f32"
 
 
+def test_matmul_vjp_only_lhs_needed_emits_lhs_branch():
+    ctx = _make_context((3, 4), (4, 5), (3, 5), needed_input_value_ids={"v0"})
+    result = MatmulVjpRule().apply(ctx)
+
+    assert set(result.gradients) == {"v0"}
+    assert _operator_types(result.derivative_nodes) == [TransposeOperator, MatmulOperator]
+    assert result.derivative_nodes[0].input_value_ids == ["v1"]
+    assert result.derivative_nodes[1].input_value_ids == ["dZ", result.derivative_nodes[0].output_value_id]
+
+
+def test_matmul_vjp_only_rhs_needed_emits_rhs_branch():
+    ctx = _make_context((3, 4), (4, 5), (3, 5), needed_input_value_ids={"v1"})
+    result = MatmulVjpRule().apply(ctx)
+
+    assert set(result.gradients) == {"v1"}
+    assert _operator_types(result.derivative_nodes) == [TransposeOperator, MatmulOperator]
+    assert result.derivative_nodes[0].input_value_ids == ["v0"]
+    assert result.derivative_nodes[1].input_value_ids == [result.derivative_nodes[0].output_value_id, "dZ"]
+
+
+def test_matmul_vjp_no_needed_inputs_emits_nothing():
+    ctx = _make_context((3, 4), (4, 5), (3, 5), needed_input_value_ids=set())
+    result = MatmulVjpRule().apply(ctx)
+
+    assert result.gradients == {}
+    assert result.derivative_nodes == []
+
+
 # --- ReverseTraversal dispatches MatmulOperator ---
 
 def test_reverse_traversal_matmul_rank2():
@@ -252,11 +282,55 @@ def test_reverse_traversal_matmul_does_not_break_add_path():
     assert program.output_gradients == ["seed", "seed"]
 
 
-def test_reverse_traversal_matmul_single_wrt():
+def test_reverse_traversal_matmul_single_wrt_lhs_emits_only_lhs_branch():
     graph = _matmul_graph((3, 4), (4, 5), (3, 5))
     program = generate(graph, "v2", ["v0"], "seed")
-    assert "v0" in program.gradients
-    assert "v1" not in program.gradients
+
+    assert set(program.gradients) == {"v0"}
+    assert _operator_types(program.nodes) == [TransposeOperator, MatmulOperator]
+    assert program.nodes[0].input_value_ids == ["v1"]
+    assert program.nodes[1].input_value_ids == ["seed", program.nodes[0].output_value_id]
+
+
+def test_reverse_traversal_matmul_single_wrt_rhs_emits_only_rhs_branch():
+    graph = _matmul_graph((3, 4), (4, 5), (3, 5))
+    program = generate(graph, "v2", ["v1"], "seed")
+
+    assert set(program.gradients) == {"v1"}
+    assert _operator_types(program.nodes) == [TransposeOperator, MatmulOperator]
+    assert program.nodes[0].input_value_ids == ["v0"]
+    assert program.nodes[1].input_value_ids == [program.nodes[0].output_value_id, "seed"]
+
+
+def test_reverse_traversal_matmul_skips_unsupported_non_wrt_producer():
+    graph = TensorGraph(
+        nodes=[
+            TensorNodeRecord(
+                node_id="n0",
+                output_value_id="v0",
+                operator=TensorOperator("constant"),
+                op_params={},
+                input_value_ids=[],
+                output_typespec=_typespec((3, 4)),
+            ),
+            TensorNodeRecord(
+                node_id="n1",
+                output_value_id="v2",
+                operator=MatmulOperator(),
+                op_params={},
+                input_value_ids=["v0", "v1"],
+                output_typespec=_typespec((3, 5)),
+            ),
+        ],
+        inputs=[("v1", _typespec((4, 5)))],
+        outputs=["v2"],
+    )
+
+    program = generate(graph, "v2", ["v1"], "seed")
+
+    assert set(program.gradients) == {"v1"}
+    assert _operator_types(program.nodes) == [TransposeOperator, MatmulOperator]
+    assert program.nodes[0].input_value_ids == ["v0"]
 
 
 # Transport-neutral numerical matmul tests live in test_execution_matmul_gradient.py.

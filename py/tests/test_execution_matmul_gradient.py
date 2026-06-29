@@ -3,7 +3,14 @@ from __future__ import annotations
 
 import numpy as np
 
-from tinychain.autodiff import ExecutionScheduler, MatmulOperator, TensorGraph, TensorNodeRecord, generate
+from tinychain.autodiff import (
+    ExecutionScheduler,
+    MatmulOperator,
+    TensorGraph,
+    TensorNodeRecord,
+    TransposeOperator,
+    generate,
+)
 from tests.autodiff_execution import NumpyAutodiffDispatcher
 
 
@@ -61,8 +68,27 @@ def test_execution_matmul_gradient_single_wrt_fixed_rhs():
     program, result = _execute(graph, ["v0"], values, z_shape)
 
     assert set(program.gradients) == {"v0"}
+    assert [type(node.operator) for node in program.nodes] == [TransposeOperator, MatmulOperator]
     (da,) = result.gradients
     np.testing.assert_allclose(da, 2.0 * np.ones(a_shape, dtype=np.float32), rtol=1e-5)
+
+
+def test_execution_matmul_gradient_single_wrt_fixed_lhs():
+    # v0 remains a runtime input during execution, not a literal captured by the graph.
+    a_shape, b_shape, z_shape = (2, 3), (3, 2), (2, 2)
+    graph = _matmul_graph(a_shape, b_shape, z_shape)
+    values = {
+        "v0": np.ones(a_shape, dtype=np.float32),
+        "v1": np.ones(b_shape, dtype=np.float32),
+        "seed": np.ones(z_shape, dtype=np.float32),
+    }
+
+    program, result = _execute(graph, ["v1"], values, z_shape)
+
+    assert set(program.gradients) == {"v1"}
+    assert [type(node.operator) for node in program.nodes] == [TransposeOperator, MatmulOperator]
+    (db,) = result.gradients
+    np.testing.assert_allclose(db, 2.0 * np.ones(b_shape, dtype=np.float32), rtol=1e-5)
 
 
 def test_execution_matmul_gradient_rank3_no_broadcast():
