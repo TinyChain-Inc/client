@@ -23,6 +23,17 @@ def _typespec(shape, dtype="f32"):
     return {"shape": list(shape), "dtype": dtype}
 
 
+def _counter(prefix):
+    value = {"n": 0}
+
+    def next_id():
+        item = f"{prefix}{value['n']}"
+        value["n"] += 1
+        return item
+
+    return next_id
+
+
 def _add_graph(lhs_shape=(2, 3), rhs_shape=(2, 3), out_shape=(2, 3)):
     node = TensorNodeRecord(
         node_id="n0",
@@ -144,6 +155,50 @@ def test_gradient_accumulator_single_contribution_passthrough():
     accumulator.add("v0", "dv0")
 
     assert accumulator.result_for("v0") == ("dv0", [])
+
+
+def test_gradient_accumulator_reduces_and_combines_fanout_deterministically():
+    value_typespecs = {
+        "v0": _typespec((2, 3)),
+        "g_big": _typespec((4, 2, 3)),
+        "g_exact": _typespec((2, 3)),
+    }
+    accumulator = GradientAccumulator(value_typespecs=value_typespecs)
+    accumulator.add("v0", "g_exact")
+    accumulator.add("v0", "g_big")
+
+    result_id, nodes = accumulator.result_for(
+        "v0",
+        next_value_id=_counter("d"),
+        next_node_id=_counter("dn"),
+    )
+
+    assert result_id == nodes[-1].output_value_id
+    assert [type(node.operator) for node in nodes] == [BroadcastReduceOperator, AddOperator]
+    assert nodes[0].op_params["target_shape"] == [2, 3]
+    assert nodes[1].input_value_ids == [nodes[0].output_value_id, "g_exact"]
+
+
+def test_reverse_traversal_missing_disconnected_wrt_raises():
+    graph = TensorGraph(
+        nodes=[
+            TensorNodeRecord(
+                node_id="n0",
+                output_value_id="v2",
+                operator=AddOperator(),
+                op_params={},
+                input_value_ids=["v0", "v1"],
+                output_typespec=_typespec((2, 3)),
+            )
+        ],
+        inputs=[("v0", _typespec((2, 3))), ("v1", _typespec((2, 3))), ("v9", _typespec((2, 3)))],
+        outputs=["v2"],
+    )
+
+    with pytest.raises(AutodiffError) as exc:
+        generate(graph, "v2", ["v9"], "seed")
+
+    assert exc.value.category == "missing_derivative_behavior"
 
 
 def test_reverse_traversal_unknown_operator_fails():
