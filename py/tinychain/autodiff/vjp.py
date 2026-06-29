@@ -158,7 +158,7 @@ def _transpose_last_two_perm(rank: int) -> list[int]:
 
 
 class MatmulVjpRule:
-    """Build `dA = dZ @ B^T` and `dB = A^T @ dZ`, reducing broadcast batches."""
+    """Build requested matmul VJP branches, reducing broadcast batches."""
 
     operator_type = MatmulOperator
 
@@ -183,6 +183,11 @@ class MatmulVjpRule:
                 f"inner dimensions mismatch: A last dim {lhs_shape[-1]}, B second-to-last dim {rhs_shape[-2]}",
             )
 
+        need_lhs = lhs_id in context.needed_input_value_ids
+        need_rhs = rhs_id in context.needed_input_value_ids
+        if not need_lhs and not need_rhs:
+            return VjpResult(gradients={}, derivative_nodes=[])
+
         m, k, n = lhs_shape[-2], lhs_shape[-1], rhs_shape[-1]
         result_shape = typespec_shape(context.node.output_typespec)
         batch_z = result_shape[:-2]
@@ -192,93 +197,95 @@ class MatmulVjpRule:
         derivative_nodes: list[TensorNodeRecord] = []
         gradients: dict[str, str] = {}
 
-        # --- dA = matmul(dZ, B^T) ---
-        b_t_shape = _swap_last_two_dims(rhs_shape)
-        b_t_id = context.next_value_id()
-        b_t_typespec: dict[str, object] = {"shape": list(b_t_shape)}
-        if dtype is not None:
-            b_t_typespec["dtype"] = dtype
-        derivative_nodes.append(TensorNodeRecord(
-            node_id=context.next_node_id(),
-            output_value_id=b_t_id,
-            operator=TransposeOperator(),
-            op_params={"perm": _transpose_last_two_perm(len(rhs_shape))},
-            input_value_ids=[rhs_id],
-            output_typespec=b_t_typespec,
-        ))
-
-        da_shape = batch_z + (m, k)
-        da_id = context.next_value_id()
-        da_typespec: dict[str, object] = {"shape": list(da_shape)}
-        if dtype is not None:
-            da_typespec["dtype"] = dtype
-        derivative_nodes.append(TensorNodeRecord(
-            node_id=context.next_node_id(),
-            output_value_id=da_id,
-            operator=MatmulOperator(),
-            op_params={},
-            input_value_ids=[dz_id, b_t_id],
-            output_typespec=da_typespec,
-        ))
-
-        plan_a = self._planner.plan(result_shape=da_shape, operand_shape=lhs_shape)
-        if plan_a.axes:
-            da_reduced_id = context.next_value_id()
+        if need_lhs:
+            # dA = matmul(dZ, B^T)
+            b_t_shape = _swap_last_two_dims(rhs_shape)
+            b_t_id = context.next_value_id()
+            b_t_typespec: dict[str, object] = {"shape": list(b_t_shape)}
+            if dtype is not None:
+                b_t_typespec["dtype"] = dtype
             derivative_nodes.append(TensorNodeRecord(
                 node_id=context.next_node_id(),
-                output_value_id=da_reduced_id,
-                operator=BroadcastReduceOperator(),
-                op_params={"target_shape": list(lhs_shape)},
-                input_value_ids=[da_id],
-                output_typespec=lhs_typespec,
+                output_value_id=b_t_id,
+                operator=TransposeOperator(),
+                op_params={"perm": _transpose_last_two_perm(len(rhs_shape))},
+                input_value_ids=[rhs_id],
+                output_typespec=b_t_typespec,
             ))
-            gradients[lhs_id] = da_reduced_id
-        else:
-            gradients[lhs_id] = da_id
 
-        # --- dB = matmul(A^T, dZ) ---
-        a_t_shape = _swap_last_two_dims(lhs_shape)
-        a_t_id = context.next_value_id()
-        a_t_typespec: dict[str, object] = {"shape": list(a_t_shape)}
-        if dtype is not None:
-            a_t_typespec["dtype"] = dtype
-        derivative_nodes.append(TensorNodeRecord(
-            node_id=context.next_node_id(),
-            output_value_id=a_t_id,
-            operator=TransposeOperator(),
-            op_params={"perm": _transpose_last_two_perm(len(lhs_shape))},
-            input_value_ids=[lhs_id],
-            output_typespec=a_t_typespec,
-        ))
-
-        db_shape = batch_z + (k, n)
-        db_id = context.next_value_id()
-        db_typespec: dict[str, object] = {"shape": list(db_shape)}
-        if dtype is not None:
-            db_typespec["dtype"] = dtype
-        derivative_nodes.append(TensorNodeRecord(
-            node_id=context.next_node_id(),
-            output_value_id=db_id,
-            operator=MatmulOperator(),
-            op_params={},
-            input_value_ids=[a_t_id, dz_id],
-            output_typespec=db_typespec,
-        ))
-
-        plan_b = self._planner.plan(result_shape=db_shape, operand_shape=rhs_shape)
-        if plan_b.axes:
-            db_reduced_id = context.next_value_id()
+            da_shape = batch_z + (m, k)
+            da_id = context.next_value_id()
+            da_typespec: dict[str, object] = {"shape": list(da_shape)}
+            if dtype is not None:
+                da_typespec["dtype"] = dtype
             derivative_nodes.append(TensorNodeRecord(
                 node_id=context.next_node_id(),
-                output_value_id=db_reduced_id,
-                operator=BroadcastReduceOperator(),
-                op_params={"target_shape": list(rhs_shape)},
-                input_value_ids=[db_id],
-                output_typespec=rhs_typespec,
+                output_value_id=da_id,
+                operator=MatmulOperator(),
+                op_params={},
+                input_value_ids=[dz_id, b_t_id],
+                output_typespec=da_typespec,
             ))
-            gradients[rhs_id] = db_reduced_id
-        else:
-            gradients[rhs_id] = db_id
+
+            plan_a = self._planner.plan(result_shape=da_shape, operand_shape=lhs_shape)
+            if plan_a.axes:
+                da_reduced_id = context.next_value_id()
+                derivative_nodes.append(TensorNodeRecord(
+                    node_id=context.next_node_id(),
+                    output_value_id=da_reduced_id,
+                    operator=BroadcastReduceOperator(),
+                    op_params={"target_shape": list(lhs_shape)},
+                    input_value_ids=[da_id],
+                    output_typespec=lhs_typespec,
+                ))
+                gradients[lhs_id] = da_reduced_id
+            else:
+                gradients[lhs_id] = da_id
+
+        if need_rhs:
+            # dB = matmul(A^T, dZ)
+            a_t_shape = _swap_last_two_dims(lhs_shape)
+            a_t_id = context.next_value_id()
+            a_t_typespec: dict[str, object] = {"shape": list(a_t_shape)}
+            if dtype is not None:
+                a_t_typespec["dtype"] = dtype
+            derivative_nodes.append(TensorNodeRecord(
+                node_id=context.next_node_id(),
+                output_value_id=a_t_id,
+                operator=TransposeOperator(),
+                op_params={"perm": _transpose_last_two_perm(len(lhs_shape))},
+                input_value_ids=[lhs_id],
+                output_typespec=a_t_typespec,
+            ))
+
+            db_shape = batch_z + (k, n)
+            db_id = context.next_value_id()
+            db_typespec: dict[str, object] = {"shape": list(db_shape)}
+            if dtype is not None:
+                db_typespec["dtype"] = dtype
+            derivative_nodes.append(TensorNodeRecord(
+                node_id=context.next_node_id(),
+                output_value_id=db_id,
+                operator=MatmulOperator(),
+                op_params={},
+                input_value_ids=[a_t_id, dz_id],
+                output_typespec=db_typespec,
+            ))
+
+            plan_b = self._planner.plan(result_shape=db_shape, operand_shape=rhs_shape)
+            if plan_b.axes:
+                db_reduced_id = context.next_value_id()
+                derivative_nodes.append(TensorNodeRecord(
+                    node_id=context.next_node_id(),
+                    output_value_id=db_reduced_id,
+                    operator=BroadcastReduceOperator(),
+                    op_params={"target_shape": list(rhs_shape)},
+                    input_value_ids=[db_id],
+                    output_typespec=rhs_typespec,
+                ))
+                gradients[rhs_id] = db_reduced_id
+            else:
+                gradients[rhs_id] = db_id
 
         return VjpResult(gradients=gradients, derivative_nodes=derivative_nodes)
 
