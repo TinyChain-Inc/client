@@ -5,9 +5,9 @@ from tinychain.autodiff import (
     BroadcastReduceOperator,
     MatmulOperator,
     TensorGraph,
-    TransposeOperator,
     TensorGraphBuilder,
     TensorNodeRecord,
+    TransposeOperator,
     get_active_builder,
 )
 

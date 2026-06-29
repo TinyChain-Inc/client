@@ -101,6 +101,8 @@ class TensorGraphBuilder:
         self._value_map: dict[int, str] = {}
         self._token: Optional[contextvars.Token[Optional[TensorGraphBuilder]]] = None
 
+    # TODO(issue-13-followup): introduce scoped opaque NodeId/ValueId namespaces
+    # to prevent accidental cross-graph/context id reuse.
     def _next_value_id(self) -> str:
         return f"v{len(self._value_map)}"
 
