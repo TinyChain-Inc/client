@@ -22,7 +22,7 @@ from .protocol import (
 )
 from .reverse import DerivativeProgram, ReverseTraversal
 from .seed import SeedValidator
-from .vjp import AddVjpRule, BroadcastReductionPlanner, VjpRegistry
+from .vjp import AddVjpRule, BroadcastReductionPlanner, MatmulVjpRule, VjpRegistry
 
 
 def generate(
@@ -70,6 +70,7 @@ __all__ = [
     "ExecutionScheduler",
     "GradientAccumulator",
     "MatmulOperator",
+    "MatmulVjpRule",
     "ReverseTraversal",
     "SeedValidator",
     "TensorGraph",

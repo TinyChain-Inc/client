@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import numpy as np
 
-from tinychain.autodiff import AddOperator, BroadcastReduceOperator, TensorNodeRecord
+from tinychain.autodiff import (
+    AddOperator,
+    BroadcastReduceOperator,
+    MatmulOperator,
+    TensorNodeRecord,
+    TransposeOperator,
+)
 
 
 class NumpyAutodiffDispatcher:
@@ -13,6 +19,10 @@ class NumpyAutodiffDispatcher:
             return np.asarray(args[0]) + np.asarray(args[1])
         if isinstance(node.operator, BroadcastReduceOperator):
             return self._broadcast_reduce(np.asarray(args[0]), node.op_params["target_shape"])
+        if isinstance(node.operator, MatmulOperator):
+            return np.matmul(np.asarray(args[0]), np.asarray(args[1]))
+        if isinstance(node.operator, TransposeOperator):
+            return np.transpose(np.asarray(args[0]), axes=node.op_params["perm"])
         raise AssertionError(f"unsupported test operator {node.operator!r}")
 
     @staticmethod
