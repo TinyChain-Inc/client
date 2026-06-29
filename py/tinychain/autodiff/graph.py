@@ -36,21 +36,6 @@ class TransposeOperator(TensorOperator):
         object.__setattr__(self, "route_name", "transpose")
 
 
-OP_ADD: AddOperator = AddOperator()
-OP_BROADCAST_REDUCE: BroadcastReduceOperator = BroadcastReduceOperator()
-OP_MATMUL: MatmulOperator = MatmulOperator()
-OP_TRANSPOSE: TransposeOperator = TransposeOperator()
-_OPERATORS_BY_ROUTE: dict[str, TensorOperator] = {
-    OP_ADD.route_name: OP_ADD,
-    OP_BROADCAST_REDUCE.route_name: OP_BROADCAST_REDUCE,
-    OP_MATMUL.route_name: OP_MATMUL,
-    OP_TRANSPOSE.route_name: OP_TRANSPOSE,
-}
-
-
-def operator_for_route(route_name: str) -> TensorOperator:
-    return _OPERATORS_BY_ROUTE[route_name]
-
 _active_builder: contextvars.ContextVar[Optional[TensorGraphBuilder]] = contextvars.ContextVar(
     "_active_builder", default=None
 )
@@ -76,28 +61,20 @@ class TensorNodeRecord:
         *,
         node_id: str,
         output_value_id: str,
-        operator: TensorOperator | str | None = None,
+        operator: TensorOperator,
         op_params: dict,
         input_value_ids: list[str],
         output_typespec: Optional[dict] = None,
-        op_kind: TensorOperator | str | None = None,
     ) -> None:
-        selected = operator if operator is not None else op_kind
-        if selected is None:
-            raise TypeError("TensorNodeRecord requires an operator")
-        if isinstance(selected, str):
-            selected = operator_for_route(selected)
+        if not isinstance(operator, TensorOperator):
+            raise TypeError("TensorNodeRecord operator must be a TensorOperator")
 
         object.__setattr__(self, "node_id", node_id)
         object.__setattr__(self, "output_value_id", output_value_id)
-        object.__setattr__(self, "operator", selected)
+        object.__setattr__(self, "operator", operator)
         object.__setattr__(self, "op_params", op_params)
         object.__setattr__(self, "input_value_ids", input_value_ids)
         object.__setattr__(self, "output_typespec", output_typespec)
-
-    @property
-    def op_kind(self) -> str:
-        return self.operator.route_name
 
 
 @dataclass(frozen=True)
@@ -124,6 +101,8 @@ class TensorGraphBuilder:
         self._value_map: dict[int, str] = {}
         self._token: Optional[contextvars.Token[Optional[TensorGraphBuilder]]] = None
 
+    # TODO(issue-13-followup): introduce scoped opaque NodeId/ValueId namespaces
+    # to prevent accidental cross-graph/context id reuse.
     def _next_value_id(self) -> str:
         return f"v{len(self._value_map)}"
 

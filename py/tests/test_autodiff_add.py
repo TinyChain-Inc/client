@@ -4,10 +4,10 @@ import pytest
 import tinychain as tc
 
 from tinychain.autodiff import (
-    OP_ADD,
-    OP_BROADCAST_REDUCE,
+    AddOperator,
     AddVjpRule,
     AutodiffError,
+    BroadcastReduceOperator,
     BroadcastReductionPlanner,
     GradientAccumulator,
     ReverseTraversal,
@@ -27,7 +27,7 @@ def _add_graph(lhs_shape=(2, 3), rhs_shape=(2, 3), out_shape=(2, 3)):
     node = TensorNodeRecord(
         node_id="n0",
         output_value_id="v2",
-        operator=OP_ADD,
+        operator=AddOperator(),
         op_params={},
         input_value_ids=["v0", "v1"],
         output_typespec=_typespec(out_shape),
@@ -91,7 +91,7 @@ def test_add_vjp_right_aligned_broadcast_emits_reduce_for_broadcast_operand():
     assert program.output_gradients[0] == "seed"
     assert len(program.nodes) == 1
     reduce = program.nodes[0]
-    assert reduce.operator == OP_BROADCAST_REDUCE
+    assert isinstance(reduce.operator, BroadcastReduceOperator)
     assert reduce.op_params == {"target_shape": [1, 3]}
     assert program.output_gradients[1] == reduce.output_value_id
 

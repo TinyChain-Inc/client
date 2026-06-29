@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
 from .graph import (
-    OP_ADD,
-    OP_BROADCAST_REDUCE,
-    OP_MATMUL,
-    OP_TRANSPOSE,
     AddOperator,
+    BroadcastReduceOperator,
     MatmulOperator,
     TensorNodeRecord,
     TensorOperator,
@@ -125,7 +122,7 @@ class AddVjpRule:
                     TensorNodeRecord(
                         node_id=context.next_node_id(),
                         output_value_id=gradient_id,
-                        operator=OP_BROADCAST_REDUCE,
+                        operator=BroadcastReduceOperator(),
                         op_params={
                             "target_shape": list(plan.operand_shape),
                         },
@@ -149,6 +146,8 @@ def _transpose_last_two_perm(rank: int) -> list[int]:
 
 
 class MatmulVjpRule:
+    """Build `dA = dZ @ B^T` and `dB = A^T @ dZ`, reducing broadcast batches."""
+
     operator_type = MatmulOperator
 
     def __init__(self, planner: BroadcastReductionPlanner | None = None) -> None:
@@ -190,7 +189,7 @@ class MatmulVjpRule:
         derivative_nodes.append(TensorNodeRecord(
             node_id=context.next_node_id(),
             output_value_id=b_t_id,
-            operator=OP_TRANSPOSE,
+            operator=TransposeOperator(),
             op_params={"perm": _transpose_last_two_perm(len(rhs_shape))},
             input_value_ids=[rhs_id],
             output_typespec=b_t_typespec,
@@ -204,7 +203,7 @@ class MatmulVjpRule:
         derivative_nodes.append(TensorNodeRecord(
             node_id=context.next_node_id(),
             output_value_id=da_id,
-            operator=OP_MATMUL,
+            operator=MatmulOperator(),
             op_params={},
             input_value_ids=[dz_id, b_t_id],
             output_typespec=da_typespec,
@@ -216,7 +215,7 @@ class MatmulVjpRule:
             derivative_nodes.append(TensorNodeRecord(
                 node_id=context.next_node_id(),
                 output_value_id=da_reduced_id,
-                operator=OP_BROADCAST_REDUCE,
+                operator=BroadcastReduceOperator(),
                 op_params={"target_shape": list(lhs_shape)},
                 input_value_ids=[da_id],
                 output_typespec=lhs_typespec,
@@ -234,7 +233,7 @@ class MatmulVjpRule:
         derivative_nodes.append(TensorNodeRecord(
             node_id=context.next_node_id(),
             output_value_id=a_t_id,
-            operator=OP_TRANSPOSE,
+            operator=TransposeOperator(),
             op_params={"perm": _transpose_last_two_perm(len(lhs_shape))},
             input_value_ids=[lhs_id],
             output_typespec=a_t_typespec,
@@ -248,7 +247,7 @@ class MatmulVjpRule:
         derivative_nodes.append(TensorNodeRecord(
             node_id=context.next_node_id(),
             output_value_id=db_id,
-            operator=OP_MATMUL,
+            operator=MatmulOperator(),
             op_params={},
             input_value_ids=[a_t_id, dz_id],
             output_typespec=db_typespec,
@@ -260,7 +259,7 @@ class MatmulVjpRule:
             derivative_nodes.append(TensorNodeRecord(
                 node_id=context.next_node_id(),
                 output_value_id=db_reduced_id,
-                operator=OP_BROADCAST_REDUCE,
+                operator=BroadcastReduceOperator(),
                 op_params={"target_shape": list(rhs_shape)},
                 input_value_ids=[db_id],
                 output_typespec=rhs_typespec,
@@ -273,12 +272,12 @@ class MatmulVjpRule:
 
 
 def _validate_permutation(perm: object, rank: int) -> tuple[int, ...]:
-    if not isinstance(perm, (list, tuple)):
-        raise AutodiffError("invalid_permutation", "transpose permutation must be a list of axes")
+    if not isinstance(perm, Sequence) or isinstance(perm, (str, bytes)):
+        raise AutodiffError("invalid_permutation", "transpose permutation must be a sequence of axes")
 
     axes: list[int] = []
     for axis in perm:
-        if not isinstance(axis, int):
+        if type(axis) is not int:
             raise AutodiffError("invalid_permutation", "transpose permutation axes must be integers")
         axes.append(axis)
 
@@ -319,7 +318,7 @@ class TransposeVjpRule:
         gradient_node = TensorNodeRecord(
             node_id=context.next_node_id(),
             output_value_id=gradient_id,
-            operator=OP_TRANSPOSE,
+            operator=TransposeOperator(),
             op_params={"perm": list(inverse_perm)},
             input_value_ids=[context.upstream_value_id],
             output_typespec=input_typespec,

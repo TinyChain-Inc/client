@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .graph import OP_ADD, OP_BROADCAST_REDUCE, TensorNodeRecord
+from .graph import AddOperator, BroadcastReduceOperator, TensorNodeRecord
 from .protocol import AutodiffError
 from .seed import typespec_shape
 from .vjp import BroadcastReductionPlanner
@@ -56,7 +56,7 @@ class GradientAccumulator:
                 TensorNodeRecord(
                     node_id=next_node_id(),
                     output_value_id=current,
-                    operator=OP_ADD,
+                    operator=AddOperator(),
                     op_params={},
                     input_value_ids=[previous, contribution],
                     output_typespec=target_typespec,
@@ -95,7 +95,7 @@ class GradientAccumulator:
             TensorNodeRecord(
                 node_id=next_node_id(),
                 output_value_id=reduced_id,
-                operator=OP_BROADCAST_REDUCE,
+                operator=BroadcastReduceOperator(),
                 op_params={"target_shape": list(target_shape)},
                 input_value_ids=[contribution],
                 output_typespec=target_typespec,
