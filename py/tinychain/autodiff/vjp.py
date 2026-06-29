@@ -21,6 +21,7 @@ class VjpContext:
     upstream_value_id: str
     node: TensorNodeRecord
     value_typespecs: dict[str, dict[str, object]]
+    needed_input_value_ids: frozenset[str]
     next_value_id: Callable[[], str]
     next_node_id: Callable[[], str]
 
@@ -39,6 +40,14 @@ class VjpRule(Protocol):
 
 
 class VjpRegistry:
+    """Transform-owned mapping from TensorOperator types to VJP rules.
+
+    TensorOperator instances are operation descriptors. Autodiff rules live in
+    the transform layer so different transform versions can choose rule sets,
+    unsupported operators fail explicitly, and operators do not become
+    callback/backward implementations.
+    """
+
     def __init__(self) -> None:
         self._rules: dict[type[TensorOperator], VjpRule] = {}
 
@@ -113,6 +122,9 @@ class AddVjpRule:
         derivative_nodes: list[TensorNodeRecord] = []
 
         for input_id in (lhs_id, rhs_id):
+            if input_id not in context.needed_input_value_ids:
+                continue
+
             operand_typespec = context.value_typespecs.get(input_id)
             operand_shape = typespec_shape(operand_typespec)
             plan = self._planner.plan(result_shape=result_shape, operand_shape=operand_shape)

@@ -54,6 +54,7 @@ class ReverseTraversal:
             value_typespecs[seed_value_id] = dict(output_typespec)
 
         nodes = self._topological_sort(graph)
+        targets_by_value = self._targets_by_value(graph, nodes, wrt)
         upstream = GradientAccumulator(value_typespecs=value_typespecs)
         upstream.add(output_value_id, seed_value_id)
         derivative_nodes: list[TensorNodeRecord] = []
@@ -69,12 +70,21 @@ class ReverseTraversal:
             if upstream_id is None:
                 continue
 
+            needed_inputs = frozenset(
+                input_id
+                for input_id in node.input_value_ids
+                if targets_by_value.get(input_id)
+            )
+            if not needed_inputs:
+                continue
+
             rule = self._registry.lookup(node.operator)
             result = rule.apply(
                 VjpContext(
                     upstream_value_id=upstream_id,
                     node=node,
                     value_typespecs=value_typespecs,
+                    needed_input_value_ids=needed_inputs,
                     next_value_id=self._next_value_id,
                     next_node_id=self._next_node_id,
                 )
@@ -134,6 +144,33 @@ class ReverseTraversal:
         for node in nodes:
             if node.output_typespec is not None:
                 value_typespecs[node.output_value_id] = dict(node.output_typespec)
+
+    def _targets_by_value(
+        self,
+        graph: TensorGraph,
+        nodes: list[TensorNodeRecord],
+        wrt: list[str],
+    ) -> dict[str, frozenset[str]]:
+        requested = set(wrt)
+        targets: dict[str, set[str]] = {}
+
+        for value_id, _typespec in graph.inputs:
+            targets[value_id] = {value_id} if value_id in requested else set()
+        for node in nodes:
+            targets.setdefault(
+                node.output_value_id,
+                {node.output_value_id} if node.output_value_id in requested else set(),
+            )
+            for input_id in node.input_value_ids:
+                targets.setdefault(input_id, {input_id} if input_id in requested else set())
+
+        for node in nodes:
+            output_targets = set(targets.get(node.output_value_id, set()))
+            for input_id in node.input_value_ids:
+                output_targets.update(targets.get(input_id, set()))
+            targets[node.output_value_id] = output_targets
+
+        return {value_id: frozenset(value_targets) for value_id, value_targets in targets.items()}
 
     def _topological_sort(self, graph: TensorGraph) -> list[TensorNodeRecord]:
         produced_by = {node.output_value_id: node for node in graph.nodes}

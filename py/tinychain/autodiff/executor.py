@@ -8,12 +8,19 @@ from .protocol import AutodiffResult
 from .reverse import DerivativeProgram
 
 
-RouteDispatcher = Callable[[TensorNodeRecord, list[object]], object]
+NodeDispatcher = Callable[[TensorNodeRecord, list[object]], object]
 
 
 @dataclass(frozen=True)
 class ExecutionScheduler:
-    dispatch: RouteDispatcher
+    """Execute a generated derivative program through an injected node dispatcher.
+
+    Phase 1 uses this as the transport seam: tests inject a NumPy dispatcher,
+    while production tc-server transport is deferred until shared client
+    transport and tensor codec support tensor operation calls.
+    """
+
+    dispatch: NodeDispatcher
 
     def execute(
         self,

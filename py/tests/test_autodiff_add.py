@@ -116,6 +116,48 @@ def test_add_vjp_missing_leading_dims_emits_reduce():
     assert program.output_gradients == [reduce.output_value_id]
 
 
+def test_add_single_wrt_prunes_unused_operand_gradient():
+    graph = _add_graph()
+    program = generate(graph, "v2", ["v1"], "seed")
+
+    assert set(program.gradients) == {"v1"}
+    assert program.output_gradients == ["seed"]
+    assert "v0" not in program.gradients
+    assert program.nodes == []
+
+
+def test_unsupported_non_wrt_producer_is_skipped():
+    graph = TensorGraph(
+        nodes=[
+            TensorNodeRecord(
+                node_id="n0",
+                output_value_id="v0",
+                operator=TensorOperator("constant"),
+                op_params={},
+                input_value_ids=[],
+                output_typespec=_typespec((2, 3)),
+            ),
+            TensorNodeRecord(
+                node_id="n1",
+                output_value_id="v2",
+                operator=AddOperator(),
+                op_params={},
+                input_value_ids=["v0", "v1"],
+                output_typespec=_typespec((2, 3)),
+            ),
+        ],
+        inputs=[("v1", _typespec((2, 3)))],
+        outputs=["v2"],
+    )
+
+    program = generate(graph, "v2", ["v1"], "seed")
+
+    assert set(program.gradients) == {"v1"}
+    assert program.output_gradients == ["seed"]
+    assert "v0" not in program.gradients
+    assert program.nodes == []
+
+
 def test_seed_validator_rejects_non_floating_dtype():
     with pytest.raises(AutodiffError) as exc:
         SeedValidator().validate(
