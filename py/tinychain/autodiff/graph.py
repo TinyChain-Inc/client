@@ -72,8 +72,8 @@ class TensorNodeRecord:
         object.__setattr__(self, "node_id", node_id)
         object.__setattr__(self, "output_value_id", output_value_id)
         object.__setattr__(self, "operator", operator)
-        object.__setattr__(self, "op_params", op_params)
-        object.__setattr__(self, "input_value_ids", input_value_ids)
+        object.__setattr__(self, "op_params", dict(op_params))
+        object.__setattr__(self, "input_value_ids", list(input_value_ids))
         object.__setattr__(self, "output_typespec", output_typespec)
 
 
@@ -84,6 +84,11 @@ class TensorGraph:
     nodes: list[TensorNodeRecord]
     inputs: list[tuple[str, Optional[dict]]]
     outputs: list[str]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "nodes", list(self.nodes))
+        object.__setattr__(self, "inputs", list(self.inputs))
+        object.__setattr__(self, "outputs", list(self.outputs))
 
 
 class TensorGraphBuilder:
@@ -131,8 +136,9 @@ class TensorGraphBuilder:
                     input_value_ids.append(vid)
                     seen.add(vid)
         inputs = [(vid, None) for vid in input_value_ids]
+        # Phase 1: single-output — exposes only the last recorded node as the graph output; multi-output is a deferred follow-up.
         outputs = [self._nodes[-1].output_value_id] if self._nodes else []
-        return TensorGraph(nodes=list(self._nodes), inputs=inputs, outputs=outputs)
+        return TensorGraph(nodes=self._nodes, inputs=inputs, outputs=outputs)
 
     def __enter__(self) -> TensorGraphBuilder:
         self._token = _active_builder.set(self)

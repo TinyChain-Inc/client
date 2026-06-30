@@ -117,6 +117,7 @@ class ReverseTraversal:
             gradients=gradients,
             output_gradients=ordered,
             metadata=DerivativeMetadata(
+                # Temporary process-local id — str(id(graph)) is not stable across processes or runs; deferred: scoped opaque NodeId/ValueId namespace (see graph.py TODO).
                 source_graph_id=str(id(graph)),
                 transform_version=self._transform_version,
                 tensor_op_contract_version=self._tensor_op_contract_version,
