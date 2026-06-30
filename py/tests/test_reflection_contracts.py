@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import pytest
 
 from tinychain.graph_reflection import OperationContract, OperationContractError
@@ -29,8 +31,14 @@ def test_operation_contract_fields_preserved():
 
 def test_operation_contract_is_frozen():
     contract = OperationContract(method_uri="/tensor/matmul/v1", params_schema={})
-    with pytest.raises((AttributeError, TypeError)):
+    with pytest.raises(AttributeError):
         contract.method_uri = "/tensor/other/v1"  # type: ignore[misc]
+
+
+def test_whitespace_only_method_uri_raises():
+    with pytest.raises(OperationContractError) as exc_info:
+        OperationContract(method_uri="   ", params_schema={})
+    assert exc_info.value.category == "invalid_method_uri"
 
 
 def test_method_uri_not_used_in_vjp_dispatch():

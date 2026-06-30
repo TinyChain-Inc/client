@@ -104,6 +104,6 @@ class OperationContract:
     output_type_rule: str | None = None
 
     def __post_init__(self) -> None:
-        if not self.method_uri:
+        if not self.method_uri or not self.method_uri.strip():
             raise OperationContractError("invalid_method_uri", "method_uri must be non-empty")
         object.__setattr__(self, "params_schema", dict(self.params_schema))
