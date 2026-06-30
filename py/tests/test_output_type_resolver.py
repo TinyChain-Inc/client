@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+import pytest
+
 from tinychain.graph_reflection import ReflectionError, ResolverRegistry, TypeSpec
 
 
@@ -36,8 +40,6 @@ def test_non_tensor_resolver():
 def test_missing_method_uri_raises():
     registry = ResolverRegistry()
 
-    try:
+    with pytest.raises(ReflectionError) as exc_info:
         registry.infer("/unregistered/op/v1", [], {})
-        assert False, "expected ReflectionError"
-    except ReflectionError as exc:
-        assert exc.category == "unsupported_method_uri"
+    assert exc_info.value.category == "unsupported_method_uri"
