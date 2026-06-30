@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from typing import Mapping, Protocol, Sequence
 
 
 class ReflectionError(Exception):
@@ -107,3 +108,37 @@ class OperationContract:
         if not self.method_uri:
             raise OperationContractError("invalid_method_uri", "method_uri must be non-empty")
         object.__setattr__(self, "params_schema", dict(self.params_schema))
+
+
+class OutputTypeResolver(Protocol):
+    """Protocol for local callables that infer output TypeSpecs from method URI and inputs."""
+
+    def infer_outputs(
+        self,
+        method_uri: str,
+        inputs: Sequence[TypeSpec],
+        params: Mapping[str, object],
+    ) -> list[TypeSpec]: ...
+
+
+class ResolverRegistry:
+    """Registry mapping method URIs to OutputTypeResolver instances."""
+
+    def __init__(self) -> None:
+        self._resolvers: dict[str, OutputTypeResolver] = {}
+
+    def register(self, method_uri: str, resolver: OutputTypeResolver) -> None:
+        self._resolvers[method_uri] = resolver
+
+    def infer(
+        self,
+        method_uri: str,
+        inputs: Sequence[TypeSpec],
+        params: Mapping[str, object],
+    ) -> list[TypeSpec]:
+        if method_uri not in self._resolvers:
+            raise ReflectionError(
+                "unsupported_method_uri",
+                f"No resolver registered for {method_uri!r}",
+            )
+        return self._resolvers[method_uri].infer_outputs(method_uri, inputs, params)
