@@ -1,4 +1,64 @@
-"""Python-owned generic reflection primitives. See .ai/specs/client-issue-29-opdef-reflection-primitives.md and .ai/adr/ADR-001."""
+"""Python-owned generic reflection primitives for consumer-owned graphs.
+
+This module provides small metadata helpers that consumers can use to describe
+value types, typed value references, operation contracts, and local output type
+inference. It intentionally does not own graph topology, scheduling, or remote
+execution. Topology, scheduling, and execution remain consumer-owned; in other
+words, topology and execution remain consumer-owned.
+
+The first intended client-side consumer is the existing TensorGraphBuilder /
+TensorNodeRecord shape from Phase 1 autodiff. Method URIs are metadata and local
+resolver lookup keys only; they do not replace concrete TensorOperator VJP
+dispatch and they do not imply server-side derivative execution.
+
+Tensor-like consumer example::
+
+    tensor_spec = TypeSpec(
+        class_uri="/state/collection/tensor",
+        params={"dtype": "float32", "shape": [3, 4]},
+    )
+    output_ref = TypedValueRef(
+        namespace="my_graph",
+        value="node_0_out",
+        output=None,
+        value_type=tensor_spec,
+    )
+
+    class TensorIdentityResolver:
+        def infer_outputs(self, method_uri, inputs, params):
+            return [tensor_spec]
+
+    registry = ResolverRegistry()
+    registry.register("/tensor/identity/v1", TensorIdentityResolver())
+    inferred_outputs = registry.infer(
+        "/tensor/identity/v1",
+        [output_ref.value_type],
+        {},
+    )
+
+Non-tensor consumer example::
+
+    cost_vector_spec = TypeSpec(
+        class_uri="/planner/cost_vector",
+        params={"dimension": 16},
+    )
+    cost_ref = TypedValueRef(
+        namespace="query_planner",
+        value="join_order_cost",
+        output="cost",
+        value_type=cost_vector_spec,
+    )
+
+    # This type class has no tensor dtype or shape fields. A query planner can
+    # still attach domain-specific metadata and validate its own graph topology.
+
+Missing-inference failure example::
+
+    registry = ResolverRegistry()
+    registry.infer("/unsupported/op", [], {})
+    # Raises ReflectionError("unsupported_method_uri", ...).
+    # Topology validation belongs to the consumer.
+"""
 from __future__ import annotations
 
 import json
@@ -161,3 +221,5 @@ class ResolverRegistry:
                 f"No resolver registered for {method_uri!r}",
             )
         return self._resolvers[method_uri].infer_outputs(method_uri, inputs, params)
+
+# Note: This registry does not execute remote code. Any registered resolver must be a local Python callable.
