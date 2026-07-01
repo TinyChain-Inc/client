@@ -24,17 +24,15 @@ Tensor-like consumer example::
         value_type=tensor_spec,
     )
 
-    class TensorIdentityResolver:
-        def infer_outputs(self, method_uri, inputs, params):
-            return [tensor_spec]
+    def infer_tensor_identity(inputs, params):
+        return [tensor_spec]
 
-    registry = ResolverRegistry()
-    registry.register("/tensor/identity/v1", TensorIdentityResolver())
-    inferred_outputs = registry.infer(
-        "/tensor/identity/v1",
-        [output_ref.value_type],
-        {},
+    contract = OperationContract(
+        method_uri="/tensor/identity/v1",
+        params_schema={},
+        output_type_rule=infer_tensor_identity,
     )
+    inferred_outputs = contract.infer_outputs([output_ref.value_type], {})
 
 Non-tensor consumer example::
 
@@ -54,16 +52,16 @@ Non-tensor consumer example::
 
 Missing-inference failure example::
 
-    registry = ResolverRegistry()
-    registry.infer("/unsupported/op", [], {})
-    # Raises ReflectionError("unsupported_method_uri", ...).
+    contract = OperationContract(method_uri="/unsupported/op", params_schema={})
+    contract.infer_outputs([], {})
+    # Raises OperationContractError("missing_output_type_rule", ...).
     # Topology validation belongs to the consumer.
 """
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Mapping, Protocol, Sequence
+from typing import Callable, Mapping, Sequence
 
 
 class ReflectionError(Exception):
@@ -162,64 +160,24 @@ class OperationContract:
 
     method_uri: str
     params_schema: dict[str, object]
-    output_type_rule: str | None = None
+    # Equality/hashing on this field is identity-based for callables (two
+    # behaviorally-identical lambdas compare unequal); nothing depends on
+    # contract equality/hashing today.
+    output_type_rule: Callable[[Sequence[TypeSpec], Mapping[str, object]], list[TypeSpec]] | None = None
 
     def __post_init__(self) -> None:
         if not self.method_uri:
             raise OperationContractError("invalid_method_uri", "method_uri must be non-empty")
         object.__setattr__(self, "params_schema", dict(self.params_schema))
 
-
-class OutputTypeResolver(Protocol):
-    """Protocol for local callables that infer output TypeSpecs from method URI and inputs."""
-
     def infer_outputs(
         self,
-        method_uri: str,
-        inputs: Sequence[TypeSpec],
-        params: Mapping[str, object],
-    ) -> list[TypeSpec]: ...
-
-
-class ResolverRegistry:
-    """Registry mapping method URIs to OutputTypeResolver instances."""
-
-    def __init__(self) -> None:
-        self._resolvers: dict[str, OutputTypeResolver] = {}
-
-    def register(self, method_uri: str, resolver: OutputTypeResolver) -> None:
-        if isinstance(resolver, type):
-            resolver = resolver()
-        self._resolvers[method_uri] = resolver
-
-    def resolver(self, method_uri: str):
-        """Decorator that registers a resolver class or callable under *method_uri*.
-
-        Example::
-
-            registry = ResolverRegistry()
-
-            @registry.resolver("/tensor/identity/v1")
-            class IdentityResolver:
-                def infer_outputs(self, method_uri, inputs, params):
-                    return list(inputs)
-        """
-        def decorator(cls_or_callable: OutputTypeResolver) -> OutputTypeResolver:
-            self.register(method_uri, cls_or_callable)
-            return cls_or_callable
-        return decorator
-
-    def infer(
-        self,
-        method_uri: str,
         inputs: Sequence[TypeSpec],
         params: Mapping[str, object],
     ) -> list[TypeSpec]:
-        if method_uri not in self._resolvers:
-            raise ReflectionError(
-                "unsupported_method_uri",
-                f"No resolver registered for {method_uri!r}",
+        if self.output_type_rule is None:
+            raise OperationContractError(
+                "missing_output_type_rule",
+                f"{self.method_uri!r} has no output_type_rule for inference",
             )
-        return self._resolvers[method_uri].infer_outputs(method_uri, inputs, params)
-
-# Note: This registry does not execute remote code. Any registered resolver must be a local Python callable.
+        return self.output_type_rule(inputs, params)

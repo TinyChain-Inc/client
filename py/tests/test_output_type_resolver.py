@@ -2,19 +2,20 @@ from __future__ import annotations
 
 import pytest
 
-from tinychain.graph_reflection import ReflectionError, ResolverRegistry, TypeSpec
+from tinychain.graph_reflection import OperationContract, OperationContractError, TypeSpec
 
 
-def test_tensor_like_resolver():
-    class TensorIdentityResolver:
-        def infer_outputs(self, method_uri, inputs, params):
-            return [TypeSpec(class_uri=inputs[0].class_uri, params={"dtype": inputs[0].params["dtype"]})]
-
-    registry = ResolverRegistry()
-    registry.register("/tensor/identity/v1", TensorIdentityResolver())
+def test_contract_infers_tensor_like_output():
+    contract = OperationContract(
+        method_uri="/tensor/identity/v1",
+        params_schema={},
+        output_type_rule=lambda inputs, params: [
+            TypeSpec(class_uri=inputs[0].class_uri, params={"dtype": inputs[0].params["dtype"]})
+        ],
+    )
 
     input_spec = TypeSpec(class_uri="/tensor/dense", params={"dtype": "float32", "shape": [3, 4]})
-    result = registry.infer("/tensor/identity/v1", [input_spec], {})
+    result = contract.infer_outputs([input_spec], {})
 
     assert len(result) == 1
     assert result[0].class_uri == "/tensor/dense"
@@ -22,37 +23,38 @@ def test_tensor_like_resolver():
     assert "shape" not in result[0].params
 
 
-def test_non_tensor_resolver():
-    class PlannerCostResolver:
-        def infer_outputs(self, method_uri, inputs, params):
-            return [TypeSpec(class_uri="/planner/cost_vector", params={})]
+def test_contract_infers_non_tensor_output():
+    contract = OperationContract(
+        method_uri="/planner/cost/v1",
+        params_schema={},
+        output_type_rule=lambda inputs, params: [TypeSpec(class_uri="/planner/cost_vector", params={})],
+    )
 
-    registry = ResolverRegistry()
-    registry.register("/planner/cost/v1", PlannerCostResolver())
-
-    result = registry.infer("/planner/cost/v1", [], {})
+    result = contract.infer_outputs([], {})
 
     assert len(result) == 1
     assert result[0].class_uri == "/planner/cost_vector"
     assert result[0].params == {}
 
 
-def test_missing_method_uri_raises():
-    registry = ResolverRegistry()
+def test_missing_output_type_rule_raises():
+    contract = OperationContract(method_uri="/unregistered/op/v1", params_schema={})
 
-    with pytest.raises(ReflectionError) as exc_info:
-        registry.infer("/unregistered/op/v1", [], {})
-    assert exc_info.value.category == "unsupported_method_uri"
+    with pytest.raises(OperationContractError) as exc_info:
+        contract.infer_outputs([], {})
+    assert exc_info.value.category == "missing_output_type_rule"
 
 
-def test_resolver_decorator_registers_and_infers():
-    registry = ResolverRegistry()
+def test_contract_infers_identity_via_plain_function():
+    def infer_identity(inputs, params):
+        return list(inputs)
 
-    @registry.resolver("/test/identity/v1")
-    class IdentityResolver:
-        def infer_outputs(self, method_uri, inputs, params):
-            return list(inputs)
+    contract = OperationContract(
+        method_uri="/test/identity/v1",
+        params_schema={},
+        output_type_rule=infer_identity,
+    )
 
     spec = TypeSpec(class_uri="/state/collection/tensor", params={"dtype": "float32"})
-    result = registry.infer("/test/identity/v1", [spec], {})
+    result = contract.infer_outputs([spec], {})
     assert result == [spec]
