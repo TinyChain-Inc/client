@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from tinychain.graph_reflection import OperationContract, OperationContractError
+from tinychain.graph_reflection import OperationContract, OperationContractError, TypeSpec
 from tinychain.autodiff.vjp import VjpRegistry, default_vjp_registry
 
 
@@ -22,11 +22,12 @@ def test_operation_contract_fields_preserved():
     contract = OperationContract(
         method_uri="/tensor/add/v2",
         params_schema=schema,
-        output_type_rule="elementwise",
+        output_type_rule=lambda inputs, params: list(inputs),
     )
     assert contract.method_uri == "/tensor/add/v2"
     assert contract.params_schema == schema
-    assert contract.output_type_rule == "elementwise"
+    spec = TypeSpec(class_uri="/state/tensor", params={"dtype": "float32"})
+    assert contract.infer_outputs([spec], {}) == [spec]
 
 
 def test_operation_contract_is_frozen():
