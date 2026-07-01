@@ -128,7 +128,26 @@ class ResolverRegistry:
         self._resolvers: dict[str, OutputTypeResolver] = {}
 
     def register(self, method_uri: str, resolver: OutputTypeResolver) -> None:
+        if isinstance(resolver, type):
+            resolver = resolver()
         self._resolvers[method_uri] = resolver
+
+    def resolver(self, method_uri: str):
+        """Decorator that registers a resolver class or callable under *method_uri*.
+
+        Example::
+
+            registry = ResolverRegistry()
+
+            @registry.resolver("/tensor/identity/v1")
+            class IdentityResolver:
+                def infer_outputs(self, method_uri, inputs, params):
+                    return list(inputs)
+        """
+        def decorator(cls_or_callable: OutputTypeResolver) -> OutputTypeResolver:
+            self.register(method_uri, cls_or_callable)
+            return cls_or_callable
+        return decorator
 
     def infer(
         self,

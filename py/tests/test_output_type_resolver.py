@@ -43,3 +43,16 @@ def test_missing_method_uri_raises():
     with pytest.raises(ReflectionError) as exc_info:
         registry.infer("/unregistered/op/v1", [], {})
     assert exc_info.value.category == "unsupported_method_uri"
+
+
+def test_resolver_decorator_registers_and_infers():
+    registry = ResolverRegistry()
+
+    @registry.resolver("/test/identity/v1")
+    class IdentityResolver:
+        def infer_outputs(self, method_uri, inputs, params):
+            return list(inputs)
+
+    spec = TypeSpec(class_uri="/state/collection/tensor", params={"dtype": "float32"})
+    result = registry.infer("/test/identity/v1", [spec], {})
+    assert result == [spec]
