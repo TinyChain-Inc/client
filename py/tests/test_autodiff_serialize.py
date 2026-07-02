@@ -20,23 +20,20 @@ from tinychain.autodiff.protocol import (
     DerivativeMetadata,
 )
 from tinychain.autodiff.reverse import DerivativeProgram, ReverseTraversal
+from tinychain.serialize import register_serializer, serialize
 
 
 class TestSerializeUtility:
-    """Test the _serialize() utility function."""
+    """Test the serialize() utility function."""
 
     def test_serialize_tensor_operator(self) -> None:
         """TensorOperator instances serialize with type and route_name."""
-        from tinychain.autodiff._serialize import _serialize
-
         op = AddOperator()
-        result = _serialize(op)
+        result = serialize(op)
         assert result == {"type": "AddOperator", "route_name": "add"}
 
     def test_serialize_dataclass(self) -> None:
         """Dataclasses serialize field-by-field."""
-        from tinychain.autodiff._serialize import _serialize
-
         metadata = DerivativeMetadata(
             source_graph_id="graph_123",
             transform_version="0.1.0",
@@ -44,7 +41,7 @@ class TestSerializeUtility:
             wrt_signature=("x", "y"),
             seed_contract="seed_v0",
         )
-        result = _serialize(metadata)
+        result = serialize(metadata)
         assert result == {
             "source_graph_id": "graph_123",
             "transform_version": "0.1.0",
@@ -55,34 +52,26 @@ class TestSerializeUtility:
 
     def test_serialize_list(self) -> None:
         """Lists serialize element-by-element."""
-        from tinychain.autodiff._serialize import _serialize
-
         lst = [1, "two", 3.0, None]
-        result = _serialize(lst)
+        result = serialize(lst)
         assert result == [1, "two", 3.0, None]
 
     def test_serialize_dict(self) -> None:
         """Dicts serialize key-value pairs."""
-        from tinychain.autodiff._serialize import _serialize
-
         d = {"a": 1, "b": "two", "c": None}
-        result = _serialize(d)
+        result = serialize(d)
         assert result == {"a": 1, "b": "two", "c": None}
 
     def test_serialize_scalar_passthrough(self) -> None:
         """Scalars pass through unchanged."""
-        from tinychain.autodiff._serialize import _serialize
-
-        assert _serialize(42) == 42
-        assert _serialize("hello") == "hello"
-        assert _serialize(3.14) == 3.14
-        assert _serialize(True) is True
-        assert _serialize(None) is None
+        assert serialize(42) == 42
+        assert serialize("hello") == "hello"
+        assert serialize(3.14) == 3.14
+        assert serialize(True) is True
+        assert serialize(None) is None
 
     def test_serialize_nested_structure(self) -> None:
         """Nested structures serialize recursively."""
-        from tinychain.autodiff._serialize import _serialize
-
         op = MatmulOperator()
         node = TensorNodeRecord(
             node_id="n0",
@@ -92,13 +81,44 @@ class TestSerializeUtility:
             input_value_ids=["v0", "v1"],
             output_typespec={"dtype": "float32", "shape": [3, 4]},
         )
-        result = _serialize(node)
+        result = serialize(node)
         assert result["node_id"] == "n0"
         assert result["output_value_id"] == "v2"
         assert result["operator"] == {"type": "MatmulOperator", "route_name": "matmul"}
         assert result["op_params"] == {"axis": 0}
         assert result["input_value_ids"] == ["v0", "v1"]
         assert result["output_typespec"] == {"dtype": "float32", "shape": [3, 4]}
+
+    def test_register_serializer_exact_type(self) -> None:
+        """register_serializer dispatches on exact type match."""
+        class CustomType:
+            def __init__(self, value: str) -> None:
+                self.value = value
+
+        def handler(obj: CustomType) -> dict:
+            return {"custom": obj.value}
+
+        register_serializer(CustomType, handler)
+        obj = CustomType("test")
+        result = serialize(obj)
+        assert result == {"custom": "test"}
+
+    def test_register_serializer_isinstance_fallback(self) -> None:
+        """register_serializer falls back to isinstance checks for base classes."""
+        class Base:
+            def __init__(self, value: str) -> None:
+                self.value = value
+
+        class Derived(Base):
+            pass
+
+        def handler(obj: Base) -> dict:
+            return {"base": obj.value}
+
+        register_serializer(Base, handler)
+        obj = Derived("test")
+        result = serialize(obj)
+        assert result == {"base": "test"}
 
 
 class TestTensorNodeRecordToDict:

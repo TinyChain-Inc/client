@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ._serialize import _serialize
+from ..serialize import serialize
 from .accumulate import GradientAccumulator
 from .graph import TensorGraph, TensorNodeRecord
 from .protocol import AutodiffError, DerivativeMetadata
@@ -18,7 +18,7 @@ class DerivativeProgram:
     metadata: DerivativeMetadata
 
     def to_dict(self) -> dict:
-        return _serialize(self)
+        return serialize(self)
 
 
 class ReverseTraversal:

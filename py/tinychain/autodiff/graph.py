@@ -4,7 +4,7 @@ import contextvars
 from dataclasses import dataclass, field
 from typing import Optional
 
-from ._serialize import _serialize
+from ..serialize import register_serializer, serialize
 
 
 @dataclass(frozen=True)
@@ -12,6 +12,14 @@ class TensorOperator:
     """Base tensor operator descriptor used by Python-owned autodiff graphs."""
 
     route_name: str
+
+
+# Register TensorOperator serializer at module import time
+def _serialize_tensor_operator(obj: TensorOperator) -> dict:
+    return {"type": type(obj).__name__, "route_name": obj.route_name}
+
+
+register_serializer(TensorOperator, _serialize_tensor_operator)
 
 
 @dataclass(frozen=True)
@@ -79,7 +87,7 @@ class TensorNodeRecord:
         object.__setattr__(self, "output_typespec", output_typespec)
 
     def to_dict(self) -> dict:
-        return _serialize(self)
+        return serialize(self)
 
 
 @dataclass(frozen=True)
