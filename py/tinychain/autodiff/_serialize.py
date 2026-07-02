@@ -9,7 +9,9 @@ def _serialize(obj: object) -> object:
     Handles:
     - TensorOperator instances: serialized as {"type": class_name, "route_name": ...}
     - Dataclasses: recursively serialized field-by-field
-    - Lists/tuples: recursively serialized element-by-element
+    - Lists/tuples: recursively serialized element-by-element (tuples become
+      lists — JSON has no tuple type, so this is intentional normalization,
+      not data loss)
     - Dicts: recursively serialized key-value pairs
     - Scalars (str, int, float, bool, None): passed through unchanged
     
