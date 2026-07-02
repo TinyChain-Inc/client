@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from .graph import (
     AddOperator,
@@ -32,6 +32,7 @@ class VjpResult:
     derivative_nodes: list[TensorNodeRecord]
 
 
+@runtime_checkable
 class VjpRule(Protocol):
     operator_type: type[TensorOperator]
 
@@ -62,6 +63,54 @@ class VjpRegistry:
                 "unsupported_operator",
                 f"no VJP rule registered for {operator.route_name}",
             ) from exc
+
+    def has_rule(self, operator: TensorOperator | type[TensorOperator]) -> bool:
+        """Check if a VJP rule is registered for the given operator."""
+        operator_type = operator if isinstance(operator, type) else type(operator)
+        return operator_type in self._rules
+
+    def supported_types(self) -> list[type[TensorOperator]]:
+        """Return all registered TensorOperator types."""
+        return list(self._rules.keys())
+
+    def rule(self, operator_cls: type[TensorOperator]) -> Callable[[type], type]:
+        """Class decorator for auto-registering VJP rules.
+
+        Instantiates the decorated class with no arguments, verifies it is a
+        VjpRule instance, registers it, and returns the original class unchanged.
+
+        Args:
+            operator_cls: The TensorOperator subclass this rule handles.
+
+        Returns:
+            The original decorated class (unchanged).
+
+        Raises:
+            TypeError: If the instantiated rule is not a VjpRule instance.
+        """
+        def decorator(rule_cls: type) -> type:
+            rule_instance = rule_cls()
+            if not isinstance(rule_instance, VjpRule):
+                raise TypeError(
+                    f"{rule_cls.__name__} is not a VjpRule instance; "
+                    f"it must implement the VjpRule protocol"
+                )
+            self._rules[operator_cls] = rule_instance
+            return rule_cls
+        return decorator
+
+    def copy_into(self, other: VjpRegistry) -> None:
+        """Copy all registered rules from this registry into another.
+
+        Args:
+            other: The target VjpRegistry to copy rules into.
+        """
+        for operator_type, rule in self._rules.items():
+            other._rules[operator_type] = rule
+
+
+# Module-level registry for decorator-based registration
+_registry = VjpRegistry()
 
 
 @dataclass(frozen=True)
@@ -106,6 +155,7 @@ class BroadcastReductionPlanner:
         )
 
 
+@_registry.rule(AddOperator)
 class AddVjpRule:
     operator_type = AddOperator
 
@@ -157,6 +207,7 @@ def _transpose_last_two_perm(rank: int) -> list[int]:
     return list(range(rank - 2)) + [rank - 1, rank - 2]
 
 
+@_registry.rule(MatmulOperator)
 class MatmulVjpRule:
     """Build requested matmul VJP branches, reducing broadcast batches."""
 
@@ -320,6 +371,7 @@ def _inverse_permutation(perm: tuple[int, ...]) -> tuple[int, ...]:
     return tuple(inverse)
 
 
+@_registry.rule(TransposeOperator)
 class TransposeVjpRule:
     operator_type = TransposeOperator
 
@@ -346,8 +398,12 @@ class TransposeVjpRule:
 
 
 def default_vjp_registry() -> VjpRegistry:
+    """Return the default VJP registry with all pre-registered rules.
+
+    The rules are registered via the @_registry.rule decorator at class
+    definition time. This function returns a copy of the module-level registry
+    to avoid mutation of the shared instance.
+    """
     registry = VjpRegistry()
-    registry.register(AddVjpRule())
-    registry.register(MatmulVjpRule())
-    registry.register(TransposeVjpRule())
+    _registry.copy_into(registry)
     return registry
