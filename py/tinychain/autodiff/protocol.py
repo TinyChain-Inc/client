@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar
 
+from ._serialize import _serialize
+
 
 AUTODIFF_ERROR_CATEGORIES: tuple[str, ...] = (
     "unsupported_operator",
@@ -36,7 +38,7 @@ class AutodiffError(Exception):
         Exception.__init__(self, f"{self.category}: {self.message}")
 
     def to_dict(self) -> dict[str, str]:
-        return {"category": self.category, "message": self.message}
+        return _serialize(self)
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> AutodiffError:
@@ -53,14 +55,7 @@ class AutodiffRequest:
     transform_version: str
 
     def to_dict(self) -> dict[str, object]:
-        return {
-            "graph": self.graph,
-            "output_value_id": self.output_value_id,
-            "wrt": list(self.wrt),
-            "seed_value_id": self.seed_value_id,
-            "tensor_op_contract_version": self.tensor_op_contract_version,
-            "transform_version": self.transform_version,
-        }
+        return _serialize(self)
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> AutodiffRequest:
@@ -83,13 +78,7 @@ class DerivativeMetadata:
     seed_contract: str
 
     def to_dict(self) -> dict[str, object]:
-        return {
-            "source_graph_id": self.source_graph_id,
-            "transform_version": self.transform_version,
-            "tensor_op_contract_version": self.tensor_op_contract_version,
-            "wrt_signature": list(self.wrt_signature),
-            "seed_contract": self.seed_contract,
-        }
+        return _serialize(self)
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> DerivativeMetadata:
@@ -108,10 +97,7 @@ class AutodiffResult:
     metadata: DerivativeMetadata
 
     def to_dict(self) -> dict[str, object]:
-        return {
-            "gradients": list(self.gradients),
-            "metadata": self.metadata.to_dict(),
-        }
+        return _serialize(self)
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> AutodiffResult:

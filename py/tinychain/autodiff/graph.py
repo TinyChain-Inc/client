@@ -4,6 +4,8 @@ import contextvars
 from dataclasses import dataclass, field
 from typing import Optional
 
+from ._serialize import _serialize
+
 
 @dataclass(frozen=True)
 class TensorOperator:
@@ -75,6 +77,9 @@ class TensorNodeRecord:
         object.__setattr__(self, "op_params", dict(op_params))
         object.__setattr__(self, "input_value_ids", list(input_value_ids))
         object.__setattr__(self, "output_typespec", output_typespec)
+
+    def to_dict(self) -> dict:
+        return _serialize(self)
 
 
 @dataclass(frozen=True)
