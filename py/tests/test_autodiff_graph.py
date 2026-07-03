@@ -79,11 +79,33 @@ class TestBuilderContext:
             pass
         assert get_active_builder() is None
 
-    def test_nested_contexts_restore_outer_on_exit(self):
+    def test_nested_contexts_raise_runtime_error(self):
         with TensorGraphBuilder() as outer:
-            with TensorGraphBuilder() as inner:
-                assert get_active_builder() is inner
-            assert get_active_builder() is outer
+            with pytest.raises(RuntimeError, match="Nested TensorGraphBuilder"):
+                with TensorGraphBuilder() as inner:
+                    pass
+        assert get_active_builder() is None
+
+    def test_builder_guard_released_on_exit(self):
+        # Enter a builder, raise inside the with block, catch externally,
+        # then enter a new builder - must succeed without RuntimeError
+        try:
+            with TensorGraphBuilder() as builder:
+                raise ValueError("test exception")
+        except ValueError:
+            pass
+        # Guard should be released, so this should succeed
+        with TensorGraphBuilder() as builder:
+            assert get_active_builder() is builder
+        assert get_active_builder() is None
+
+    def test_sequential_builders(self):
+        # Two non-nested sequential contexts should both succeed
+        with TensorGraphBuilder() as first:
+            assert get_active_builder() is first
+        assert get_active_builder() is None
+        with TensorGraphBuilder() as second:
+            assert get_active_builder() is second
         assert get_active_builder() is None
 
 
