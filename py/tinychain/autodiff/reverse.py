@@ -85,7 +85,15 @@ class ReverseTraversal:
             if not needed_inputs:
                 continue
 
-            rule = self._registry.lookup(node.operator)
+            try:
+                rule = self._registry.lookup(node.operator)
+            except AutodiffError as exc:
+                if exc.category == "unsupported_operator":
+                    raise AutodiffError(
+                        "missing_derivative_behavior",
+                        f"no VJP rule registered for operator {node.operator.route_name!r}",
+                    ) from exc
+                raise
             result = rule.apply(
                 VjpContext(
                     upstream_value_id=upstream_id,
