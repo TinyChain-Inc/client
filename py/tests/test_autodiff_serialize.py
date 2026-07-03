@@ -20,7 +20,7 @@ from tinychain.autodiff.protocol import (
     DerivativeMetadata,
 )
 from tinychain.autodiff.reverse import DerivativeProgram, ReverseTraversal
-from tinychain.serialize import register_serializer, serialize
+from tinychain.serialize import serialize
 
 
 class TestSerializeUtility:
@@ -89,36 +89,18 @@ class TestSerializeUtility:
         assert result["input_value_ids"] == ["v0", "v1"]
         assert result["output_typespec"] == {"dtype": "float32", "shape": [3, 4]}
 
-    def test_register_serializer_exact_type(self) -> None:
-        """register_serializer dispatches on exact type match."""
-        class CustomType:
-            def __init__(self, value: str) -> None:
-                self.value = value
-
-        def handler(obj: CustomType) -> dict:
-            return {"custom": obj.value}
-
-        register_serializer(CustomType, handler)
-        obj = CustomType("test")
-        result = serialize(obj)
-        assert result == {"custom": "test"}
-
-    def test_register_serializer_isinstance_fallback(self) -> None:
-        """register_serializer falls back to isinstance checks for base classes."""
+    def test_serialize_hook_inheritance(self) -> None:
+        """__serialize__ hook is inherited by subclasses."""
         class Base:
-            def __init__(self, value: str) -> None:
-                self.value = value
+            def __serialize__(self) -> dict:
+                return {"base": "value"}
 
         class Derived(Base):
             pass
 
-        def handler(obj: Base) -> dict:
-            return {"base": obj.value}
-
-        register_serializer(Base, handler)
-        obj = Derived("test")
+        obj = Derived()
         result = serialize(obj)
-        assert result == {"base": "test"}
+        assert result == {"base": "value"}
 
 
 class TestTensorNodeRecordToDict:

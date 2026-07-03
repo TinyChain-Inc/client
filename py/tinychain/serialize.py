@@ -1,28 +1,13 @@
 from __future__ import annotations
 
 import dataclasses
-from typing import Callable
-
-_SERIALIZERS: dict[type, Callable[[object], object]] = {}
-
-
-def register_serializer(type_: type, handler: Callable[[object], object]) -> None:
-    """Register a serializer function for a specific type.
-
-    Args:
-        type_: The type to register the handler for.
-        handler: A function that takes an instance of type_ and returns a
-            JSON-serializable representation.
-    """
-    _SERIALIZERS[type_] = handler
 
 
 def serialize(obj: object) -> object:
     """Recursively convert objects to JSON-serializable primitives.
 
     Handles:
-    - Registered types: dispatched to registered handlers via exact type match
-      or isinstance fallback against registered base classes
+    - Objects with a __serialize__ hook: dispatched to the hook, then re-serialized
     - Dataclasses: recursively serialized field-by-field
     - Lists/tuples: recursively serialized element-by-element (tuples become
       lists — JSON has no tuple type, so this is intentional normalization,
@@ -36,15 +21,10 @@ def serialize(obj: object) -> object:
     Returns:
         A JSON-serializable representation of obj.
     """
-    # Check for exact type match in registry
-    obj_type = type(obj)
-    if obj_type in _SERIALIZERS:
-        return _SERIALIZERS[obj_type](obj)
-
-    # Fall back to isinstance checks against registered base classes
-    for registered_type, handler in _SERIALIZERS.items():
-        if isinstance(obj, registered_type):
-            return handler(obj)
+    # Check for __serialize__ hook on the type (not the instance)
+    hook = getattr(type(obj), "__serialize__", None)
+    if hook is not None:
+        return serialize(hook(obj))
 
     # Generic cases
     if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
