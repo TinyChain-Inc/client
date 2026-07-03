@@ -33,6 +33,7 @@ def generate(
     seed: str,
     *,
     seed_typespec: dict[str, object] | None = None,
+    graph_id: str | None = None,
 ) -> DerivativeProgram:
     """Experimentally build a structured Python derivative program.
 
@@ -47,6 +48,11 @@ def generate(
     scheduler environment. When ``seed_typespec`` is supplied, it is validated
     against the selected output typespec and must have the same shape and a
     differentiable floating dtype (f32/f64).
+
+    ``graph_id`` is an optional explicit identifier for the source graph. When
+    supplied, it is used verbatim as ``source_graph_id`` in the returned
+    metadata; otherwise a stable SHA-256 content hash of the graph structure is
+    computed automatically.
     """
     return ReverseTraversal().build(
         graph=graph,
@@ -54,6 +60,7 @@ def generate(
         wrt=wrt,
         seed_value_id=seed,
         seed_typespec=seed_typespec,
+        source_graph_id=graph_id,
     )
 
 

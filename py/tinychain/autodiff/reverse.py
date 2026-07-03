@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
 
 from ..serialize import serialize
@@ -45,6 +47,7 @@ class ReverseTraversal:
         wrt: list[str],
         seed_value_id: str,
         seed_typespec: dict[str, object] | None = None,
+        source_graph_id: str | None = None,
     ) -> DerivativeProgram:
         value_typespecs = self._value_typespecs(graph)
         output_typespec = value_typespecs.get(output_value_id)
@@ -116,13 +119,13 @@ class ReverseTraversal:
             gradients[value_id] = gradient_id
             ordered.append(gradient_id)
 
+        graph_id = source_graph_id if source_graph_id is not None else _graph_content_hash(graph)
         return DerivativeProgram(
             nodes=derivative_nodes,
             gradients=gradients,
             output_gradients=ordered,
             metadata=DerivativeMetadata(
-                # Temporary process-local id — str(id(graph)) is not stable across processes or runs; deferred: scoped opaque NodeId/ValueId namespace (see graph.py TODO).
-                source_graph_id=str(id(graph)),
+                source_graph_id=graph_id,
                 transform_version=self._transform_version,
                 tensor_op_contract_version=self._tensor_op_contract_version,
                 wrt_signature=tuple(wrt),
@@ -210,3 +213,25 @@ class ReverseTraversal:
         node_id = f"dn{self._next_node_index}"
         self._next_node_index += 1
         return node_id
+
+
+def _graph_content_hash(graph: TensorGraph) -> str:
+    """Return a stable 16-hex-digit SHA-256 content hash of *graph*.
+
+    The canonical representation includes every node (sorted by node_id) and
+    the sorted graph inputs/outputs so that structurally identical graphs
+    produce the same hash across processes and runs.
+    """
+    canonical = [
+        [
+            node.node_id,
+            type(node.operator).__name__,
+            sorted(node.input_value_ids),
+            node.output_value_id,
+            node.output_typespec if node.output_typespec is not None else {},
+        ]
+        for node in sorted(graph.nodes, key=lambda n: n.node_id)
+    ] + [sorted(graph.inputs), sorted(graph.outputs)]
+    return hashlib.sha256(
+        json.dumps(canonical, sort_keys=True).encode("utf-8")
+    ).hexdigest()[:16]

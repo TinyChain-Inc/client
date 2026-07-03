@@ -41,6 +41,9 @@ class TransposeOperator(TensorOperator):
         object.__setattr__(self, "route_name", "transpose")
 
 
+# ContextVar-based active builder tracking (Decision D6 from client-issue-13-phase2 spec §5).
+# Rationale: Task-scoped by stdlib design, correct for tc.grad's single call-site transform use case.
+# Alternative thread-local would be incorrect for async/threaded execution contexts.
 _active_builder: contextvars.ContextVar[Optional[TensorGraphBuilder]] = contextvars.ContextVar(
     "_active_builder", default=None
 )
@@ -149,6 +152,8 @@ class TensorGraphBuilder:
         return TensorGraph(nodes=self._nodes, inputs=inputs, outputs=outputs)
 
     def __enter__(self) -> TensorGraphBuilder:
+        if _active_builder.get() is not None:
+            raise RuntimeError("Nested TensorGraphBuilder contexts are not supported")
         self._token = _active_builder.set(self)
         return self
 
