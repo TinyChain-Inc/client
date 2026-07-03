@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar
 
-from ._serialize import _serialize
+from ..serialize import serialize
 
 
 AUTODIFF_ERROR_CATEGORIES: tuple[str, ...] = (
@@ -38,7 +38,7 @@ class AutodiffError(Exception):
         Exception.__init__(self, f"{self.category}: {self.message}")
 
     def to_dict(self) -> dict[str, str]:
-        return _serialize(self)
+        return serialize(self)
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> AutodiffError:
@@ -55,7 +55,7 @@ class AutodiffRequest:
     transform_version: str
 
     def to_dict(self) -> dict[str, object]:
-        return _serialize(self)
+        return serialize(self)
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> AutodiffRequest:
@@ -78,7 +78,7 @@ class DerivativeMetadata:
     seed_contract: str
 
     def to_dict(self) -> dict[str, object]:
-        return _serialize(self)
+        return serialize(self)
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> DerivativeMetadata:
@@ -97,7 +97,7 @@ class AutodiffResult:
     metadata: DerivativeMetadata
 
     def to_dict(self) -> dict[str, object]:
-        return _serialize(self)
+        return serialize(self)
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> AutodiffResult:
