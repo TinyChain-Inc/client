@@ -20,6 +20,7 @@ from .protocol import (
     AutodiffResult,
     DerivativeMetadata,
 )
+from .reflection import reflect_derivative_program, tensor_typespec_to_type_spec
 from .reverse import DerivativeProgram, ReverseTraversal
 from .seed import SeedValidator
 from .vjp import AddVjpRule, BroadcastReductionPlanner, MatmulVjpRule, TransposeVjpRule, VjpRegistry
@@ -82,4 +83,6 @@ __all__ = [
     "VjpRegistry",
     "generate",
     "get_active_builder",
+    "reflect_derivative_program",
+    "tensor_typespec_to_type_spec",
 ]
