@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ..serialize import serialize
 from .accumulate import GradientAccumulator
 from .graph import TensorGraph, TensorNodeRecord
 from .protocol import AutodiffError, DerivativeMetadata
@@ -15,6 +16,9 @@ class DerivativeProgram:
     gradients: dict[str, str]
     output_gradients: list[str | None]
     metadata: DerivativeMetadata
+
+    def to_dict(self) -> dict:
+        return serialize(self)
 
 
 class ReverseTraversal:
