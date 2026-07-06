@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import hashlib
+import json
+from dataclasses import dataclass, replace
 from typing import ClassVar
 
 from ..serialize import serialize
@@ -50,7 +52,7 @@ class DerivativeArtifactManifest:
     seed_contract: str
     visibility: str = "public"
     digest_algorithm: str = "sha256"
-    digest: str | None = None
+    artifact_digest: str | None = None
     source_library: str | None = None
     source_route: str | None = None
     source_operator: str | None = None
@@ -77,8 +79,8 @@ class DerivativeArtifactManifest:
                 "unsupported_digest_algorithm",
                 f"unsupported artifact digest algorithm {self.digest_algorithm!r}",
             )
-        if self.digest is not None:
-            _require_non_empty("digest", self.digest)
+        if self.artifact_digest is not None:
+            _require_non_empty("artifact_digest", self.artifact_digest)
         _validate_optional_text("source_library", self.source_library)
         _validate_optional_text("source_route", self.source_route)
         _validate_optional_text("source_operator", self.source_operator)
@@ -99,7 +101,9 @@ class DerivativeArtifactManifest:
             seed_contract=str(data["seed_contract"]),
             visibility=str(data.get("visibility", "public")),
             digest_algorithm=str(data.get("digest_algorithm", "sha256")),
-            digest=_optional_string(data.get("digest")),
+            artifact_digest=_optional_string(
+                data.get("artifact_digest", data.get("digest"))
+            ),
             source_library=_optional_string(data.get("source_library")),
             source_route=_optional_string(data.get("source_route")),
             source_operator=_optional_string(data.get("source_operator")),
@@ -115,7 +119,7 @@ class DerivativeArtifactManifest:
         artifact_publisher: str,
         visibility: str = "public",
         digest_algorithm: str = "sha256",
-        digest: str | None = None,
+        artifact_digest: str | None = None,
         source_library: str | None = None,
         source_route: str | None = None,
         source_operator: str | None = None,
@@ -132,7 +136,7 @@ class DerivativeArtifactManifest:
             seed_contract=metadata.seed_contract,
             visibility=visibility,
             digest_algorithm=digest_algorithm,
-            digest=digest,
+            artifact_digest=artifact_digest,
             source_library=source_library,
             source_route=source_route,
             source_operator=source_operator,
@@ -140,6 +144,9 @@ class DerivativeArtifactManifest:
 
     def validate_source_metadata(self, program: object) -> None:
         validate_artifact_source_metadata(self, program)
+
+
+ArtifactPayload = dict[str, dict[str, object]]
 
 
 def artifact_manifest_from_program(
@@ -150,7 +157,7 @@ def artifact_manifest_from_program(
     artifact_publisher: str,
     visibility: str = "public",
     digest_algorithm: str = "sha256",
-    digest: str | None = None,
+    artifact_digest: str | None = None,
     source_library: str | None = None,
     source_route: str | None = None,
     source_operator: str | None = None,
@@ -162,11 +169,62 @@ def artifact_manifest_from_program(
         artifact_publisher=artifact_publisher,
         visibility=visibility,
         digest_algorithm=digest_algorithm,
-        digest=digest,
+        artifact_digest=artifact_digest,
         source_library=source_library,
         source_route=source_route,
         source_operator=source_operator,
     )
+
+
+def canonical_artifact_json(payload: object) -> str:
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+def artifact_digest_input(
+    manifest: DerivativeArtifactManifest,
+    program: object,
+) -> ArtifactPayload:
+    manifest.validate_source_metadata(program)
+    manifest_payload = manifest.to_dict()
+    manifest_payload["artifact_digest"] = None
+    return {
+        "manifest": manifest_payload,
+        "program": _program_payload(program),
+    }
+
+
+def compute_artifact_digest(
+    manifest: DerivativeArtifactManifest,
+    program: object,
+) -> str:
+    if manifest.digest_algorithm != "sha256":
+        raise ArtifactError(
+            "unsupported_digest_algorithm",
+            f"unsupported artifact digest algorithm {manifest.digest_algorithm!r}",
+        )
+    canonical_payload = canonical_artifact_json(artifact_digest_input(manifest, program))
+    return hashlib.sha256(canonical_payload.encode("utf-8")).hexdigest()
+
+
+def attach_artifact_digest(
+    manifest: DerivativeArtifactManifest,
+    program: object,
+) -> DerivativeArtifactManifest:
+    artifact_digest = compute_artifact_digest(manifest, program)
+    return replace(manifest, artifact_digest=artifact_digest)
+
+
+def artifact_payload(
+    manifest: DerivativeArtifactManifest,
+    program: object,
+) -> ArtifactPayload:
+    payload = artifact_digest_input(manifest, program)
+    artifact_digest = hashlib.sha256(
+        canonical_artifact_json(payload).encode("utf-8")
+    ).hexdigest()
+    payload["manifest"]["artifact_digest"] = artifact_digest
+    json.dumps(payload)
+    return payload
 
 
 def validate_artifact_source_metadata(
@@ -200,6 +258,22 @@ def validate_artifact_source_metadata(
             "source_metadata_mismatch",
             f"artifact manifest does not match derivative metadata fields: {joined_fields}",
         )
+
+
+def _program_payload(program: object) -> dict[str, object]:
+    to_dict = getattr(program, "to_dict", None)
+    if not callable(to_dict):
+        raise ArtifactError(
+            "invalid_manifest",
+            "program must expose to_dict() for artifact payload construction",
+        )
+    payload = to_dict()
+    if not isinstance(payload, dict):
+        raise ArtifactError(
+            "invalid_manifest",
+            "program.to_dict() must return a dict payload",
+        )
+    return payload
 
 
 def _program_metadata(program: object) -> DerivativeMetadata:
