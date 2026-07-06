@@ -235,6 +235,84 @@ expressions. Names must resolve to route parameters, prior local bindings,
 `self`, or `tc`; non-TinyChain globals (for example `urllib`, `tensorflow`/`tf`,
 `jax`) are rejected at compile time with an `AutographNameError`.
 
+### Derivative artifact lifecycle
+
+Derivative artifacts are Python-owned packaging metadata for a
+`tinychain.autodiff.DerivativeProgram`. Artifact metadata is separate from
+`DerivativeMetadata`: `DerivativeProgram.to_dict()` stays artifact-free, and the
+artifact payload wraps the derivative program rather than changing the program
+schema.
+
+Create a manifest with `artifact_manifest_from_program(...)` or by calling
+`DerivativeArtifactManifest.from_program(...)`. Required manifest fields are:
+
+- `artifact_name`, `artifact_version`, and `artifact_publisher`: the public
+  library identity for the packaged derivative. The public route path follows
+  the same class-derived `Library` naming rules as ordinary TinyChain libraries.
+- `source_graph_id`, `transform_version`, `tensor_op_contract_version`,
+  `wrt_signature`, and `seed_contract`: copied from the source
+  `DerivativeProgram.metadata` and validated against that program before
+  digesting or payload construction.
+- `visibility`: artifact metadata only. Supported values are `public`,
+  `private`, and `internal`; the default is `public`.
+- `digest_algorithm`: currently `sha256`.
+
+Optional manifest fields are `artifact_digest`, `source_library`,
+`source_library_version`, `source_route`, and `source_operator`.
+`source_library` and `source_library_version` must be supplied together. When a
+source library is known, it may be written as `publisher/name` or as a canonical
+`/lib/{publisher}/{name}/{version}` path, and the artifact library exposes it
+through normal `Library.dependencies`. Graph-only artifacts omit source library
+dependencies.
+
+Artifact digests are computed by `compute_artifact_digest(...)` with SHA-256 over
+the canonical JSON returned by `canonical_artifact_json(...)`. The digest input
+contains both `manifest` and `program`, uses sorted JSON keys with compact
+separators, and forces `manifest["artifact_digest"]` to `None` before hashing
+so an existing digest value cannot hash itself. The resulting `artifact_digest`
+is a content/package digest, not a graph identity. `source_graph_id` still names
+the derivative program's source graph and is validated separately from the
+artifact digest.
+
+`artifact_payload(manifest, program)` returns a JSON-compatible payload with two
+top-level keys: `manifest` and `program`. The `program` value is exactly
+`DerivativeProgram.to_dict()`. The `manifest` value is the manifest dict with a
+computed `artifact_digest`. `attach_artifact_digest(...)` returns a new manifest
+with that digest set without mutating the input manifest.
+
+Use `build_derivative_artifact_library(...)` to package a derivative artifact as
+a normal TinyChain `Library` subclass. The generated class has class-level
+`publisher`, `version`, and `dependencies`, does not define `__init__`, does not
+define an explicit `name`, and exposes one static GET route at `/artifact` whose
+value is the artifact payload. The class works with the usual `compile_ir(...)`,
+`library_definition(...)`, and `tc.install(...)` paths; application code should
+not construct alternate artifact install envelopes.
+
+For lifecycle comparisons, `public_artifact_identity(...)` derives the public
+`/lib/{publisher}/{resource_name}/{version}` identity.
+`compare_artifact_identity(existing, candidate)` treats the same public identity
+plus the same `artifact_digest` as an idempotent repeat, allows different public
+identities, and raises `ArtifactError("artifact_conflict", ...)` when the same
+public identity has a different digest. Conflict messages identify the public
+artifact path and the two digest values, and they do not include source program
+payload internals.
+
+Source dependency and metadata validation happen before digest and payload
+construction. The manifest must match the derivative program's
+`source_graph_id`, `transform_version`, `tensor_op_contract_version`,
+`wrt_signature`, and `seed_contract`; mismatches raise
+`ArtifactError("source_metadata_mismatch", ...)`. `artifact_source_dependencies(...)`
+returns the normal library dependency tuple when a source library is declared,
+and returns an empty tuple for graph-only artifacts.
+
+Visibility is intentionally metadata-only. `public`, `private`, and
+`internal` describe the artifact for callers and future tooling, but they do not
+change TinyChain route compilation, route exposure, install authorization, or
+server behavior. Derivative artifact packaging also does not add route-level
+autodiff, a backend artifact registry or backend artifact schema,
+hidden/internal route compiler behavior, Rust contracts, or production
+`tc-server` derivative execution.
+
 ### Executor auth and routing contract
 
 `tc.backend(...)` uses one remote auth rule:
