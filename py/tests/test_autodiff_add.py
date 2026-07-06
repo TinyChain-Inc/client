@@ -262,7 +262,8 @@ def test_reverse_traversal_unknown_operator_fails():
     with pytest.raises(AutodiffError) as exc:
         generate(graph, "v1", ["v0"], "seed")
 
-    assert exc.value.category == "unsupported_operator"
+    assert exc.value.category == "missing_derivative_behavior"
+    assert "mystery" in exc.value.message
 
 
 def test_tc_grad_graph_target_delegates_to_generate():
