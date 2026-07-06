@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from importlib import import_module
+
 from .accumulate import GradientAccumulator
 from .executor import ExecutionScheduler
 from .graph import (
@@ -24,6 +26,38 @@ from .reflection import reflect_derivative_program, tensor_typespec_to_type_spec
 from .reverse import DerivativeProgram, ReverseTraversal
 from .seed import SeedValidator
 from .vjp import AddVjpRule, BroadcastReductionPlanner, MatmulVjpRule, TransposeVjpRule, VjpRegistry
+
+_ARTIFACT_EXPORTS = frozenset(
+    {
+        "ARTIFACT_ERROR_CATEGORIES",
+        "ArtifactComparisonResult",
+        "ArtifactError",
+        "ArtifactPayload",
+        "ArtifactPublicIdentity",
+        "DerivativeArtifactManifest",
+        "artifact_digest_input",
+        "artifact_manifest_from_program",
+        "artifact_payload",
+        "artifact_source_dependencies",
+        "attach_artifact_digest",
+        "build_derivative_artifact_library",
+        "canonical_artifact_json",
+        "compare_artifact_identity",
+        "compute_artifact_digest",
+        "public_artifact_identity",
+        "source_library_dependency_uri",
+        "validate_artifact_source_metadata",
+    }
+)
+
+
+def __getattr__(name: str) -> object:
+    if name in _ARTIFACT_EXPORTS:
+        artifact_module = import_module(".artifact", __name__)
+        value = getattr(artifact_module, name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def generate(
@@ -65,6 +99,24 @@ def generate(
 
 
 __all__ = [
+    "ARTIFACT_ERROR_CATEGORIES",
+    "ArtifactComparisonResult",
+    "ArtifactError",
+    "ArtifactPayload",
+    "ArtifactPublicIdentity",
+    "DerivativeArtifactManifest",
+    "artifact_digest_input",
+    "artifact_manifest_from_program",
+    "artifact_payload",
+    "artifact_source_dependencies",
+    "attach_artifact_digest",
+    "build_derivative_artifact_library",
+    "canonical_artifact_json",
+    "compare_artifact_identity",
+    "compute_artifact_digest",
+    "public_artifact_identity",
+    "source_library_dependency_uri",
+    "validate_artifact_source_metadata",
     "AUTODIFF_ERROR_CATEGORIES",
     "AddVjpRule",
     "AutodiffError",
