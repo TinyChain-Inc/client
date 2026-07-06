@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 from typing import ClassVar
 
 from ..serialize import serialize
+from ..uri import URI, _python_name_to_resource, uri
 from .protocol import DerivativeMetadata
 
 
@@ -14,6 +15,7 @@ ARTIFACT_ERROR_CATEGORIES: tuple[str, ...] = (
     "unsupported_visibility",
     "unsupported_digest_algorithm",
     "source_metadata_mismatch",
+    "artifact_conflict",
 )
 
 SUPPORTED_ARTIFACT_VISIBILITIES: tuple[str, ...] = ("public", "private", "internal")
@@ -41,6 +43,35 @@ class ArtifactError(Exception):
 
 
 @dataclass(frozen=True)
+class ArtifactPublicIdentity:
+    publisher: str
+    name: str
+    version: str
+
+    def __post_init__(self) -> None:
+        _require_non_empty("artifact_publisher", self.publisher)
+        _require_non_empty("artifact_name", self.name)
+        _require_non_empty("artifact_version", self.version)
+
+    def to_uri(self) -> URI:
+        try:
+            resolved = uri("lib", self.publisher, self.name, self.version)
+        except ValueError as exc:
+            raise ArtifactError("invalid_manifest", str(exc)) from exc
+        if not isinstance(resolved, URI):
+            raise ArtifactError("invalid_manifest", "artifact identity must resolve to a URI")
+        return resolved
+
+
+@dataclass(frozen=True)
+class ArtifactComparisonResult:
+    identity: ArtifactPublicIdentity
+    candidate_identity: ArtifactPublicIdentity
+    is_idempotent: bool
+    is_conflict: bool
+
+
+@dataclass(frozen=True)
 class DerivativeArtifactManifest:
     artifact_name: str
     artifact_version: str
@@ -54,6 +85,7 @@ class DerivativeArtifactManifest:
     digest_algorithm: str = "sha256"
     artifact_digest: str | None = None
     source_library: str | None = None
+    source_library_version: str | None = None
     source_route: str | None = None
     source_operator: str | None = None
 
@@ -82,6 +114,8 @@ class DerivativeArtifactManifest:
         if self.artifact_digest is not None:
             _require_non_empty("artifact_digest", self.artifact_digest)
         _validate_optional_text("source_library", self.source_library)
+        _validate_optional_text("source_library_version", self.source_library_version)
+        _validate_source_library_dependency(self.source_library, self.source_library_version)
         _validate_optional_text("source_route", self.source_route)
         _validate_optional_text("source_operator", self.source_operator)
 
@@ -104,9 +138,14 @@ class DerivativeArtifactManifest:
             artifact_digest=_optional_string(
                 data.get("artifact_digest", data.get("digest"))
             ),
-            source_library=_optional_string(data.get("source_library")),
-            source_route=_optional_string(data.get("source_route")),
-            source_operator=_optional_string(data.get("source_operator")),
+            source_library=_optional_string(
+                data.get("source_library", data.get("source_library_id"))
+            ),
+            source_library_version=_optional_string(data.get("source_library_version")),
+            source_route=_optional_string(data.get("source_route", data.get("source_route_id"))),
+            source_operator=_optional_string(
+                data.get("source_operator", data.get("source_operator_id"))
+            ),
         )
 
     @classmethod
@@ -121,6 +160,7 @@ class DerivativeArtifactManifest:
         digest_algorithm: str = "sha256",
         artifact_digest: str | None = None,
         source_library: str | None = None,
+        source_library_version: str | None = None,
         source_route: str | None = None,
         source_operator: str | None = None,
     ) -> DerivativeArtifactManifest:
@@ -138,6 +178,7 @@ class DerivativeArtifactManifest:
             digest_algorithm=digest_algorithm,
             artifact_digest=artifact_digest,
             source_library=source_library,
+            source_library_version=source_library_version,
             source_route=source_route,
             source_operator=source_operator,
         )
@@ -159,6 +200,7 @@ def artifact_manifest_from_program(
     digest_algorithm: str = "sha256",
     artifact_digest: str | None = None,
     source_library: str | None = None,
+    source_library_version: str | None = None,
     source_route: str | None = None,
     source_operator: str | None = None,
 ) -> DerivativeArtifactManifest:
@@ -171,6 +213,7 @@ def artifact_manifest_from_program(
         digest_algorithm=digest_algorithm,
         artifact_digest=artifact_digest,
         source_library=source_library,
+        source_library_version=source_library_version,
         source_route=source_route,
         source_operator=source_operator,
     )
@@ -225,6 +268,95 @@ def artifact_payload(
     payload["manifest"]["artifact_digest"] = artifact_digest
     json.dumps(payload)
     return payload
+
+
+def public_artifact_identity(
+    manifest: DerivativeArtifactManifest,
+) -> ArtifactPublicIdentity:
+    return ArtifactPublicIdentity(
+        publisher=manifest.artifact_publisher,
+        name=_artifact_resource_name(manifest.artifact_name),
+        version=manifest.artifact_version,
+    )
+
+
+def compare_artifact_identity(
+    existing: DerivativeArtifactManifest,
+    candidate: DerivativeArtifactManifest,
+) -> ArtifactComparisonResult:
+    existing_identity = public_artifact_identity(existing)
+    candidate_identity = public_artifact_identity(candidate)
+    if existing_identity != candidate_identity:
+        return ArtifactComparisonResult(
+            identity=existing_identity,
+            candidate_identity=candidate_identity,
+            is_idempotent=False,
+            is_conflict=False,
+        )
+
+    existing_digest = _comparison_digest("existing artifact", existing.artifact_digest)
+    candidate_digest = _comparison_digest("candidate artifact", candidate.artifact_digest)
+    if existing_digest == candidate_digest:
+        return ArtifactComparisonResult(
+            identity=existing_identity,
+            candidate_identity=candidate_identity,
+            is_idempotent=True,
+            is_conflict=False,
+        )
+
+    identity_path = existing_identity.to_uri().path
+    raise ArtifactError(
+        "artifact_conflict",
+        "artifact conflict for "
+        f"{identity_path}: existing digest {existing_digest} differs "
+        f"from candidate digest {candidate_digest}",
+    )
+
+
+def source_library_dependency_uri(
+    source_library: str | None,
+    source_library_version: str | None,
+) -> URI | None:
+    if source_library is None and source_library_version is None:
+        return None
+    _validate_source_library_dependency(source_library, source_library_version)
+    assert source_library is not None
+    assert source_library_version is not None
+
+    if source_library.startswith("/") or "://" in source_library:
+        try:
+            dependency = URI.parse(source_library)
+        except ValueError as exc:
+            raise ArtifactError("invalid_manifest", str(exc)) from exc
+        _validate_library_dependency_path(dependency, source_library_version)
+        return dependency
+
+    parts = source_library.split("/")
+    if len(parts) != 2:
+        raise ArtifactError(
+            "invalid_manifest",
+            "source_library must be 'publisher/name' or a canonical /lib path",
+        )
+    publisher, name = parts
+    try:
+        dependency = uri("lib", publisher, name, source_library_version)
+    except ValueError as exc:
+        raise ArtifactError("invalid_manifest", str(exc)) from exc
+    if not isinstance(dependency, URI):
+        raise ArtifactError("invalid_manifest", "source library dependency must resolve to a URI")
+    return dependency
+
+
+def artifact_source_dependencies(
+    manifest: DerivativeArtifactManifest,
+) -> tuple[URI, ...]:
+    dependency = source_library_dependency_uri(
+        manifest.source_library,
+        manifest.source_library_version,
+    )
+    if dependency is None:
+        return ()
+    return (dependency,)
 
 
 def validate_artifact_source_metadata(
@@ -300,3 +432,53 @@ def _optional_string(value: object) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+def _artifact_resource_name(artifact_name: str) -> str:
+    try:
+        return _python_name_to_resource(artifact_name)
+    except TypeError as exc:
+        raise ArtifactError("invalid_manifest", str(exc)) from exc
+
+
+def _comparison_digest(label: str, value: str | None) -> str:
+    if value is None:
+        raise ArtifactError(
+            "invalid_manifest",
+            f"{label} must include artifact_digest for comparison",
+        )
+    _require_non_empty("artifact_digest", value)
+    return value
+
+
+def _validate_source_library_dependency(
+    source_library: str | None,
+    source_library_version: str | None,
+) -> None:
+    if source_library is None and source_library_version is None:
+        return
+    if source_library is None:
+        raise ArtifactError(
+            "invalid_manifest",
+            "source_library is required when source_library_version is supplied",
+        )
+    if source_library_version is None:
+        raise ArtifactError(
+            "invalid_manifest",
+            "source_library_version is required when source_library is supplied",
+        )
+
+
+def _validate_library_dependency_path(dependency: URI, expected_version: str) -> None:
+    parts = dependency.path.strip("/").split("/")
+    if len(parts) != 4 or parts[0] != "lib":
+        raise ArtifactError(
+            "invalid_manifest",
+            "source_library dependency path must have /lib/{publisher}/{name}/{version} form",
+        )
+    if parts[3] != expected_version:
+        raise ArtifactError(
+            "invalid_manifest",
+            "source_library dependency version must match source_library_version",
+        )
+
