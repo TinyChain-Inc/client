@@ -6,7 +6,7 @@ import pytest
 
 import tinychain as tc
 from tinychain.library import compile_ir, library_definition
-from tinychain.autodiff.artifact import (
+from tinychain.autodiff import (
     ARTIFACT_ERROR_CATEGORIES,
     ArtifactError,
     ArtifactPublicIdentity,
@@ -88,6 +88,38 @@ def _manifest(**overrides: object) -> DerivativeArtifactManifest:
     return DerivativeArtifactManifest(**fields)
 
 
+def test_artifact_helpers_are_exported_from_autodiff_package() -> None:
+    import tinychain.autodiff as autodiff
+
+    expected_exports = {
+        "ARTIFACT_ERROR_CATEGORIES",
+        "ArtifactComparisonResult",
+        "ArtifactError",
+        "ArtifactPayload",
+        "ArtifactPublicIdentity",
+        "DerivativeArtifactManifest",
+        "artifact_digest_input",
+        "artifact_source_dependencies",
+        "artifact_manifest_from_program",
+        "artifact_payload",
+        "attach_artifact_digest",
+        "build_derivative_artifact_library",
+        "canonical_artifact_json",
+        "compare_artifact_identity",
+        "compute_artifact_digest",
+        "public_artifact_identity",
+        "source_library_dependency_uri",
+        "validate_artifact_source_metadata",
+    }
+
+    assert expected_exports.issubset(set(autodiff.__all__))
+    for export_name in expected_exports:
+        assert hasattr(autodiff, export_name)
+
+    assert not hasattr(tc, "DerivativeArtifactManifest")
+    assert not hasattr(tc, "build_derivative_artifact_library")
+
+
 def test_artifact_error_categories_are_artifact_specific() -> None:
     assert set(ARTIFACT_ERROR_CATEGORIES) == {
         "invalid_manifest",
@@ -128,6 +160,30 @@ def test_manifest_from_dict_accepts_legacy_digest_key() -> None:
     manifest = DerivativeArtifactManifest.from_dict(_manifest().to_dict() | {"digest": "legacy"})
 
     assert manifest.artifact_digest == "abc123"
+
+
+def test_derivative_metadata_to_dict_remains_artifact_free() -> None:
+    result = _metadata().to_dict()
+
+    assert result == {
+        "source_graph_id": "source-graph-1",
+        "transform_version": "0.1.0",
+        "tensor_op_contract_version": "0.1.0",
+        "wrt_signature": ["x", "y"],
+        "seed_contract": "seed matches out",
+    }
+    assert not any(key.startswith("artifact_") for key in result)
+    assert "visibility" not in result
+
+
+def test_derivative_program_to_dict_remains_artifact_free() -> None:
+    result = _program().to_dict()
+
+    assert set(result) == {"nodes", "gradients", "output_gradients", "metadata"}
+    assert "manifest" not in result
+    assert "artifact" not in result
+    assert not any(key.startswith("artifact_") for key in result["metadata"])
+    assert "visibility" not in result["metadata"]
 
 
 def test_manifest_from_program_copies_derivative_metadata_without_mutating_program_payload() -> None:
