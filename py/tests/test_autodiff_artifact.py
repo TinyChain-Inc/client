@@ -4,6 +4,8 @@ import json
 
 import pytest
 
+import tinychain as tc
+from tinychain.library import compile_ir, library_definition
 from tinychain.autodiff.artifact import (
     ARTIFACT_ERROR_CATEGORIES,
     ArtifactError,
@@ -14,6 +16,7 @@ from tinychain.autodiff.artifact import (
     artifact_manifest_from_program,
     artifact_payload,
     attach_artifact_digest,
+    build_derivative_artifact_library,
     canonical_artifact_json,
     compare_artifact_identity,
     compute_artifact_digest,
@@ -494,3 +497,108 @@ def test_artifact_error_round_trips_and_rejects_unknown_category() -> None:
 
     with pytest.raises(ValueError, match="unknown artifact error category"):
         ArtifactError("not_real", "bad")
+
+
+def test_build_derivative_artifact_library_returns_normal_library_subclass() -> None:
+    artifact_library = build_derivative_artifact_library(
+        publisher="tester",
+        class_name="ExampleDerivative",
+        version="1.2.3",
+        program=_program(),
+        visibility="internal",
+        source_library="source_pub/source_library",
+        source_library_version="0.1.0",
+        source_route="train",
+        source_operator="add",
+    )
+
+    assert issubclass(artifact_library, tc.Library)
+    assert "__init__" not in artifact_library.__dict__
+    assert "name" not in artifact_library.__dict__
+    assert artifact_library.publisher == "tester"
+    assert artifact_library.version == "1.2.3"
+    assert artifact_library.class_id().path == "/lib/tester/example_derivative/1.2.3"
+    assert artifact_library().dependencies == (
+        tc.uri("lib", "source_pub", "source_library", "0.1.0"),
+    )
+
+
+def test_build_derivative_artifact_library_compile_ir_emits_static_get_value_route() -> None:
+    program = _program()
+    artifact_library = build_derivative_artifact_library(
+        publisher="tester",
+        class_name="ExampleDerivative",
+        version="1.2.3",
+        program=program,
+        source_library="source_pub/source_library",
+        source_library_version="0.1.0",
+    )
+    expected_manifest = artifact_manifest_from_program(
+        program,
+        artifact_name="ExampleDerivative",
+        artifact_version="1.2.3",
+        artifact_publisher="tester",
+        source_library="source_pub/source_library",
+        source_library_version="0.1.0",
+    )
+
+    result = compile_ir(artifact_library)
+
+    assert result["schema"] == {
+        "id": "/lib/tester/example_derivative/1.2.3",
+        "version": "1.2.3",
+        "dependencies": ["/lib/source_pub/source_library/0.1.0"],
+    }
+    assert len(result["routes"]) == 1
+    route = result["routes"][0]
+    assert route["path"] == "/artifact"
+    assert set(route) == {"path", "value"}
+    assert route["value"] == artifact_payload(expected_manifest, program)
+
+
+def test_build_derivative_artifact_library_library_definition_is_v1_style_payload() -> None:
+    program = _program()
+    artifact_library = build_derivative_artifact_library(
+        publisher="tester",
+        class_name="ExampleDerivative",
+        version="1.2.3",
+        program=program,
+    )
+    expected_manifest = artifact_manifest_from_program(
+        program,
+        artifact_name="ExampleDerivative",
+        artifact_version="1.2.3",
+        artifact_publisher="tester",
+    )
+
+    result = library_definition(artifact_library)
+
+    assert list(result) == ["/lib/tester/example_derivative/1.2.3"]
+    assert result["/lib/tester/example_derivative/1.2.3"] == {
+        "artifact": artifact_payload(expected_manifest, program)
+    }
+
+
+def test_build_derivative_artifact_library_omits_dependencies_for_graph_only_artifact() -> None:
+    artifact_library = build_derivative_artifact_library(
+        publisher="tester",
+        class_name="ExampleDerivative",
+        version="1.2.3",
+        program=_program(),
+    )
+
+    assert compile_ir(artifact_library)["schema"]["dependencies"] == []
+
+
+def test_build_derivative_artifact_library_rejects_invalid_public_identity() -> None:
+    with pytest.raises(ArtifactError) as raised:
+        build_derivative_artifact_library(
+            publisher="tester",
+            class_name="Invalid/Derivative",
+            version="1.2.3",
+            program=_program(),
+        )
+
+    assert raised.value.category == "invalid_manifest"
+    assert "must not contain '/'" in raised.value.message
+

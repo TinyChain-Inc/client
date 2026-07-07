@@ -5,6 +5,7 @@ import json
 from dataclasses import dataclass, replace
 from typing import ClassVar
 
+from ..library import Library, get
 from ..serialize import serialize
 from ..uri import URI, _python_name_to_resource, uri
 from .protocol import DerivativeMetadata
@@ -359,6 +360,57 @@ def artifact_source_dependencies(
     return (dependency,)
 
 
+def build_derivative_artifact_library(
+    *,
+    publisher: str,
+    class_name: str,
+    version: str,
+    program: object,
+    visibility: str = "public",
+    source_library: str | None = None,
+    source_library_version: str | None = None,
+    source_route: str | None = None,
+    source_operator: str | None = None,
+) -> type[Library]:
+    manifest = artifact_manifest_from_program(
+        program,
+        artifact_name=class_name,
+        artifact_version=version,
+        artifact_publisher=publisher,
+        visibility=visibility,
+        source_library=source_library,
+        source_library_version=source_library_version,
+        source_route=source_route,
+        source_operator=source_operator,
+    )
+    payload = artifact_payload(manifest, program)
+    dependencies = artifact_source_dependencies(manifest)
+
+    def artifact(self) -> ArtifactPayload:
+        return payload
+
+    artifact.__name__ = "artifact"
+    artifact.__qualname__ = f"{class_name}.artifact"
+
+    try:
+        library_cls = type(
+            class_name,
+            (Library,),
+            {
+                "__module__": __name__,
+                "publisher": publisher,
+                "version": version,
+                "dependencies": dependencies,
+                "artifact": get(artifact),
+            },
+        )
+    except TypeError as exc:
+        raise ArtifactError("invalid_manifest", str(exc)) from exc
+
+    _validate_artifact_library_identity(library_cls, manifest)
+    return library_cls
+
+
 def validate_artifact_source_metadata(
     manifest: DerivativeArtifactManifest,
     program: object,
@@ -389,6 +441,28 @@ def validate_artifact_source_metadata(
         raise ArtifactError(
             "source_metadata_mismatch",
             f"artifact manifest does not match derivative metadata fields: {joined_fields}",
+        )
+
+
+def _validate_artifact_library_identity(
+    library_cls: type[Library],
+    manifest: DerivativeArtifactManifest,
+) -> None:
+    identity = public_artifact_identity(manifest)
+    class_resource_name = _artifact_resource_name(library_cls.__name__)
+    if identity.name != class_resource_name:
+        raise ArtifactError(
+            "invalid_manifest",
+            "artifact_name must match the derived Library class resource name",
+        )
+    try:
+        class_path = library_cls.class_id().path
+    except (TypeError, ValueError) as exc:
+        raise ArtifactError("invalid_manifest", str(exc)) from exc
+    if identity.to_uri().path != class_path:
+        raise ArtifactError(
+            "invalid_manifest",
+            "artifact manifest public identity must match Library.class_id().path",
         )
 
 
