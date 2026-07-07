@@ -31,6 +31,8 @@ ROUTE_DERIVATIVE_COMPATIBILITY_STATUSES: tuple[str, ...] = (
     ROUTE_DERIVATIVE_COMPATIBILITY_UNSUPPORTED,
 )
 
+ROUTE_DERIVATIVE_METADATA_FIELD = "derivative_routes"
+
 
 @dataclass(frozen=True, slots=True)
 class RouteDerivativeIdentity:
@@ -213,18 +215,7 @@ def extract_route_identity(target: object) -> RouteDerivativeIdentity:
     must not call the target, compile the library, install routes, or dispatch
     any operation.
     """
-    if not callable(target):
-        raise TypeError("expected a bound TinyChain route target")
-
-    route = getattr(target, "__tc_route__", None)
-    route_instance = getattr(target, "__tc_instance__", None)
-    if route is None or route_instance is None:
-        raise TypeError(
-            "tc.grad is a call-site transform and requires a bound TinyChain route target"
-        )
-
-    if not isinstance(route_instance, Library):
-        raise TypeError("bound TinyChain route target must belong to a Library instance")
+    route, route_instance = _extract_bound_route_parts(target)
 
     route_name = getattr(route, "name", None)
     http_method = getattr(route, "method", None)
@@ -252,6 +243,92 @@ def extract_route_identity(target: object) -> RouteDerivativeIdentity:
         route_path=f"/{route_name}",
         route_uri=uri(route_instance.link(), "path", route_name).absolute(),
         http_method=http_method.upper(),
+    )
+
+
+def lookup_route_derivative_metadata(target: object) -> RouteDerivativeMetadata:
+    """Return class-level derivative metadata for a bound route target.
+
+    Library subclasses declare metadata as ``derivative_routes`` keyed by route
+    name (``"create"``) or route path (``"/create"``). This helper performs
+    local metadata inspection only; it never executes or compiles the route.
+    """
+    _, route_instance = _extract_bound_route_parts(target)
+    identity = extract_route_identity(target)
+    metadata_by_key = getattr(type(route_instance), ROUTE_DERIVATIVE_METADATA_FIELD, None)
+    if metadata_by_key is None:
+        raise _missing_route_metadata(identity)
+    if not isinstance(metadata_by_key, Mapping):
+        raise AutodiffError(
+            "non_differentiable_route",
+            f"{ROUTE_DERIVATIVE_METADATA_FIELD} must be a mapping",
+        )
+
+    candidate_keys = (identity.route_name, identity.route_path)
+    matched_entries = [
+        (key, metadata_by_key[key]) for key in candidate_keys if key in metadata_by_key
+    ]
+    if not matched_entries:
+        raise _missing_route_metadata(identity)
+
+    normalized_entries = [
+        (key, _normalize_route_derivative_metadata(value, key))
+        for key, value in matched_entries
+    ]
+    first_key, first_metadata = normalized_entries[0]
+    for duplicate_key, duplicate_metadata in normalized_entries[1:]:
+        if duplicate_metadata != first_metadata:
+            raise AutodiffError(
+                "non_differentiable_route",
+                "ambiguous derivative metadata for "
+                f"{identity.route_uri}: keys {first_key!r} and {duplicate_key!r} disagree",
+            )
+    return first_metadata
+
+
+def _extract_bound_route_parts(target: object) -> tuple[object, Library]:
+    if not callable(target):
+        raise TypeError("expected a bound TinyChain route target")
+
+    route = getattr(target, "__tc_route__", None)
+    route_instance = getattr(target, "__tc_instance__", None)
+    if route is None or route_instance is None:
+        raise TypeError(
+            "tc.grad is a call-site transform and requires a bound TinyChain route target"
+        )
+
+    if not isinstance(route_instance, Library):
+        raise TypeError("bound TinyChain route target must belong to a Library instance")
+    return route, route_instance
+
+
+def _normalize_route_derivative_metadata(
+    value: object,
+    metadata_key: str,
+) -> RouteDerivativeMetadata:
+    if isinstance(value, RouteDerivativeMetadata):
+        return value
+    if isinstance(value, Mapping):
+        try:
+            return RouteDerivativeMetadata.from_dict(dict(value))
+        except KeyError as exc:
+            missing_key = exc.args[0]
+            raise AutodiffError(
+                "non_differentiable_route",
+                f"malformed derivative metadata for {metadata_key!r}: missing {missing_key!r}",
+            ) from exc
+    raise AutodiffError(
+        "non_differentiable_route",
+        f"derivative metadata for {metadata_key!r} must be RouteDerivativeMetadata or mapping",
+    )
+
+
+def _missing_route_metadata(identity: RouteDerivativeIdentity) -> AutodiffError:
+    return AutodiffError(
+        "non_differentiable_route",
+        "missing derivative metadata for route "
+        f"{identity.route_uri}; declare {ROUTE_DERIVATIVE_METADATA_FIELD}[{identity.route_name!r}] "
+        f"or {ROUTE_DERIVATIVE_METADATA_FIELD}[{identity.route_path!r}]",
     )
 
 
