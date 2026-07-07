@@ -7,13 +7,18 @@ import pytest
 from tinychain.autodiff.artifact import (
     ARTIFACT_ERROR_CATEGORIES,
     ArtifactError,
+    ArtifactPublicIdentity,
     DerivativeArtifactManifest,
     artifact_digest_input,
+    artifact_source_dependencies,
     artifact_manifest_from_program,
     artifact_payload,
     attach_artifact_digest,
     canonical_artifact_json,
+    compare_artifact_identity,
     compute_artifact_digest,
+    public_artifact_identity,
+    source_library_dependency_uri,
     validate_artifact_source_metadata,
 )
 from tinychain.autodiff.graph import AddOperator, TensorNodeRecord
@@ -71,7 +76,8 @@ def _manifest(**overrides: object) -> DerivativeArtifactManifest:
         "visibility": "public",
         "digest_algorithm": "sha256",
         "artifact_digest": "abc123",
-        "source_library": "source.library",
+        "source_library": "source_pub/source_library",
+        "source_library_version": "0.1.0",
         "source_route": "train",
         "source_operator": "add",
     }
@@ -85,6 +91,7 @@ def test_artifact_error_categories_are_artifact_specific() -> None:
         "unsupported_visibility",
         "unsupported_digest_algorithm",
         "source_metadata_mismatch",
+        "artifact_conflict",
     }
 
 
@@ -105,7 +112,8 @@ def test_manifest_serializes_to_json_compatible_primitives() -> None:
         "visibility": "public",
         "digest_algorithm": "sha256",
         "artifact_digest": "abc123",
-        "source_library": "source.library",
+        "source_library": "source_pub/source_library",
+        "source_library_version": "0.1.0",
         "source_route": "train",
         "source_operator": "add",
     }
@@ -185,6 +193,7 @@ def test_manifest_rejects_unsupported_digest_algorithm() -> None:
 def test_manifest_accepts_absent_optional_source_metadata() -> None:
     manifest = _manifest(
         source_library=None,
+        source_library_version=None,
         source_route=None,
         source_operator=None,
         artifact_digest=None,
@@ -193,6 +202,7 @@ def test_manifest_accepts_absent_optional_source_metadata() -> None:
     result = manifest.to_dict()
 
     assert result["source_library"] is None
+    assert result["source_library_version"] is None
     assert result["source_route"] is None
     assert result["source_operator"] is None
     assert result["artifact_digest"] is None
@@ -335,7 +345,8 @@ def test_artifact_payload_contains_computed_manifest_and_program() -> None:
             "visibility": "public",
             "digest_algorithm": "sha256",
             "artifact_digest": compute_artifact_digest(manifest, program),
-            "source_library": "source.library",
+            "source_library": "source_pub/source_library",
+            "source_library_version": "0.1.0",
             "source_route": "train",
             "source_operator": "add",
         },
@@ -353,6 +364,129 @@ def test_artifact_payload_uses_derivative_program_to_dict_result() -> None:
     assert result["program"]["nodes"][0]["output_value_id"] == "custom-out"
     assert result["program"]["output_gradients"] == ["dx", None]
 
+
+def test_public_artifact_identity_returns_library_uri() -> None:
+    identity = public_artifact_identity(_manifest())
+
+    assert identity == ArtifactPublicIdentity(
+        publisher="tester",
+        name="example_derivative",
+        version="1.2.3",
+    )
+    assert identity.to_uri().path == "/lib/tester/example_derivative/1.2.3"
+
+
+def test_compare_artifact_identity_accepts_idempotent_repeat() -> None:
+    result = compare_artifact_identity(
+        _manifest(artifact_name="ExampleDerivative", artifact_digest="same-digest"),
+        _manifest(artifact_name="example_derivative", artifact_digest="same-digest"),
+    )
+
+    assert result.identity.name == "example_derivative"
+    assert result.candidate_identity.name == "example_derivative"
+    assert result.is_idempotent is True
+    assert result.is_conflict is False
+
+
+def test_compare_artifact_identity_allows_different_public_identity() -> None:
+    result = compare_artifact_identity(
+        _manifest(artifact_digest="digest-a"),
+        _manifest(artifact_name="OtherDerivative", artifact_digest="digest-b"),
+    )
+
+    assert result.is_idempotent is False
+    assert result.is_conflict is False
+    assert result.candidate_identity.name == "other_derivative"
+
+
+def test_compare_artifact_identity_raises_safe_conflict_error() -> None:
+    with pytest.raises(ArtifactError) as raised:
+        compare_artifact_identity(
+            _manifest(artifact_digest="digest-a"),
+            _manifest(artifact_digest="digest-b"),
+        )
+
+    assert raised.value.category == "artifact_conflict"
+    assert "/lib/tester/example_derivative/1.2.3" in raised.value.message
+    assert "digest-a" in raised.value.message
+    assert "digest-b" in raised.value.message
+    assert "nodes" not in raised.value.message
+    assert "gradients" not in raised.value.message
+
+
+def test_compare_artifact_identity_conflicts_on_same_derived_public_name() -> None:
+    with pytest.raises(ArtifactError) as raised:
+        compare_artifact_identity(
+            _manifest(artifact_name="ExampleDerivative", artifact_digest="digest-a"),
+            _manifest(artifact_name="example_derivative", artifact_digest="digest-b"),
+        )
+
+    assert raised.value.category == "artifact_conflict"
+    assert "/lib/tester/example_derivative/1.2.3" in raised.value.message
+
+
+def test_public_artifact_identity_rejects_invalid_derived_resource_name() -> None:
+    with pytest.raises(ArtifactError) as raised:
+        public_artifact_identity(_manifest(artifact_name="_InvalidDerivative"))
+
+    assert raised.value.category == "invalid_manifest"
+    assert "canonical resource name" in raised.value.message
+
+
+def test_compare_artifact_identity_requires_digests_for_matching_identity() -> None:
+    with pytest.raises(ArtifactError) as raised:
+        compare_artifact_identity(
+            _manifest(artifact_digest=None),
+            _manifest(artifact_digest="digest-b"),
+        )
+
+    assert raised.value.category == "invalid_manifest"
+    assert "artifact_digest" in raised.value.message
+
+
+def test_graph_only_artifact_has_no_source_dependencies() -> None:
+    manifest = _manifest(source_library=None, source_library_version=None)
+
+    assert artifact_source_dependencies(manifest) == ()
+
+
+def test_source_library_dependency_uri_accepts_publisher_name_and_version() -> None:
+    dependency = source_library_dependency_uri("source_pub/source_library", "0.1.0")
+
+    assert dependency is not None
+    assert dependency.path == "/lib/source_pub/source_library/0.1.0"
+    assert artifact_source_dependencies(_manifest()) == (dependency,)
+
+
+def test_source_library_dependency_uri_accepts_canonical_library_path() -> None:
+    dependency = source_library_dependency_uri(
+        "/lib/source_pub/source_library/0.1.0",
+        "0.1.0",
+    )
+
+    assert dependency is not None
+    assert dependency.path == "/lib/source_pub/source_library/0.1.0"
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"source_library": "source_pub/source_library", "source_library_version": None},
+        {"source_library": None, "source_library_version": "0.1.0"},
+        {"source_library": "/not-lib/source_library/0.1.0"},
+        {
+            "source_library": "/lib/source_pub/source_library/0.2.0",
+            "source_library_version": "0.1.0",
+        },
+    ],
+)
+def test_source_library_dependency_validation_rejects_invalid_dependency_metadata(
+    override: dict[str, object],
+) -> None:
+    with pytest.raises(ArtifactError) as raised:
+        artifact_source_dependencies(_manifest(**override))
+
+    assert raised.value.category == "invalid_manifest"
 
 def test_artifact_error_round_trips_and_rejects_unknown_category() -> None:
     error = ArtifactError("invalid_manifest", "bad manifest")
