@@ -50,11 +50,34 @@ _ARTIFACT_EXPORTS = frozenset(
     }
 )
 
+_ROUTE_EXPORTS = frozenset(
+    {
+        "ROUTE_DERIVATIVE_COMPATIBILITY_COMPATIBLE",
+        "ROUTE_DERIVATIVE_COMPATIBILITY_INCOMPATIBLE",
+        "ROUTE_DERIVATIVE_COMPATIBILITY_NOT_VALIDATED",
+        "ROUTE_DERIVATIVE_COMPATIBILITY_STATUSES",
+        "ROUTE_DERIVATIVE_COMPATIBILITY_UNSUPPORTED",
+        "ROUTE_DERIVATIVE_SOURCE_ARTIFACT",
+        "ROUTE_DERIVATIVE_SOURCE_KINDS",
+        "ROUTE_DERIVATIVE_SOURCE_NON_DIFFERENTIABLE",
+        "ROUTE_DERIVATIVE_SOURCE_UNSUPPORTED",
+        "RouteDerivativeIdentity",
+        "RouteDerivativeMetadata",
+        "RouteDerivativePlan",
+        "extract_route_identity",
+    }
+)
+
 
 def __getattr__(name: str) -> object:
     if name in _ARTIFACT_EXPORTS:
         artifact_module = import_module(".artifact", __name__)
         value = getattr(artifact_module, name)
+        globals()[name] = value
+        return value
+    if name in _ROUTE_EXPORTS:
+        routes_module = import_module(".routes", __name__)
+        value = getattr(routes_module, name)
         globals()[name] = value
         return value
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
@@ -100,6 +123,19 @@ def generate(
 
 __all__ = [
     "ARTIFACT_ERROR_CATEGORIES",
+    "ROUTE_DERIVATIVE_COMPATIBILITY_COMPATIBLE",
+    "ROUTE_DERIVATIVE_COMPATIBILITY_INCOMPATIBLE",
+    "ROUTE_DERIVATIVE_COMPATIBILITY_NOT_VALIDATED",
+    "ROUTE_DERIVATIVE_COMPATIBILITY_STATUSES",
+    "ROUTE_DERIVATIVE_COMPATIBILITY_UNSUPPORTED",
+    "ROUTE_DERIVATIVE_SOURCE_ARTIFACT",
+    "ROUTE_DERIVATIVE_SOURCE_KINDS",
+    "ROUTE_DERIVATIVE_SOURCE_NON_DIFFERENTIABLE",
+    "ROUTE_DERIVATIVE_SOURCE_UNSUPPORTED",
+    "RouteDerivativeIdentity",
+    "RouteDerivativeMetadata",
+    "RouteDerivativePlan",
+    "extract_route_identity",
     "ArtifactComparisonResult",
     "ArtifactError",
     "ArtifactPayload",

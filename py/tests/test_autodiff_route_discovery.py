@@ -1,12 +1,23 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
 
 import tinychain as tc
-from tinychain.autodiff import AutodiffError
+from tinychain.autodiff import (
+    ROUTE_DERIVATIVE_COMPATIBILITY_NOT_VALIDATED,
+    ROUTE_DERIVATIVE_SOURCE_ARTIFACT,
+    ROUTE_DERIVATIVE_SOURCE_NON_DIFFERENTIABLE,
+    ROUTE_DERIVATIVE_SOURCE_UNSUPPORTED,
+    AutodiffError,
+    RouteDerivativeMetadata,
+    RouteDerivativePlan,
+)
+from tinychain.autodiff.protocol import DerivativeMetadata
 from tinychain.autodiff.routes import RouteDerivativeIdentity, extract_route_identity
+from tinychain.graph_reflection import TypeSpec
 
 
 class RouteIdentityLibrary(tc.Library):
@@ -131,3 +142,150 @@ def test_extract_route_identity_does_not_call_route_compile_install_or_dispatch(
     assert calls == {"body": 0}
     assert identity.route_name == "mutate"
     assert identity.http_method == "POST"
+
+
+def _string_type_spec() -> TypeSpec:
+    return TypeSpec(class_uri="/state/scalar/string", params={"encoding": "utf-8"})
+
+
+def _route_identity() -> RouteDerivativeIdentity:
+    return extract_route_identity(RouteIdentityLibrary().create)
+
+
+def test_route_derivative_metadata_serializes_stable_json_shape() -> None:
+    value_type = _string_type_spec()
+    metadata = RouteDerivativeMetadata(
+        source_kind=ROUTE_DERIVATIVE_SOURCE_ARTIFACT,
+        is_pure=True,
+        is_differentiable=True,
+        input_signature=(value_type,),
+        output_signature=(value_type,),
+        supported_wrt=("value",),
+        seed_contract="cotangent:output",
+        transform_version="route-discovery-v1",
+        tensor_op_contract_version="tensor-contract-v1",
+    )
+
+    payload = metadata.to_dict()
+
+    assert RouteDerivativeMetadata.from_dict(payload) == metadata
+    assert json.loads(json.dumps(payload, sort_keys=True)) == payload
+    assert payload == {
+        "source_kind": "artifact",
+        "is_pure": True,
+        "is_differentiable": True,
+        "input_signature": [
+            {"class_uri": "/state/scalar/string", "params": {"encoding": "utf-8"}}
+        ],
+        "output_signature": [
+            {"class_uri": "/state/scalar/string", "params": {"encoding": "utf-8"}}
+        ],
+        "supported_wrt": ["value"],
+        "seed_contract": "cotangent:output",
+        "transform_version": "route-discovery-v1",
+        "tensor_op_contract_version": "tensor-contract-v1",
+    }
+
+
+def test_route_derivative_plan_serializes_identity_and_artifact_reference_fields() -> None:
+    plan = RouteDerivativePlan(
+        route_identity=_route_identity(),
+        requested_wrt=("value",),
+        seed_contract="cotangent:output",
+        source_kind=ROUTE_DERIVATIVE_SOURCE_ARTIFACT,
+        compatibility_status=ROUTE_DERIVATIVE_COMPATIBILITY_NOT_VALIDATED,
+        artifact_uri="/lib/example-devco/create_derivative/0.1.0",
+        artifact_digest="sha256:abc123",
+        artifact_visibility="public",
+    )
+
+    payload = plan.to_dict()
+
+    assert RouteDerivativePlan.from_dict(payload) == plan
+    assert json.loads(json.dumps(payload, sort_keys=True)) == payload
+    assert payload["route_identity"] == _route_identity().to_dict()
+    assert payload["requested_wrt"] == ["value"]
+    assert payload["compatibility_status"] == "not_validated"
+    assert payload["artifact_uri"] == "/lib/example-devco/create_derivative/0.1.0"
+
+
+@pytest.mark.parametrize(
+    "source_kind",
+    [ROUTE_DERIVATIVE_SOURCE_UNSUPPORTED, ROUTE_DERIVATIVE_SOURCE_NON_DIFFERENTIABLE],
+)
+def test_route_derivative_metadata_rejects_differentiable_unsupported_states(
+    source_kind: str,
+) -> None:
+    with pytest.raises(AutodiffError) as exc_info:
+        RouteDerivativeMetadata(
+            source_kind=source_kind,
+            is_pure=True,
+            is_differentiable=True,
+            input_signature=(_string_type_spec(),),
+            output_signature=(_string_type_spec(),),
+            supported_wrt=("value",),
+            seed_contract="cotangent:output",
+            transform_version="route-discovery-v1",
+            tensor_op_contract_version="tensor-contract-v1",
+        )
+
+    assert exc_info.value.category == "non_differentiable_route"
+
+
+def test_route_derivative_metadata_rejects_unknown_source_kind() -> None:
+    with pytest.raises(AutodiffError) as exc_info:
+        RouteDerivativeMetadata(
+            source_kind="python_callback",
+            is_pure=True,
+            is_differentiable=True,
+            input_signature=(_string_type_spec(),),
+            output_signature=(_string_type_spec(),),
+            supported_wrt=("value",),
+            seed_contract="cotangent:output",
+            transform_version="route-discovery-v1",
+            tensor_op_contract_version="tensor-contract-v1",
+        )
+
+    assert exc_info.value.category == "non_differentiable_route"
+    assert "source_kind" in str(exc_info.value)
+
+
+def test_route_derivative_plan_rejects_malformed_non_json_fields() -> None:
+    with pytest.raises(AutodiffError) as exc_info:
+        RouteDerivativePlan(
+            route_identity=_route_identity(),
+            requested_wrt=(object(),),
+            seed_contract="cotangent:output",
+            source_kind=ROUTE_DERIVATIVE_SOURCE_ARTIFACT,
+            compatibility_status=ROUTE_DERIVATIVE_COMPATIBILITY_NOT_VALIDATED,
+        )
+
+    assert exc_info.value.category == "non_differentiable_route"
+    assert "requested_wrt" in str(exc_info.value)
+
+
+def test_route_metadata_is_separate_from_derivative_metadata_and_top_level_exports() -> None:
+    route_payload = RouteDerivativeMetadata(
+        source_kind=ROUTE_DERIVATIVE_SOURCE_ARTIFACT,
+        is_pure=True,
+        is_differentiable=True,
+        input_signature=(_string_type_spec(),),
+        output_signature=(_string_type_spec(),),
+        supported_wrt=("value",),
+        seed_contract="cotangent:output",
+        transform_version="route-discovery-v1",
+        tensor_op_contract_version="tensor-contract-v1",
+    ).to_dict()
+    tensor_payload = DerivativeMetadata(
+        source_graph_id="graph-1",
+        transform_version="route-discovery-v1",
+        tensor_op_contract_version="tensor-contract-v1",
+        wrt_signature=("value",),
+        seed_contract="cotangent:output",
+    ).to_dict()
+
+    assert "source_graph_id" not in route_payload
+    assert "source_kind" not in tensor_payload
+    assert "artifact_uri" not in route_payload
+    assert hasattr(tc.autodiff, "RouteDerivativeMetadata")
+    assert not hasattr(tc, "RouteDerivativeMetadata")
