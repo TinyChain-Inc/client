@@ -16,7 +16,11 @@ from tinychain.autodiff import (
     RouteDerivativePlan,
 )
 from tinychain.autodiff.protocol import DerivativeMetadata
-from tinychain.autodiff.routes import RouteDerivativeIdentity, extract_route_identity
+from tinychain.autodiff.routes import (
+    RouteDerivativeIdentity,
+    extract_route_identity,
+    lookup_route_derivative_metadata,
+)
 from tinychain.graph_reflection import TypeSpec
 
 
@@ -150,6 +154,78 @@ def _string_type_spec() -> TypeSpec:
 
 def _route_identity() -> RouteDerivativeIdentity:
     return extract_route_identity(RouteIdentityLibrary().create)
+
+
+def _route_metadata(*, seed_contract: str = "cotangent:output") -> RouteDerivativeMetadata:
+    value_type = _string_type_spec()
+    return RouteDerivativeMetadata(
+        source_kind=ROUTE_DERIVATIVE_SOURCE_ARTIFACT,
+        is_pure=True,
+        is_differentiable=True,
+        input_signature=(value_type,),
+        output_signature=(value_type,),
+        supported_wrt=("value",),
+        seed_contract=seed_contract,
+        transform_version="route-discovery-v1",
+        tensor_op_contract_version="tensor-contract-v1",
+    )
+
+
+def test_lookup_route_derivative_metadata_by_route_name() -> None:
+    metadata = _route_metadata()
+
+    class NameMetadataLibrary(RouteIdentityLibrary):
+        derivative_routes = {"create": metadata}
+
+    assert lookup_route_derivative_metadata(NameMetadataLibrary().create) == metadata
+
+
+def test_lookup_route_derivative_metadata_by_route_path_from_mapping() -> None:
+    metadata = _route_metadata()
+
+    class PathMetadataLibrary(RouteIdentityLibrary):
+        derivative_routes = {"/create": metadata.to_dict()}
+
+    assert lookup_route_derivative_metadata(PathMetadataLibrary().create) == metadata
+
+
+def test_lookup_route_derivative_metadata_missing_route_is_distinguishable() -> None:
+    class MissingMetadataLibrary(RouteIdentityLibrary):
+        derivative_routes = {"fetch": _route_metadata()}
+
+    with pytest.raises(AutodiffError) as exc_info:
+        lookup_route_derivative_metadata(MissingMetadataLibrary().create)
+
+    assert exc_info.value.category == "non_differentiable_route"
+    assert "missing derivative metadata" in str(exc_info.value)
+    assert "'create'" in str(exc_info.value)
+    assert "'/create'" in str(exc_info.value)
+
+
+def test_lookup_route_derivative_metadata_rejects_ambiguous_duplicate_keys() -> None:
+    class AmbiguousMetadataLibrary(RouteIdentityLibrary):
+        derivative_routes = {
+            "create": _route_metadata(seed_contract="cotangent:output"),
+            "/create": _route_metadata(seed_contract="cotangent:alternate"),
+        }
+
+    with pytest.raises(AutodiffError) as exc_info:
+        lookup_route_derivative_metadata(AmbiguousMetadataLibrary().create)
+
+    assert exc_info.value.category == "non_differentiable_route"
+    assert "ambiguous derivative metadata" in str(exc_info.value)
+
+
+def test_lookup_route_derivative_metadata_rejects_malformed_metadata_separately() -> None:
+    class MalformedMetadataLibrary(RouteIdentityLibrary):
+        derivative_routes = {"create": {"source_kind": ROUTE_DERIVATIVE_SOURCE_ARTIFACT}}
+
+    with pytest.raises(AutodiffError) as exc_info:
+        lookup_route_derivative_metadata(MalformedMetadataLibrary().create)
+
+    assert exc_info.value.category == "non_differentiable_route"
+    assert "malformed derivative metadata" in str(exc_info.value)
+    assert "missing derivative metadata" not in str(exc_info.value)
 
 
 def test_route_derivative_metadata_serializes_stable_json_shape() -> None:
