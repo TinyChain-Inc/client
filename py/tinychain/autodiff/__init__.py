@@ -64,6 +64,7 @@ _ROUTE_EXPORTS = frozenset(
         "RouteDerivativeIdentity",
         "RouteDerivativeMetadata",
         "RouteDerivativePlan",
+        "discover_route_derivative",
         "extract_route_identity",
     }
 )
@@ -135,6 +136,7 @@ __all__ = [
     "RouteDerivativeIdentity",
     "RouteDerivativeMetadata",
     "RouteDerivativePlan",
+    "discover_route_derivative",
     "extract_route_identity",
     "ArtifactComparisonResult",
     "ArtifactError",

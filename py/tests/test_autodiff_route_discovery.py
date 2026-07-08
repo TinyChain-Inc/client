@@ -14,6 +14,7 @@ from tinychain.autodiff import (
     AutodiffError,
     RouteDerivativeMetadata,
     RouteDerivativePlan,
+    discover_route_derivative,
 )
 from tinychain.autodiff.protocol import DerivativeMetadata
 from tinychain.autodiff.routes import (
@@ -226,6 +227,201 @@ def test_lookup_route_derivative_metadata_rejects_malformed_metadata_separately(
     assert exc_info.value.category == "non_differentiable_route"
     assert "malformed derivative metadata" in str(exc_info.value)
     assert "missing derivative metadata" not in str(exc_info.value)
+
+
+def _tensor_type_spec(
+    *,
+    dtype: str | None = "f32",
+    shape: list[int] | None = None,
+) -> TypeSpec:
+    params: dict[str, object] = {}
+    if dtype is not None:
+        params["dtype"] = dtype
+    if shape is not None:
+        params["shape"] = shape
+    return TypeSpec(class_uri="/state/collection/tensor", params=params)
+
+
+def _route_tensor_metadata(
+    *,
+    source_kind: str = ROUTE_DERIVATIVE_SOURCE_ARTIFACT,
+    is_pure: bool = True,
+    is_differentiable: bool = True,
+    input_signature: tuple[TypeSpec | dict[str, object], ...] | None = None,
+    output_signature: tuple[TypeSpec | dict[str, object], ...] | None = None,
+    supported_wrt: tuple[str, ...] = ("value",),
+) -> RouteDerivativeMetadata:
+    input_types = input_signature or (_tensor_type_spec(shape=[2, 2]),)
+    output_types = output_signature or (_tensor_type_spec(shape=[2, 2]),)
+    return RouteDerivativeMetadata(
+        source_kind=source_kind,
+        is_pure=is_pure,
+        is_differentiable=is_differentiable,
+        input_signature=input_types,
+        output_signature=output_types,
+        supported_wrt=supported_wrt,
+        seed_contract="seed matches output",
+        transform_version="route-discovery-v1",
+        tensor_op_contract_version="tensor-contract-v1",
+    )
+
+
+def test_discover_route_derivative_returns_plan_for_valid_metadata_mapping() -> None:
+    metadata = _route_tensor_metadata(
+        input_signature=(_tensor_type_spec(shape=[2, 2]).to_dict(),),
+        output_signature=(_tensor_type_spec(shape=[2, 2]).to_dict(),),
+    )
+
+    class ValidMetadataLibrary(RouteIdentityLibrary):
+        derivative_routes = {"create": metadata.to_dict()}
+
+    plan = discover_route_derivative(
+        ValidMetadataLibrary().create,
+        wrt="value",
+        seed="upstream",
+        seed_typespec=_tensor_type_spec(shape=[2, 2]).to_dict(),
+    )
+
+    assert isinstance(plan, RouteDerivativePlan)
+    assert plan.route_identity.route_name == "create"
+    assert plan.requested_wrt == ("value",)
+    assert plan.seed_contract == "seed matches output"
+    assert plan.source_kind == ROUTE_DERIVATIVE_SOURCE_ARTIFACT
+    assert plan.compatibility_status == ROUTE_DERIVATIVE_COMPATIBILITY_NOT_VALIDATED
+
+
+@pytest.mark.parametrize("shape", [[2], [2, 2], []])
+def test_discover_route_derivative_accepts_integer_shape_metadata(shape: list[int]) -> None:
+    metadata = _route_tensor_metadata(
+        input_signature=(_tensor_type_spec(shape=shape),),
+        output_signature=(_tensor_type_spec(shape=shape),),
+    )
+
+    class ValidShapeLibrary(RouteIdentityLibrary):
+        derivative_routes = {"create": metadata}
+
+    plan = discover_route_derivative(
+        ValidShapeLibrary().create,
+        wrt="value",
+        seed_typespec=_tensor_type_spec(shape=shape),
+    )
+
+    assert plan.route_identity.route_name == "create"
+    assert plan.requested_wrt == ("value",)
+
+
+def test_discover_route_derivative_missing_metadata_sanitizes_route_message() -> None:
+    with pytest.raises(AutodiffError) as exc_info:
+        discover_route_derivative(RouteIdentityLibrary().create, wrt=("value",))
+
+    assert exc_info.value.category == "non_differentiable_route"
+    assert "/path/create" in str(exc_info.value)
+    assert "route body must not execute" not in str(exc_info.value)
+
+
+def test_discover_route_derivative_rejects_side_effecting_metadata() -> None:
+    class SideEffectMetadataLibrary(RouteIdentityLibrary):
+        derivative_routes = {"create": _route_tensor_metadata(is_pure=False)}
+
+    with pytest.raises(AutodiffError) as exc_info:
+        discover_route_derivative(SideEffectMetadataLibrary().create, wrt=("value",))
+
+    assert exc_info.value.category == "side_effecting_route_unsupported"
+
+
+def test_discover_route_derivative_rejects_unknown_purity_metadata() -> None:
+    metadata = _route_tensor_metadata().to_dict()
+    metadata["is_pure"] = None
+
+    class UnknownPurityMetadataLibrary(RouteIdentityLibrary):
+        derivative_routes = {"create": metadata}
+
+    with pytest.raises(AutodiffError) as exc_info:
+        discover_route_derivative(UnknownPurityMetadataLibrary().create, wrt=("value",))
+
+    assert exc_info.value.category == "side_effecting_route_unsupported"
+
+
+def test_discover_route_derivative_rejects_invalid_wrt() -> None:
+    class WrtMetadataLibrary(RouteIdentityLibrary):
+        derivative_routes = {"create": _route_tensor_metadata(supported_wrt=("value",))}
+
+    with pytest.raises(AutodiffError) as exc_info:
+        discover_route_derivative(WrtMetadataLibrary().create, wrt=("other",))
+
+    assert exc_info.value.category == "non_differentiable_route"
+    assert "other" in str(exc_info.value)
+
+
+def test_discover_route_derivative_rejects_missing_dtype_metadata() -> None:
+    class MissingDtypeLibrary(RouteIdentityLibrary):
+        derivative_routes = {
+            "create": _route_tensor_metadata(input_signature=(_tensor_type_spec(dtype=None, shape=[2]),))
+        }
+
+    with pytest.raises(AutodiffError) as exc_info:
+        discover_route_derivative(MissingDtypeLibrary().create, wrt=("value",))
+
+    assert exc_info.value.category == "missing_dtype_metadata"
+
+
+def test_discover_route_derivative_rejects_missing_shape_metadata() -> None:
+    class MissingShapeLibrary(RouteIdentityLibrary):
+        derivative_routes = {
+            "create": _route_tensor_metadata(output_signature=(_tensor_type_spec(shape=None),))
+        }
+
+    with pytest.raises(AutodiffError) as exc_info:
+        discover_route_derivative(MissingShapeLibrary().create, wrt=("value",))
+
+    assert exc_info.value.category == "missing_shape_metadata"
+
+
+@pytest.mark.parametrize(
+    "shape",
+    ["22", 22, ["two"], [2.5], [True]],
+)
+def test_discover_route_derivative_rejects_malformed_shape_metadata(shape: object) -> None:
+    class MalformedShapeLibrary(RouteIdentityLibrary):
+        derivative_routes = {
+            "create": _route_tensor_metadata(
+                output_signature=(_tensor_type_spec(shape=shape),)
+            )
+        }
+
+    with pytest.raises(AutodiffError) as exc_info:
+        discover_route_derivative(MalformedShapeLibrary().create, wrt=("value",))
+
+    assert exc_info.value.category == "missing_shape_metadata"
+    assert "route body must not execute" not in str(exc_info.value)
+
+
+def test_discover_route_derivative_rejects_non_floating_dtype() -> None:
+    class IntegerTensorLibrary(RouteIdentityLibrary):
+        derivative_routes = {
+            "create": _route_tensor_metadata(input_signature=(_tensor_type_spec(dtype="i64", shape=[2]),))
+        }
+
+    with pytest.raises(AutodiffError) as exc_info:
+        discover_route_derivative(IntegerTensorLibrary().create, wrt=("value",))
+
+    assert exc_info.value.category == "dtype_not_differentiable"
+
+
+def test_discover_route_derivative_rejects_missing_derivative_behavior() -> None:
+    class UnsupportedMetadataLibrary(RouteIdentityLibrary):
+        derivative_routes = {
+            "create": _route_tensor_metadata(
+                source_kind=ROUTE_DERIVATIVE_SOURCE_UNSUPPORTED,
+                is_differentiable=False,
+                supported_wrt=(),
+            )
+        }
+
+    with pytest.raises(AutodiffError) as exc_info:
+        discover_route_derivative(UnsupportedMetadataLibrary().create, wrt=("value",))
+
+    assert exc_info.value.category == "missing_derivative_behavior"
 
 
 def test_route_derivative_metadata_serializes_stable_json_shape() -> None:
