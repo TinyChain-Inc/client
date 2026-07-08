@@ -405,6 +405,14 @@ def _try_grad_target_view_wire(target: object) -> object | None:
         return None
 
 
+def _is_bound_route_target(target: object) -> bool:
+    return (
+        callable(target)
+        and getattr(target, "__tc_route__", None) is not None
+        and isinstance(getattr(target, "__tc_instance__", None), Library)
+    )
+
+
 def grad(
     target: object,
     *,
@@ -416,10 +424,11 @@ def grad(
     """Generate a derivative program for Python-owned TensorGraph targets.
 
     The Phase 1 engine operates on ``tinychain.autodiff.TensorGraph`` records.
-    Other call-site forms fail clearly until route tracing/final API work lands.
+    Phase 4 route targets use local metadata discovery. Other call-site forms
+    fail clearly until route tracing/final API work lands.
     """
 
-    from .autodiff import AutodiffError, TensorGraph, generate
+    from .autodiff import AutodiffError, TensorGraph, discover_route_derivative, generate
 
     if callable(target) and wrt is None:
         raise TypeError("tc.grad is a call-site transform and cannot be used as a route decorator")
@@ -440,9 +449,17 @@ def grad(
             seed_typespec=seed_typespec,
         )
 
+    if _is_bound_route_target(target):
+        return discover_route_derivative(
+            target,
+            wrt=wrt,
+            seed=seed,
+            seed_typespec=seed_typespec,
+        )
+
     raise AutodiffError(
         "autodiff_not_implemented",
-        "tc.grad currently requires a Python-owned TensorGraph target",
+        "tc.grad currently requires a Python-owned TensorGraph or bound route target",
     )
 
 
