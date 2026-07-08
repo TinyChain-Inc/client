@@ -260,7 +260,7 @@ from tinychain.graph_reflection import TypeSpec
 
 tensor_type = TypeSpec(
     "/state/collection/tensor",
-    {"dtype": "float32", "shape": [2, 2]},
+    {"dtype": "f32", "shape": [2, 2]},
 )
 
 class Math(tc.Library):
