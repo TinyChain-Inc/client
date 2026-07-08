@@ -220,8 +220,9 @@ Autodiff follows a JAX-like call-site transform model: routes define ordinary
 TinyChain computation, and the autodiff compiler decides `wrt`, traversal,
 fanout, and accumulation when `tc.grad(...)` is called. Do not create
 autodiff-specific `get`/`post` decorators or route-level `rule`/`wrt` metadata.
-The current `tc.grad(...)` surface is a reserved stub until the compiler pass is
-implemented.
+TensorGraph targets return experimental Python-owned derivative programs. Bound
+route targets use the experimental route derivative discovery path below.
+All other target forms still fail with `AutodiffError("autodiff_not_implemented", ...)`.
 
 Python route implementations are compiled by `tinychain._autograph`, which lowers
 method source code into TinyChain IR. Route decorators capture source at definition
@@ -230,10 +231,98 @@ source-backed cells work. Truly source-less generated functions still cannot be
 installed as Python route implementations; use a normal source-backed method, a
 stub backed by remote/WASM execution, or an explicit TinyChain op definition.
 
+Route source capture is not automatic route-body tracing for autodiff. Discovery
+does not inspect Python route bodies to infer derivative rules, does not compile
+or execute user route code during discovery, does not install derivative routes,
+and does not add backend or `tc-server` derivative execution.
+
 Autograph enforces strict TinyChain-only symbol usage inside compiled route
 expressions. Names must resolve to route parameters, prior local bindings,
 `self`, or `tc`; non-TinyChain globals (for example `urllib`, `tensorflow`/`tf`,
 `jax`) are rejected at compile time with an `AutographNameError`.
+
+### Route derivative discovery
+
+Route autodiff is a discovery and planning layer for library authors. A
+`Library` subclass declares derivative metadata on the class-level
+`derivative_routes` mapping. Keys are route names such as `"matmul"` or route
+paths such as `"/matmul"`; values are `RouteDerivativeMetadata` instances or
+JSON-compatible dictionaries with the same fields. Route decorators do not accept
+autodiff-specific metadata.
+
+```python
+import tinychain as tc
+from tinychain.autodiff import (
+    ROUTE_DERIVATIVE_SOURCE_ARTIFACT,
+    RouteDerivativeMetadata,
+)
+from tinychain.graph_reflection import TypeSpec
+
+tensor_type = TypeSpec(
+    "/state/collection/tensor",
+    {"dtype": "float32", "shape": [2, 2]},
+)
+
+class Math(tc.Library):
+    publisher = "demo"
+    version = "0.1.0"
+    derivative_routes = {
+        "matmul": RouteDerivativeMetadata(
+            source_kind=ROUTE_DERIVATIVE_SOURCE_ARTIFACT,
+            is_pure=True,
+            is_differentiable=True,
+            input_signature=(tensor_type, tensor_type),
+            output_signature=(tensor_type,),
+            supported_wrt=("left", "right"),
+            seed_contract="cotangent:output",
+            transform_version="autodiff-v1",
+            tensor_op_contract_version="tensor-op-v1",
+            artifact_uri="/lib/demo/MathMatmulDerivative/0.1.0/artifact",
+            artifact_digest="sha256:example",
+            artifact_source_library="/lib/demo/Math/0.1.0",
+            artifact_source_library_version="0.1.0",
+            artifact_source_route="/matmul",
+            artifact_visibility="public",
+        )
+    }
+
+    @tc.post
+    def matmul(self, left: tc.Tensor, right: tc.Tensor) -> tc.Tensor:
+        return left @ right
+
+plan = tc.grad(Math().matmul, wrt=("left", "right"))
+```
+
+For route targets, `tc.grad(route_target, wrt=...)` reads bound route metadata
+from the local Python object and returns a `RouteDerivativePlan` when metadata is
+present, pure, differentiable, tensor-shaped, floating-typed, seed-compatible,
+and artifact-compatible with the source library and route. Discovery failures
+raise route-specific `AutodiffError` categories: missing metadata is reported as
+`non_differentiable_route`, side-effecting metadata as
+`side_effecting_route_unsupported`, missing tensor dtype or shape as
+`missing_dtype_metadata` or `missing_shape_metadata`, non-floating dtype as
+`dtype_not_differentiable`, and unsupported derivative behavior as
+`missing_derivative_behavior`.
+
+Artifact-backed discovery validates declared artifact URI, digest, source
+library, source library version, source route, seed contract, and tensor
+contract metadata. Artifact visibility is surfaced on the plan as descriptive
+metadata only; it does not enforce hidden/internal routes or install-time access
+control. Broader route-body tracing, stable public `tc.grad` semantics, backend
+execution, server-side derivative graphs, placeholder gradients, visibility
+enforcement, and broad autodiff operation coverage remain deferred.
+
+`tinychain.std.autodiff.Autodiff.grad`, `.vjp`, and `.trace` remain fail-only
+placeholder methods. They raise `NotImplementedError("autodiff_not_implemented: ...")`
+and do not produce identity gradients or fallback derivative plans.
+
+Focused verification for this surface uses the route discovery, artifact, graph,
+and placeholder suites from the client repo root:
+
+```bash
+python -m pytest py/tests/test_autodiff_route_discovery.py -v
+python -m pytest py/tests/test_autodiff_artifact.py py/tests/test_autodiff_add.py py/tests/test_std_autodiff.py -v
+```
 
 ### Derivative artifact lifecycle
 
