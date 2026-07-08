@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
@@ -9,7 +10,10 @@ from ..library import Library
 from ..uri import uri
 from ..serialize import serialize
 from .protocol import AutodiffError
+from .seed import FLOAT_DTYPES, SeedValidator
 
+
+TENSOR_TYPESPEC_CLASS_URI = "/state/collection/tensor"
 
 ROUTE_DERIVATIVE_SOURCE_ARTIFACT = "artifact"
 ROUTE_DERIVATIVE_SOURCE_UNSUPPORTED = "unsupported"
@@ -286,6 +290,37 @@ def lookup_route_derivative_metadata(target: object) -> RouteDerivativeMetadata:
     return first_metadata
 
 
+def discover_route_derivative(
+    target: object,
+    *,
+    wrt: object,
+    seed: str = "seed",
+    seed_typespec: TypeSpec | dict[str, object] | None = None,
+) -> RouteDerivativePlan:
+    """Validate route derivative metadata and return a local discovery plan.
+
+    Discovery is metadata-only: it never executes route bodies, installs
+    derivative artifacts, fetches remote state, or calls a backend.
+    """
+    identity = extract_route_identity(target)
+    metadata = lookup_route_derivative_metadata(target)
+    requested_wrt = _normalize_requested_wrt(wrt)
+    _validate_route_derivative_metadata(
+        identity=identity,
+        metadata=metadata,
+        requested_wrt=requested_wrt,
+        seed=seed,
+        seed_typespec=seed_typespec,
+    )
+    return RouteDerivativePlan(
+        route_identity=identity,
+        requested_wrt=requested_wrt,
+        seed_contract=metadata.seed_contract,
+        source_kind=metadata.source_kind,
+        compatibility_status=ROUTE_DERIVATIVE_COMPATIBILITY_NOT_VALIDATED,
+    )
+
+
 def _extract_bound_route_parts(target: object) -> tuple[object, Library]:
     if not callable(target):
         raise TypeError("expected a bound TinyChain route target")
@@ -300,6 +335,129 @@ def _extract_bound_route_parts(target: object) -> tuple[object, Library]:
     if not isinstance(route_instance, Library):
         raise TypeError("bound TinyChain route target must belong to a Library instance")
     return route, route_instance
+
+
+def _normalize_requested_wrt(wrt: object) -> tuple[str, ...]:
+    if wrt is None:
+        raise TypeError("discover_route_derivative requires `wrt` value ids")
+    if isinstance(wrt, str):
+        values = (wrt,)
+    elif isinstance(wrt, (list, tuple)):
+        values = tuple(wrt)
+    else:
+        raise TypeError(
+            "discover_route_derivative `wrt` must be a value id string "
+            "or sequence of value id strings"
+        )
+    if not values:
+        raise TypeError("discover_route_derivative `wrt` must not be empty")
+    for value in values:
+        if not isinstance(value, str) or not value:
+            raise TypeError(
+                "discover_route_derivative `wrt` entries must be non-empty value id strings"
+            )
+    return values
+
+
+def _validate_route_derivative_metadata(
+    *,
+    identity: RouteDerivativeIdentity,
+    metadata: RouteDerivativeMetadata,
+    requested_wrt: tuple[str, ...],
+    seed: str,
+    seed_typespec: TypeSpec | dict[str, object] | None,
+) -> None:
+    if not metadata.is_pure:
+        raise AutodiffError(
+            "side_effecting_route_unsupported",
+            f"route derivative discovery requires explicit pure metadata for {identity.route_uri}",
+        )
+    if not metadata.is_differentiable:
+        raise AutodiffError(
+            "missing_derivative_behavior",
+            f"route {identity.route_uri} does not declare differentiable behavior",
+        )
+    if metadata.source_kind != ROUTE_DERIVATIVE_SOURCE_ARTIFACT:
+        raise AutodiffError(
+            "missing_derivative_behavior",
+            f"route {identity.route_uri} has unsupported derivative source kind {metadata.source_kind!r}",
+        )
+
+    supported_wrt = frozenset(metadata.supported_wrt)
+    invalid_wrt = [value for value in requested_wrt if value not in supported_wrt]
+    if invalid_wrt:
+        raise AutodiffError(
+            "non_differentiable_route",
+            f"route {identity.route_uri} does not support wrt values {invalid_wrt!r}",
+        )
+
+    if not isinstance(seed, str) or not seed:
+        raise TypeError("discover_route_derivative `seed` must be a non-empty string")
+
+    for type_spec in (*metadata.input_signature, *metadata.output_signature):
+        _validate_tensor_type_spec(identity, type_spec)
+    if not metadata.output_signature:
+        raise AutodiffError(
+            "missing_shape_metadata",
+            f"route {identity.route_uri} derivative metadata must declare tensor outputs",
+        )
+
+    if seed_typespec is not None:
+        output_type_spec = metadata.output_signature[0]
+        SeedValidator().validate(
+            seed_typespec=_typespec_params(_normalize_type_spec(seed_typespec, "seed_typespec")),
+            output_typespec=_typespec_params(output_type_spec),
+        )
+
+
+def _validate_tensor_type_spec(
+    identity: RouteDerivativeIdentity,
+    type_spec: TypeSpec,
+) -> None:
+    if type_spec.class_uri != TENSOR_TYPESPEC_CLASS_URI:
+        raise AutodiffError(
+            "non_differentiable_route",
+            f"route {identity.route_uri} derivative signatures must use tensor TypeSpec values",
+        )
+    params = _typespec_params(type_spec)
+    if "dtype" not in params:
+        raise AutodiffError(
+            "missing_dtype_metadata",
+            f"route {identity.route_uri} tensor signature is missing dtype metadata",
+        )
+    if "shape" not in params:
+        raise AutodiffError(
+            "missing_shape_metadata",
+            f"route {identity.route_uri} tensor signature is missing shape metadata",
+        )
+    dtype = str(params["dtype"])
+    if dtype not in FLOAT_DTYPES:
+        raise AutodiffError(
+            "dtype_not_differentiable",
+            f"route {identity.route_uri} supports only {', '.join(FLOAT_DTYPES)} tensors",
+        )
+    try:
+        _normalize_tensor_shape(params["shape"])
+    except (TypeError, ValueError) as exc:
+        raise AutodiffError(
+            "missing_shape_metadata",
+            f"route {identity.route_uri} tensor shape metadata must be a sequence",
+        ) from exc
+
+
+def _normalize_tensor_shape(value: object) -> tuple[int, ...]:
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+        raise TypeError("tensor shape metadata must be a non-string sequence")
+    shape: list[int] = []
+    for dimension in value:
+        if isinstance(dimension, bool) or not isinstance(dimension, int):
+            raise TypeError("tensor shape dimensions must be integers")
+        shape.append(dimension)
+    return tuple(shape)
+
+
+def _typespec_params(type_spec: TypeSpec) -> dict[str, object]:
+    return dict(type_spec.params)
 
 
 def _normalize_route_derivative_metadata(
@@ -383,6 +541,11 @@ def _required_string(data: Mapping[str, object], key: str) -> str:
 
 def _required_bool(data: Mapping[str, object], key: str) -> bool:
     value = data[key]
+    if key == "is_pure" and not isinstance(value, bool):
+        raise AutodiffError(
+            "side_effecting_route_unsupported",
+            "route derivative discovery requires explicit pure metadata",
+        )
     _require_bool(key, value)
     return value
 
@@ -398,17 +561,31 @@ def _optional_string(value: object) -> str | None:
     return value
 
 
-def _typespec_tuple(label: str, values: Iterable[TypeSpec]) -> tuple[TypeSpec, ...]:
+def _typespec_tuple(
+    label: str,
+    values: Iterable[TypeSpec | Mapping[str, object]],
+) -> tuple[TypeSpec, ...]:
     if isinstance(values, (str, bytes)):
         raise AutodiffError("non_differentiable_route", f"{label} must be a sequence")
-    result = tuple(values)
-    for type_spec in result:
-        if not isinstance(type_spec, TypeSpec):
+    return tuple(_normalize_type_spec(value, label) for value in values)
+
+
+def _normalize_type_spec(value: object, label: str) -> TypeSpec:
+    if isinstance(value, TypeSpec):
+        return value
+    if isinstance(value, Mapping):
+        try:
+            return TypeSpec.from_dict(dict(value))
+        except KeyError as exc:
+            missing_key = exc.args[0]
             raise AutodiffError(
                 "non_differentiable_route",
-                f"{label} entries must be TypeSpec instances",
-            )
-    return result
+                f"{label} TypeSpec mapping is missing {missing_key!r}",
+            ) from exc
+    raise AutodiffError(
+        "non_differentiable_route",
+        f"{label} entries must be TypeSpec instances or TypeSpec mappings",
+    )
 
 
 def _typespec_tuple_from_dicts(
