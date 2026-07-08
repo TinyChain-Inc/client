@@ -69,6 +69,8 @@ _ROUTE_EXPORTS = frozenset(
     }
 )
 
+_CALLSITE_EXPORTS = frozenset({"grad"})
+
 
 def __getattr__(name: str) -> object:
     if name in _ARTIFACT_EXPORTS:
@@ -79,6 +81,11 @@ def __getattr__(name: str) -> object:
     if name in _ROUTE_EXPORTS:
         routes_module = import_module(".routes", __name__)
         value = getattr(routes_module, name)
+        globals()[name] = value
+        return value
+    if name in _CALLSITE_EXPORTS:
+        callsite_module = import_module(".callsite", __name__)
+        value = getattr(callsite_module, name)
         globals()[name] = value
         return value
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
@@ -179,6 +186,7 @@ __all__ = [
     "TensorNodeRecord",
     "VjpRegistry",
     "generate",
+    "grad",
     "get_active_builder",
     "reflect_derivative_program",
     "tensor_typespec_to_type_spec",

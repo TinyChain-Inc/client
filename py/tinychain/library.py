@@ -14,7 +14,6 @@ from .opref import OpRef
 from .ref import Ref
 from . import _autograph
 from .state import ContextResult, DeleteOpDef, DeleteOpRef, GetOpDef, GetOpRef, IdRef, OpDef, OpRef as StateOpRef, PostOpDef, PostOpRef, PutOpDef, PutOpRef, Scalar, TCRef, autobox, context, current_context, form_of, map_of as scalar_map_of, scalar_for_hint, scoped_context, tcref_form_of, tuple_of as scalar_tuple_of
-from .state.tensor._wire import encode_view_schema
 from .state.value import Bool, Map, Number, String, Tuple, Value
 from .uri import URI, _class_resource_name, _segment, uri as _uri
 
@@ -348,119 +347,6 @@ def delete(
     form: Optional[Callable[..., Any]] = None,
 ):
     return _decorate("DELETE", form)
-
-_AUTODIFF_GRAD_ROUTE = _uri("lib", "std", "autodiff", "0.1.0", "grad").path
-
-
-def _normalize_wrt(wrt: object) -> list[str]:
-    if wrt is None:
-        raise TypeError("tc.grad requires `wrt` value ids")
-
-    if isinstance(wrt, str):
-        names = [wrt]
-    elif isinstance(wrt, (list, tuple)):
-        names = list(wrt)
-    else:
-        raise TypeError("tc.grad `wrt` must be a value id string or sequence of value id strings")
-
-    if not names:
-        raise TypeError("tc.grad `wrt` must not be empty")
-
-    for name in names:
-        if not isinstance(name, str) or not name:
-            raise TypeError("tc.grad `wrt` entries must be non-empty value id strings")
-
-    return names
-
-
-def _grad_payload_target(target: object) -> tuple[str, object]:
-    if isinstance(target, OpDef):
-        return "op", target
-
-    if callable(target):
-        route = getattr(target, "__tc_route__", None)
-        route_instance = getattr(target, "__tc_instance__", None)
-        route_name = getattr(route, "name", None)
-        if isinstance(route_instance, Library) and isinstance(route_name, str):
-            return "route", _route_path(route_instance, route_name)
-
-        library_instance = getattr(target, "__self__", None)
-        route_form = getattr(target, "__func__", None)
-        if isinstance(library_instance, Library) and callable(route_form):
-            return "route", _route_path(library_instance, route_form.__name__)
-
-        raise TypeError("tc.grad is a call-site transform and cannot be used as a route decorator")
-
-    return "target", autobox(target)
-
-
-def _try_grad_target_view_wire(target: object) -> object | None:
-    to_schema = getattr(target, "to_view_schema", None)
-    if not callable(to_schema):
-        return None
-
-    try:
-        return encode_view_schema(to_schema())
-    except (TypeError, ValueError, NotImplementedError):
-        return None
-
-
-def _is_bound_route_target(target: object) -> bool:
-    return (
-        callable(target)
-        and getattr(target, "__tc_route__", None) is not None
-        and isinstance(getattr(target, "__tc_instance__", None), Library)
-    )
-
-
-def grad(
-    target: object,
-    *,
-    wrt: object = None,
-    seed: str = "seed",
-    output_value_id: str | None = None,
-    seed_typespec: dict[str, object] | None = None,
-) -> object:
-    """Generate a derivative program for Python-owned TensorGraph targets.
-
-    The Phase 1 engine operates on ``tinychain.autodiff.TensorGraph`` records.
-    Phase 4 route targets use local metadata discovery. Other call-site forms
-    fail clearly until route tracing/final API work lands.
-    """
-
-    from .autodiff import AutodiffError, TensorGraph, discover_route_derivative, generate
-
-    if callable(target) and wrt is None:
-        raise TypeError("tc.grad is a call-site transform and cannot be used as a route decorator")
-
-    if isinstance(target, TensorGraph):
-        if wrt is None:
-            raise TypeError("tc.grad requires wrt for TensorGraph targets")
-        selected_output = output_value_id
-        if selected_output is None:
-            if not target.outputs:
-                raise AutodiffError("malformed_derivative_ir", "TensorGraph has no outputs")
-            selected_output = target.outputs[0]
-        return generate(
-            target,
-            selected_output,
-            list(_normalize_wrt(wrt)),
-            seed,
-            seed_typespec=seed_typespec,
-        )
-
-    if _is_bound_route_target(target):
-        return discover_route_derivative(
-            target,
-            wrt=wrt,
-            seed=seed,
-            seed_typespec=seed_typespec,
-        )
-
-    raise AutodiffError(
-        "autodiff_not_implemented",
-        "tc.grad currently requires a Python-owned TensorGraph or bound route target",
-    )
 
 
 def _capture_source(form: Callable[..., Any]) -> str | None:
