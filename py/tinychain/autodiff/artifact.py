@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import keyword
 from dataclasses import dataclass, replace
 from typing import ClassVar
 
-from ..library import Library, get
+from ..library import Library, Route, get
 from ..serialize import serialize
 from ..uri import URI, _python_name_to_resource, uri
+from .compile import compile_derivative_program
 from .protocol import DerivativeMetadata
 
 
@@ -411,6 +413,48 @@ def build_derivative_artifact_library(
     return library_cls
 
 
+def build_derivative_execution_library(
+    *,
+    publisher: str,
+    class_name: str,
+    version: str,
+    program: object,
+    route_name: str = "execute",
+    artifact_class_name: str | None = None,
+) -> type[Library]:
+    """Build a normal installable Library for a compiled derivative program."""
+    _validate_route_name(route_name)
+    if artifact_class_name is not None:
+        _validate_execution_library_identity(class_name, artifact_class_name)
+
+    compiled = compile_derivative_program(program)
+    _validate_execution_params(compiled.params)
+    opdef = compiled.opdef
+    source = _execution_route_source(route_name, compiled.params)
+    namespace = {"__opdef": opdef, "tc": __import__("tinychain")}
+    try:
+        exec(source, namespace)
+        route_form = namespace[route_name]
+        library_cls = type(
+            class_name,
+            (Library,),
+            {
+                "__module__": __name__,
+                "publisher": publisher,
+                "version": version,
+                "__tc_derivative_route_name__": route_name,
+                "__tc_derivative_params__": compiled.params,
+                "__tc_derivative_results__": compiled.results,
+                route_name: Route("POST", route_form, source=source),
+            },
+        )
+    except (SyntaxError, TypeError, ValueError) as exc:
+        raise ArtifactError("invalid_manifest", str(exc)) from exc
+
+    _validate_execution_library_class(library_cls, class_name, publisher, version)
+    return library_cls
+
+
 def validate_artifact_source_metadata(
     manifest: DerivativeArtifactManifest,
     program: object,
@@ -442,6 +486,63 @@ def validate_artifact_source_metadata(
             "source_metadata_mismatch",
             f"artifact manifest does not match derivative metadata fields: {joined_fields}",
         )
+
+
+def _validate_route_name(route_name: str) -> None:
+    if not route_name.isidentifier() or keyword.iskeyword(route_name):
+        raise ArtifactError(
+            "invalid_manifest",
+            f"execution route name must be a valid Python identifier, got {route_name!r}",
+        )
+
+
+def _validate_execution_params(params: tuple[str, ...]) -> None:
+    if not params:
+        raise ArtifactError("invalid_manifest", "execution route must have at least one parameter")
+    for param in params:
+        if not param.isidentifier() or keyword.iskeyword(param):
+            raise ArtifactError(
+                "invalid_manifest",
+                "derivative execution route parameters must be valid Python identifiers: "
+                f"{param!r}",
+            )
+
+
+def _execution_route_source(route_name: str, params: tuple[str, ...]) -> str:
+    joined_params = ", ".join(params)
+    return (
+        f"def {route_name}(self, cxt, {joined_params}):\n"
+        "    return __opdef\n"
+    )
+
+
+def _validate_execution_library_identity(
+    execution_class_name: str,
+    artifact_class_name: str,
+) -> None:
+    if _artifact_resource_name(execution_class_name) == _artifact_resource_name(artifact_class_name):
+        raise ArtifactError(
+            "invalid_manifest",
+            "derivative execution library identity must not collide with artifact library identity",
+        )
+
+
+def _validate_execution_library_class(
+    library_cls: type[Library],
+    class_name: str,
+    publisher: str,
+    version: str,
+) -> None:
+    if library_cls.__name__ != class_name:
+        raise ArtifactError("invalid_manifest", "execution library class name mismatch")
+    if getattr(library_cls, "publisher", None) != publisher:
+        raise ArtifactError("invalid_manifest", "execution library publisher mismatch")
+    if getattr(library_cls, "version", None) != version:
+        raise ArtifactError("invalid_manifest", "execution library version mismatch")
+    try:
+        library_cls.class_id()
+    except (TypeError, ValueError) as exc:
+        raise ArtifactError("invalid_manifest", str(exc)) from exc
 
 
 def _validate_artifact_library_identity(

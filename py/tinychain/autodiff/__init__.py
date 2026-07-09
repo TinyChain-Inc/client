@@ -3,7 +3,7 @@ from __future__ import annotations
 from importlib import import_module
 
 from .accumulate import GradientAccumulator
-from .executor import ExecutionScheduler
+from .executor import DerivativeExecutionDispatcher, ExecutionScheduler
 from .graph import (
     AddOperator,
     BroadcastReduceOperator,
@@ -41,6 +41,7 @@ _ARTIFACT_EXPORTS = frozenset(
         "artifact_source_dependencies",
         "attach_artifact_digest",
         "build_derivative_artifact_library",
+        "build_derivative_execution_library",
         "canonical_artifact_json",
         "compare_artifact_identity",
         "compute_artifact_digest",
@@ -163,6 +164,7 @@ __all__ = [
     "artifact_source_dependencies",
     "attach_artifact_digest",
     "build_derivative_artifact_library",
+    "build_derivative_execution_library",
     "canonical_artifact_json",
     "compile_derivative_program",
     "compare_artifact_identity",
@@ -181,6 +183,7 @@ __all__ = [
     "BroadcastReductionPlanner",
     "DerivativeMetadata",
     "DerivativeProgram",
+    "DerivativeExecutionDispatcher",
     "ExecutionScheduler",
     "GradientAccumulator",
     "MatmulOperator",
