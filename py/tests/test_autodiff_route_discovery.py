@@ -344,6 +344,42 @@ def test_discover_route_derivative_missing_metadata_sanitizes_route_message() ->
     assert "route body must not execute" not in str(exc_info.value)
 
 
+def test_tc_grad_route_target_without_metadata_raises_route_specific_error() -> None:
+    with pytest.raises(AutodiffError) as exc_info:
+        tc.grad(RouteIdentityLibrary().create, wrt=("value",))
+
+    assert exc_info.value.category == "non_differentiable_route"
+    assert "missing derivative metadata" in str(exc_info.value)
+
+
+def test_tc_grad_route_target_returns_plan_for_valid_artifact_metadata() -> None:
+    class TcGradMetadataLibrary(RouteIdentityLibrary):
+        pass
+
+    metadata = _route_tensor_metadata(
+        input_signature=(_tensor_type_spec(shape=[2, 2]),),
+        output_signature=(_tensor_type_spec(shape=[2, 2]),),
+        artifact_source_library="example-devco/tc_grad_metadata_library",
+    )
+    TcGradMetadataLibrary.derivative_routes = {"create": metadata}
+
+    plan = tc.grad(
+        TcGradMetadataLibrary().create,
+        wrt=("value",),
+        seed="upstream",
+        seed_typespec=_tensor_type_spec(shape=[2, 2]).to_dict(),
+    )
+
+    assert isinstance(plan, RouteDerivativePlan)
+    assert plan.route_identity.route_name == "create"
+    assert plan.requested_wrt == ("value",)
+    assert plan.seed_contract == "seed matches output"
+    assert plan.source_kind == ROUTE_DERIVATIVE_SOURCE_ARTIFACT
+    assert plan.compatibility_status == ROUTE_DERIVATIVE_COMPATIBILITY_COMPATIBLE
+    assert plan.artifact_uri == "/lib/example-devco/create_derivative/0.1.0"
+    assert plan.artifact_digest == "sha256:abc123"
+
+
 def test_discover_route_derivative_rejects_side_effecting_metadata() -> None:
     class SideEffectMetadataLibrary(RouteIdentityLibrary):
         derivative_routes = {"create": _route_tensor_metadata(is_pure=False)}

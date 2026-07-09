@@ -147,7 +147,7 @@ def test_grad_is_call_site_transform_stub_not_route_decorator():
     with pytest.raises(AutodiffError) as exc:
         tc.grad(A().identity, wrt=("v0",))
 
-    assert exc.value.category == "autodiff_not_implemented"
+    assert exc.value.category == "non_differentiable_route"
 
 
 def test_grad_cannot_be_used_as_route_metadata_decorator():

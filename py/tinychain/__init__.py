@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from .library import Library, delete, get, grad, install, post, put
+from .autodiff.callsite import grad
+from .library import Library, delete, get, install, post, put
 from .codec import decode_response_body
 from .executor import Executor, backend
 from .executor import execute as _dispatch_execute
