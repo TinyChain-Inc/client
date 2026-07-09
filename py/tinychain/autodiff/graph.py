@@ -24,6 +24,24 @@ class AddOperator(TensorOperator):
 
 
 @dataclass(frozen=True)
+class SubOperator(TensorOperator):
+    def __init__(self) -> None:
+        object.__setattr__(self, "route_name", "sub")
+
+
+@dataclass(frozen=True)
+class MulOperator(TensorOperator):
+    def __init__(self) -> None:
+        object.__setattr__(self, "route_name", "mul")
+
+
+@dataclass(frozen=True)
+class DivOperator(TensorOperator):
+    def __init__(self) -> None:
+        object.__setattr__(self, "route_name", "div")
+
+
+@dataclass(frozen=True)
 class BroadcastReduceOperator(TensorOperator):
     def __init__(self) -> None:
         object.__setattr__(self, "route_name", "broadcast_reduce")

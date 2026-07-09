@@ -7,7 +7,10 @@ from ..state import PostOpDef, Scalar, Tensor, id as state_id, tuple_of
 from .graph import (
     AddOperator,
     BroadcastReduceOperator,
+    DivOperator,
     MatmulOperator,
+    MulOperator,
+    SubOperator,
     TensorNodeRecord,
     TensorOperator,
     TransposeOperator,
@@ -77,6 +80,15 @@ def _compile_node(node: TensorNodeRecord, inputs: list[Scalar]) -> Tensor:
         _require_arity(node, inputs, 2)
         return Tensor._post_ref(inputs[0]._subject_ref("add"), {"r": inputs[1]})
 
+    if isinstance(node.operator, SubOperator):
+        return _compile_binary_tensor_node(node, inputs, "sub")
+
+    if isinstance(node.operator, MulOperator):
+        return _compile_binary_tensor_node(node, inputs, "mul")
+
+    if isinstance(node.operator, DivOperator):
+        return _compile_binary_tensor_node(node, inputs, "div")
+
     if isinstance(node.operator, MatmulOperator):
         _require_arity(node, inputs, 2)
         return Tensor._post_ref(inputs[0]._subject_ref("matmul"), {"r": inputs[1]})
@@ -102,6 +114,16 @@ def _compile_node(node: TensorNodeRecord, inputs: list[Scalar]) -> Tensor:
         )
 
     raise _malformed("node operator must be a TensorOperator")
+
+
+def _compile_binary_tensor_node(node: TensorNodeRecord, inputs: list[Scalar], route_name: str) -> Tensor:
+    if "right_literal" in node.op_params:
+        _require_arity(node, inputs, 1)
+        right: object = node.op_params["right_literal"]
+    else:
+        _require_arity(node, inputs, 2)
+        right = inputs[1]
+    return Tensor._post_ref(inputs[0]._subject_ref(route_name), {"r": right})
 
 
 def _validate_program(program: DerivativeProgram) -> None:

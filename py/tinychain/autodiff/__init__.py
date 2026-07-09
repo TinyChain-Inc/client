@@ -7,7 +7,10 @@ from .executor import DerivativeExecutionDispatcher, ExecutionScheduler
 from .graph import (
     AddOperator,
     BroadcastReduceOperator,
+    DivOperator,
     MatmulOperator,
+    MulOperator,
+    SubOperator,
     TensorOperator,
     TransposeOperator,
     TensorGraph,
@@ -25,7 +28,16 @@ from .protocol import (
 from .reflection import reflect_derivative_program, tensor_typespec_to_type_spec
 from .reverse import DerivativeProgram, ReverseTraversal
 from .seed import SeedValidator
-from .vjp import AddVjpRule, BroadcastReductionPlanner, MatmulVjpRule, TransposeVjpRule, VjpRegistry
+from .vjp import (
+    AddVjpRule,
+    BroadcastReductionPlanner,
+    DivVjpRule,
+    MatmulVjpRule,
+    MulVjpRule,
+    SubVjpRule,
+    TransposeVjpRule,
+    VjpRegistry,
+)
 
 _ARTIFACT_EXPORTS = frozenset(
     {
@@ -184,10 +196,16 @@ __all__ = [
     "DerivativeMetadata",
     "DerivativeProgram",
     "DerivativeExecutionDispatcher",
+    "SubOperator",
+    "MulOperator",
+    "DivOperator",
     "ExecutionScheduler",
     "GradientAccumulator",
     "MatmulOperator",
     "MatmulVjpRule",
+    "SubVjpRule",
+    "MulVjpRule",
+    "DivVjpRule",
     "ReverseTraversal",
     "SeedValidator",
     "TensorGraph",
