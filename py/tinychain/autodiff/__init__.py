@@ -71,6 +71,8 @@ _ROUTE_EXPORTS = frozenset(
 
 _CALLSITE_EXPORTS = frozenset({"grad"})
 
+_COMPILE_EXPORTS = frozenset({"CompiledDerivativeProgram", "compile_derivative_program"})
+
 
 def __getattr__(name: str) -> object:
     if name in _ARTIFACT_EXPORTS:
@@ -86,6 +88,11 @@ def __getattr__(name: str) -> object:
     if name in _CALLSITE_EXPORTS:
         callsite_module = import_module(".callsite", __name__)
         value = getattr(callsite_module, name)
+        globals()[name] = value
+        return value
+    if name in _COMPILE_EXPORTS:
+        compile_module = import_module(".compile", __name__)
+        value = getattr(compile_module, name)
         globals()[name] = value
         return value
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
@@ -157,6 +164,7 @@ __all__ = [
     "attach_artifact_digest",
     "build_derivative_artifact_library",
     "canonical_artifact_json",
+    "compile_derivative_program",
     "compare_artifact_identity",
     "compute_artifact_digest",
     "public_artifact_identity",
@@ -165,6 +173,7 @@ __all__ = [
     "AUTODIFF_ERROR_CATEGORIES",
     "AddVjpRule",
     "AutodiffError",
+    "CompiledDerivativeProgram",
     "AutodiffRequest",
     "AutodiffResult",
     "AddOperator",
