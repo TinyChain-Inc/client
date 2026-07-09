@@ -79,6 +79,12 @@ class RouteDerivativeMetadata:
     seed_contract: str
     transform_version: str
     tensor_op_contract_version: str
+    artifact_uri: str | None = None
+    artifact_digest: str | None = None
+    artifact_source_library: str | None = None
+    artifact_source_library_version: str | None = None
+    artifact_source_route: str | None = None
+    artifact_visibility: str | None = None
 
     def __post_init__(self) -> None:
         _require_allowed("source_kind", self.source_kind, ROUTE_DERIVATIVE_SOURCE_KINDS)
@@ -96,6 +102,25 @@ class RouteDerivativeMetadata:
         _require_non_empty("seed_contract", self.seed_contract)
         _require_non_empty("transform_version", self.transform_version)
         _require_non_empty("tensor_op_contract_version", self.tensor_op_contract_version)
+        _require_optional_string("artifact_uri", self.artifact_uri)
+        _require_optional_string("artifact_digest", self.artifact_digest)
+        _require_optional_string("artifact_source_library", self.artifact_source_library)
+        _require_optional_string(
+            "artifact_source_library_version", self.artifact_source_library_version
+        )
+        _require_optional_string("artifact_source_route", self.artifact_source_route)
+        _require_optional_string("artifact_visibility", self.artifact_visibility)
+        if self.source_kind == ROUTE_DERIVATIVE_SOURCE_ARTIFACT:
+            if self.artifact_uri is None:
+                raise AutodiffError(
+                    "non_differentiable_route",
+                    "artifact-backed route metadata must declare artifact_uri",
+                )
+            if self.artifact_digest is None:
+                raise AutodiffError(
+                    "non_differentiable_route",
+                    "artifact-backed route metadata must declare artifact_digest",
+                )
         if self.is_differentiable and not self.supported_wrt:
             raise AutodiffError(
                 "non_differentiable_route",
@@ -122,6 +147,12 @@ class RouteDerivativeMetadata:
             "seed_contract": self.seed_contract,
             "transform_version": self.transform_version,
             "tensor_op_contract_version": self.tensor_op_contract_version,
+            "artifact_uri": self.artifact_uri,
+            "artifact_digest": self.artifact_digest,
+            "artifact_source_library": self.artifact_source_library,
+            "artifact_source_library_version": self.artifact_source_library_version,
+            "artifact_source_route": self.artifact_source_route,
+            "artifact_visibility": self.artifact_visibility,
         }
         _validate_json_compatible(payload, "RouteDerivativeMetadata")
         return payload
@@ -138,6 +169,14 @@ class RouteDerivativeMetadata:
             seed_contract=_required_string(data, "seed_contract"),
             transform_version=_required_string(data, "transform_version"),
             tensor_op_contract_version=_required_string(data, "tensor_op_contract_version"),
+            artifact_uri=_optional_string(data.get("artifact_uri")),
+            artifact_digest=_optional_string(data.get("artifact_digest")),
+            artifact_source_library=_optional_string(data.get("artifact_source_library")),
+            artifact_source_library_version=_optional_string(
+                data.get("artifact_source_library_version")
+            ),
+            artifact_source_route=_optional_string(data.get("artifact_source_route")),
+            artifact_visibility=_optional_string(data.get("artifact_visibility")),
         )
 
 
@@ -312,12 +351,16 @@ def discover_route_derivative(
         seed=seed,
         seed_typespec=seed_typespec,
     )
+    _validate_artifact_backed_route_metadata(identity, metadata)
     return RouteDerivativePlan(
         route_identity=identity,
         requested_wrt=requested_wrt,
         seed_contract=metadata.seed_contract,
         source_kind=metadata.source_kind,
-        compatibility_status=ROUTE_DERIVATIVE_COMPATIBILITY_NOT_VALIDATED,
+        compatibility_status=ROUTE_DERIVATIVE_COMPATIBILITY_COMPATIBLE,
+        artifact_uri=metadata.artifact_uri,
+        artifact_digest=metadata.artifact_digest,
+        artifact_visibility=metadata.artifact_visibility,
     )
 
 
@@ -407,6 +450,61 @@ def _validate_route_derivative_metadata(
         SeedValidator().validate(
             seed_typespec=_typespec_params(_normalize_type_spec(seed_typespec, "seed_typespec")),
             output_typespec=_typespec_params(output_type_spec),
+        )
+
+
+def _validate_artifact_backed_route_metadata(
+    identity: RouteDerivativeIdentity,
+    metadata: RouteDerivativeMetadata,
+) -> None:
+    if metadata.source_kind != ROUTE_DERIVATIVE_SOURCE_ARTIFACT:
+        return
+    artifact_digest = metadata.artifact_digest
+    if artifact_digest is None:
+        raise AutodiffError(
+            "non_differentiable_route",
+            f"artifact-backed metadata for {identity.route_uri} must declare artifact_digest",
+        )
+    artifact_uri = metadata.artifact_uri
+    if artifact_uri is None:
+        raise AutodiffError(
+            "non_differentiable_route",
+            f"artifact-backed metadata for {identity.route_uri} must declare artifact_uri",
+        )
+    source_library = metadata.artifact_source_library
+    if source_library is None:
+        raise AutodiffError(
+            "non_differentiable_route",
+            f"artifact-backed metadata for {identity.route_uri} must declare source library",
+        )
+    accepted_libraries = {
+        identity.library_uri,
+        identity.library_path,
+        f"{identity.publisher}/{identity.library_name}",
+    }
+    if source_library not in accepted_libraries:
+        raise AutodiffError(
+            "non_differentiable_route",
+            "artifact source library does not match route library "
+            f"{identity.library_uri}: {source_library!r}",
+        )
+    if metadata.artifact_source_library_version != identity.library_version:
+        raise AutodiffError(
+            "non_differentiable_route",
+            "artifact source library version does not match route library version "
+            f"{identity.library_version!r}",
+        )
+    source_route = metadata.artifact_source_route
+    if source_route is None:
+        raise AutodiffError(
+            "non_differentiable_route",
+            f"artifact-backed metadata for {identity.route_uri} must declare source route",
+        )
+    if source_route not in (identity.route_name, identity.route_path, identity.route_uri):
+        raise AutodiffError(
+            "non_differentiable_route",
+            "artifact source route does not match route identity "
+            f"{identity.route_uri}: {source_route!r}",
         )
 
 

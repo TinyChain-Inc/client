@@ -7,6 +7,7 @@ import pytest
 
 import tinychain as tc
 from tinychain.autodiff import (
+    ROUTE_DERIVATIVE_COMPATIBILITY_COMPATIBLE,
     ROUTE_DERIVATIVE_COMPATIBILITY_NOT_VALIDATED,
     ROUTE_DERIVATIVE_SOURCE_ARTIFACT,
     ROUTE_DERIVATIVE_SOURCE_NON_DIFFERENTIABLE,
@@ -169,6 +170,12 @@ def _route_metadata(*, seed_contract: str = "cotangent:output") -> RouteDerivati
         seed_contract=seed_contract,
         transform_version="route-discovery-v1",
         tensor_op_contract_version="tensor-contract-v1",
+        artifact_uri="/lib/example-devco/create_derivative/0.1.0",
+        artifact_digest="sha256:abc123",
+        artifact_source_library="example-devco/route_identity_library",
+        artifact_source_library_version="0.1.0",
+        artifact_source_route="/create",
+        artifact_visibility="public",
     )
 
 
@@ -250,6 +257,11 @@ def _route_tensor_metadata(
     input_signature: tuple[TypeSpec | dict[str, object], ...] | None = None,
     output_signature: tuple[TypeSpec | dict[str, object], ...] | None = None,
     supported_wrt: tuple[str, ...] = ("value",),
+    artifact_digest: str | None = "sha256:abc123",
+    artifact_source_library: str | None = "example-devco/route_identity_library",
+    artifact_source_library_version: str | None = "0.1.0",
+    artifact_source_route: str | None = "/create",
+    artifact_visibility: str | None = "public",
 ) -> RouteDerivativeMetadata:
     input_types = input_signature or (_tensor_type_spec(shape=[2, 2]),)
     output_types = output_signature or (_tensor_type_spec(shape=[2, 2]),)
@@ -263,17 +275,25 @@ def _route_tensor_metadata(
         seed_contract="seed matches output",
         transform_version="route-discovery-v1",
         tensor_op_contract_version="tensor-contract-v1",
+        artifact_uri="/lib/example-devco/create_derivative/0.1.0",
+        artifact_digest=artifact_digest,
+        artifact_source_library=artifact_source_library,
+        artifact_source_library_version=artifact_source_library_version,
+        artifact_source_route=artifact_source_route,
+        artifact_visibility=artifact_visibility,
     )
 
 
 def test_discover_route_derivative_returns_plan_for_valid_metadata_mapping() -> None:
+    class ValidMetadataLibrary(RouteIdentityLibrary):
+        pass
+
     metadata = _route_tensor_metadata(
         input_signature=(_tensor_type_spec(shape=[2, 2]).to_dict(),),
         output_signature=(_tensor_type_spec(shape=[2, 2]).to_dict(),),
+        artifact_source_library="example-devco/valid_metadata_library",
     )
-
-    class ValidMetadataLibrary(RouteIdentityLibrary):
-        derivative_routes = {"create": metadata.to_dict()}
+    ValidMetadataLibrary.derivative_routes = {"create": metadata.to_dict()}
 
     plan = discover_route_derivative(
         ValidMetadataLibrary().create,
@@ -287,18 +307,23 @@ def test_discover_route_derivative_returns_plan_for_valid_metadata_mapping() -> 
     assert plan.requested_wrt == ("value",)
     assert plan.seed_contract == "seed matches output"
     assert plan.source_kind == ROUTE_DERIVATIVE_SOURCE_ARTIFACT
-    assert plan.compatibility_status == ROUTE_DERIVATIVE_COMPATIBILITY_NOT_VALIDATED
+    assert plan.compatibility_status == ROUTE_DERIVATIVE_COMPATIBILITY_COMPATIBLE
+    assert plan.artifact_uri == "/lib/example-devco/create_derivative/0.1.0"
+    assert plan.artifact_digest == "sha256:abc123"
+    assert plan.artifact_visibility == "public"
 
 
 @pytest.mark.parametrize("shape", [[2], [2, 2], []])
 def test_discover_route_derivative_accepts_integer_shape_metadata(shape: list[int]) -> None:
+    class ValidShapeLibrary(RouteIdentityLibrary):
+        pass
+
     metadata = _route_tensor_metadata(
         input_signature=(_tensor_type_spec(shape=shape),),
         output_signature=(_tensor_type_spec(shape=shape),),
+        artifact_source_library="example-devco/valid_shape_library",
     )
-
-    class ValidShapeLibrary(RouteIdentityLibrary):
-        derivative_routes = {"create": metadata}
+    ValidShapeLibrary.derivative_routes = {"create": metadata}
 
     plan = discover_route_derivative(
         ValidShapeLibrary().create,
@@ -408,6 +433,65 @@ def test_discover_route_derivative_rejects_non_floating_dtype() -> None:
     assert exc_info.value.category == "dtype_not_differentiable"
 
 
+def test_discover_route_derivative_rejects_wrong_artifact_source_library() -> None:
+    class WrongSourceLibrary(RouteIdentityLibrary):
+        derivative_routes = {
+            "create": _route_tensor_metadata(artifact_source_library="other/create")
+        }
+
+    with pytest.raises(AutodiffError) as exc_info:
+        discover_route_derivative(WrongSourceLibrary().create, wrt=("value",))
+
+    assert exc_info.value.category == "non_differentiable_route"
+    assert "source library" in str(exc_info.value)
+
+
+def test_discover_route_derivative_rejects_wrong_artifact_source_version() -> None:
+    class WrongSourceVersion(RouteIdentityLibrary):
+        derivative_routes = {
+            "create": _route_tensor_metadata(
+                artifact_source_library="example-devco/wrong_source_version",
+                artifact_source_library_version="9.9.9",
+            )
+        }
+
+    with pytest.raises(AutodiffError) as exc_info:
+        discover_route_derivative(WrongSourceVersion().create, wrt=("value",))
+
+    assert exc_info.value.category == "non_differentiable_route"
+    assert "source library version" in str(exc_info.value)
+
+
+def test_discover_route_derivative_rejects_wrong_artifact_source_route() -> None:
+    class WrongSourceRoute(RouteIdentityLibrary):
+        derivative_routes = {
+            "create": _route_tensor_metadata(
+                artifact_source_library="example-devco/wrong_source_route",
+                artifact_source_route="fetch",
+            )
+        }
+
+    with pytest.raises(AutodiffError) as exc_info:
+        discover_route_derivative(WrongSourceRoute().create, wrt=("value",))
+
+    assert exc_info.value.category == "non_differentiable_route"
+    assert "source route" in str(exc_info.value)
+
+
+def test_discover_route_derivative_rejects_missing_artifact_digest() -> None:
+    metadata = _route_tensor_metadata().to_dict()
+    metadata["artifact_digest"] = None
+
+    class MissingArtifactDigest(RouteIdentityLibrary):
+        derivative_routes = {"create": metadata}
+
+    with pytest.raises(AutodiffError) as exc_info:
+        discover_route_derivative(MissingArtifactDigest().create, wrt=("value",))
+
+    assert exc_info.value.category == "non_differentiable_route"
+    assert "artifact_digest" in str(exc_info.value)
+
+
 def test_discover_route_derivative_rejects_missing_derivative_behavior() -> None:
     class UnsupportedMetadataLibrary(RouteIdentityLibrary):
         derivative_routes = {
@@ -436,6 +520,12 @@ def test_route_derivative_metadata_serializes_stable_json_shape() -> None:
         seed_contract="cotangent:output",
         transform_version="route-discovery-v1",
         tensor_op_contract_version="tensor-contract-v1",
+        artifact_uri="/lib/example-devco/create_derivative/0.1.0",
+        artifact_digest="sha256:abc123",
+        artifact_source_library="example-devco/route_identity_library",
+        artifact_source_library_version="0.1.0",
+        artifact_source_route="/create",
+        artifact_visibility="public",
     )
 
     payload = metadata.to_dict()
@@ -456,6 +546,12 @@ def test_route_derivative_metadata_serializes_stable_json_shape() -> None:
         "seed_contract": "cotangent:output",
         "transform_version": "route-discovery-v1",
         "tensor_op_contract_version": "tensor-contract-v1",
+        "artifact_uri": "/lib/example-devco/create_derivative/0.1.0",
+        "artifact_digest": "sha256:abc123",
+        "artifact_source_library": "example-devco/route_identity_library",
+        "artifact_source_library_version": "0.1.0",
+        "artifact_source_route": "/create",
+        "artifact_visibility": "public",
     }
 
 
@@ -547,6 +643,12 @@ def test_route_metadata_is_separate_from_derivative_metadata_and_top_level_expor
         seed_contract="cotangent:output",
         transform_version="route-discovery-v1",
         tensor_op_contract_version="tensor-contract-v1",
+        artifact_uri="/lib/example-devco/create_derivative/0.1.0",
+        artifact_digest="sha256:abc123",
+        artifact_source_library="example-devco/route_identity_library",
+        artifact_source_library_version="0.1.0",
+        artifact_source_route="/create",
+        artifact_visibility="public",
     ).to_dict()
     tensor_payload = DerivativeMetadata(
         source_graph_id="graph-1",
@@ -558,6 +660,7 @@ def test_route_metadata_is_separate_from_derivative_metadata_and_top_level_expor
 
     assert "source_graph_id" not in route_payload
     assert "source_kind" not in tensor_payload
-    assert "artifact_uri" not in route_payload
+    assert route_payload["artifact_uri"] == "/lib/example-devco/create_derivative/0.1.0"
+    assert "artifact_uri" not in tensor_payload
     assert hasattr(tc.autodiff, "RouteDerivativeMetadata")
     assert not hasattr(tc, "RouteDerivativeMetadata")
