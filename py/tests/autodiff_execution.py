@@ -4,11 +4,15 @@ import numpy as np
 
 from tinychain.autodiff import (
     AddOperator,
+    BroadcastOperator,
     BroadcastReduceOperator,
     DivOperator,
     MatmulOperator,
+    MeanOperator,
     MulOperator,
+    ReshapeOperator,
     SubOperator,
+    SumOperator,
     TensorNodeRecord,
     TransposeOperator,
 )
@@ -20,6 +24,8 @@ class NumpyAutodiffDispatcher:
     def __call__(self, node: TensorNodeRecord, args: list[object]) -> np.ndarray:
         if isinstance(node.operator, AddOperator):
             return np.asarray(args[0]) + np.asarray(args[1])
+        if isinstance(node.operator, BroadcastOperator):
+            return np.broadcast_to(np.asarray(args[0]), tuple(node.op_params["shape"]))
         if isinstance(node.operator, BroadcastReduceOperator):
             return self._broadcast_reduce(np.asarray(args[0]), node.op_params["target_shape"])
         if isinstance(node.operator, SubOperator):
@@ -30,6 +36,12 @@ class NumpyAutodiffDispatcher:
             return np.asarray(args[0]) / self._right_arg(node, args)
         if isinstance(node.operator, MatmulOperator):
             return np.matmul(np.asarray(args[0]), np.asarray(args[1]))
+        if isinstance(node.operator, MeanOperator):
+            return np.mean(np.asarray(args[0]), axis=tuple(node.op_params["axes"]), keepdims=node.op_params["keepdims"])
+        if isinstance(node.operator, ReshapeOperator):
+            return np.reshape(np.asarray(args[0]), tuple(node.op_params["shape"]))
+        if isinstance(node.operator, SumOperator):
+            return np.sum(np.asarray(args[0]), axis=tuple(node.op_params["axes"]), keepdims=node.op_params["keepdims"])
         if isinstance(node.operator, TransposeOperator):
             return np.transpose(np.asarray(args[0]), axes=node.op_params["perm"])
         raise AssertionError(f"unsupported test operator {node.operator!r}")

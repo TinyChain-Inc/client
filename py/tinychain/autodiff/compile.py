@@ -6,11 +6,18 @@ from typing import Mapping
 from ..state import PostOpDef, Scalar, Tensor, id as state_id, tuple_of
 from .graph import (
     AddOperator,
+    BroadcastOperator,
     BroadcastReduceOperator,
     DivOperator,
     MatmulOperator,
+    MaxOperator,
+    MeanOperator,
+    MinOperator,
     MulOperator,
+    ProductOperator,
+    ReshapeOperator,
     SubOperator,
+    SumOperator,
     TensorNodeRecord,
     TensorOperator,
     TransposeOperator,
@@ -93,6 +100,31 @@ def _compile_node(node: TensorNodeRecord, inputs: list[Scalar]) -> Tensor:
         _require_arity(node, inputs, 2)
         return Tensor._post_ref(inputs[0]._subject_ref("matmul"), {"r": inputs[1]})
 
+    if isinstance(node.operator, SumOperator):
+        return _compile_reduction_node(node, inputs, "sum")
+
+    if isinstance(node.operator, MeanOperator):
+        return _compile_reduction_node(node, inputs, "mean")
+
+    if isinstance(node.operator, MaxOperator):
+        return _compile_reduction_node(node, inputs, "max")
+
+    if isinstance(node.operator, MinOperator):
+        return _compile_reduction_node(node, inputs, "min")
+
+    if isinstance(node.operator, ProductOperator):
+        return _compile_reduction_node(node, inputs, "product")
+
+    if isinstance(node.operator, ReshapeOperator):
+        _require_arity(node, inputs, 1)
+        shape = _required_param(node, "shape")
+        return Tensor._post_ref(inputs[0]._subject_ref("reshape"), {"shape": shape})
+
+    if isinstance(node.operator, BroadcastOperator):
+        _require_arity(node, inputs, 1)
+        shape = _required_param(node, "shape")
+        return Tensor._post_ref(inputs[0]._subject_ref("broadcast"), {"shape": shape})
+
     if isinstance(node.operator, TransposeOperator):
         _require_arity(node, inputs, 1)
         permutation = _transpose_permutation(node)
@@ -114,6 +146,16 @@ def _compile_node(node: TensorNodeRecord, inputs: list[Scalar]) -> Tensor:
         )
 
     raise _malformed("node operator must be a TensorOperator")
+
+
+def _compile_reduction_node(node: TensorNodeRecord, inputs: list[Scalar], route_name: str) -> Tensor:
+    _require_arity(node, inputs, 1)
+    axes = _required_param(node, "axes")
+    keepdims = _required_param(node, "keepdims")
+    return Tensor._post_ref(
+        inputs[0]._subject_ref(route_name),
+        {"axes": axes, "keepdims": keepdims},
+    )
 
 
 def _compile_binary_tensor_node(node: TensorNodeRecord, inputs: list[Scalar], route_name: str) -> Tensor:
