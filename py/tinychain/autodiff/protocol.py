@@ -15,6 +15,8 @@ AUTODIFF_ERROR_CATEGORIES: tuple[str, ...] = (
     "missing_dtype_metadata",
     "dtype_not_differentiable",
     "shape_mismatch",
+    "unresolved_symbolic_shape",
+    "symbolic_shape_mismatch",
     "broadcast_shape_mismatch",
     "matmul_shape_mismatch",
     "invalid_permutation",
