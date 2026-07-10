@@ -290,15 +290,16 @@ def extract_route_identity(target: object) -> RouteDerivativeIdentity:
 
 
 def lookup_route_derivative_metadata(target: object) -> RouteDerivativeMetadata:
-    """Return class-level derivative metadata for a bound route target.
+    """Return local derivative metadata for a bound route target.
 
-    Library subclasses declare metadata as ``derivative_routes`` keyed by route
-    name (``"create"``) or route path (``"/create"``). This helper performs
-    local metadata inspection only; it never executes or compiles the route.
+    Library subclasses or bound remote library instances declare metadata as
+    ``derivative_routes`` keyed by route name (``"create"``) or route path
+    (``"/create"``). This helper performs client-side metadata inspection
+    only; it never executes, fetches, installs, or compiles the route.
     """
     _, route_instance = _extract_bound_route_parts(target)
     identity = extract_route_identity(target)
-    metadata_by_key = getattr(type(route_instance), ROUTE_DERIVATIVE_METADATA_FIELD, None)
+    metadata_by_key = _route_derivative_metadata_mapping(route_instance)
     if metadata_by_key is None:
         raise _missing_route_metadata(identity)
     if not isinstance(metadata_by_key, Mapping):
@@ -378,6 +379,13 @@ def _extract_bound_route_parts(target: object) -> tuple[object, Library]:
     if not isinstance(route_instance, Library):
         raise TypeError("bound TinyChain route target must belong to a Library instance")
     return route, route_instance
+
+
+def _route_derivative_metadata_mapping(route_instance: Library) -> object | None:
+    instance_metadata = vars(route_instance).get(ROUTE_DERIVATIVE_METADATA_FIELD)
+    if instance_metadata is not None:
+        return instance_metadata
+    return getattr(type(route_instance), ROUTE_DERIVATIVE_METADATA_FIELD, None)
 
 
 def _normalize_requested_wrt(wrt: object) -> tuple[str, ...]:
