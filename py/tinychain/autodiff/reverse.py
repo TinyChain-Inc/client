@@ -57,22 +57,37 @@ class ReverseTraversal:
         seed_value_id: str,
         seed_typespec: dict[str, object] | None = None,
         source_graph_id: str | None = None,
+        output_value_ids: list[str] | None = None,
+        seed_value_ids: list[str] | None = None,
+        seed_typespecs: list[dict[str, object] | None] | None = None,
     ) -> DerivativeProgram:
+        selected_outputs = output_value_ids if output_value_ids is not None else [output_value_id]
+        selected_seeds = seed_value_ids if seed_value_ids is not None else [seed_value_id]
+        if len(selected_outputs) != len(selected_seeds):
+            raise TypeError("reverse traversal requires one seed value id per output value id")
+        if seed_typespecs is not None and len(seed_typespecs) != len(selected_outputs):
+            raise TypeError("reverse traversal requires one seed typespec per output value id")
+
         value_typespecs = self._value_typespecs(graph)
-        output_typespec = value_typespecs.get(output_value_id)
-        if seed_typespec is not None:
-            self._seed_validator.validate(
-                seed_typespec=seed_typespec,
-                output_typespec=output_typespec,
-            )
-            value_typespecs[seed_value_id] = dict(seed_typespec)
-        elif output_typespec is not None:
-            value_typespecs[seed_value_id] = dict(output_typespec)
+        upstream = GradientAccumulator(value_typespecs=value_typespecs)
+        seed_contracts: list[str] = []
+        for index, selected_output in enumerate(selected_outputs):
+            selected_seed = selected_seeds[index]
+            output_typespec = value_typespecs.get(selected_output)
+            selected_seed_typespec = seed_typespecs[index] if seed_typespecs is not None else seed_typespec
+            if selected_seed_typespec is not None:
+                self._seed_validator.validate(
+                    seed_typespec=selected_seed_typespec,
+                    output_typespec=output_typespec,
+                )
+                value_typespecs[selected_seed] = dict(selected_seed_typespec)
+            elif output_typespec is not None:
+                value_typespecs[selected_seed] = dict(output_typespec)
+            upstream.add(selected_output, selected_seed)
+            seed_contracts.append(f"{selected_seed} matches {selected_output}")
 
         nodes = self._topological_sort(graph)
         targets_by_value = self._targets_by_value(graph, nodes, wrt)
-        upstream = GradientAccumulator(value_typespecs=value_typespecs)
-        upstream.add(output_value_id, seed_value_id)
         derivative_nodes: list[TensorNodeRecord] = []
 
         for node in reversed(nodes):
@@ -146,7 +161,7 @@ class ReverseTraversal:
                 transform_version=self._transform_version,
                 tensor_op_contract_version=self._tensor_op_contract_version,
                 wrt_signature=tuple(wrt),
-                seed_contract=f"{seed_value_id} matches {output_value_id}",
+                seed_contract="; ".join(seed_contracts),
             ),
             value_typespecs={
                 value_id: dict(typespec)

@@ -175,6 +175,7 @@ class TensorGraphBuilder:
     def __init__(self) -> None:
         self._nodes: list[TensorNodeRecord] = []
         self._value_map: dict[int, str] = {}
+        self._outputs: list[str] = []
         self._token: Optional[contextvars.Token[Optional[TensorGraphBuilder]]] = None
 
     # TODO(issue-13-followup): introduce scoped opaque NodeId/ValueId namespaces
@@ -196,6 +197,19 @@ class TensorGraphBuilder:
     def record(self, node: TensorNodeRecord) -> None:
         self._nodes.append(node)
 
+    def mark_output(self, obj: object) -> str:
+        """Mark a registered graph value as an explicit output and return its ValueId."""
+        value_id = self.register_value(obj)
+        self.mark_output_value(value_id)
+        return value_id
+
+    def mark_output_value(self, value_id: str) -> None:
+        """Mark *value_id* as an explicit graph output."""
+        if not isinstance(value_id, str) or not value_id:
+            raise TypeError("TensorGraphBuilder output value ids must be non-empty strings")
+        if value_id not in self._outputs:
+            self._outputs.append(value_id)
+
     def build(self) -> TensorGraph:
         """Assemble and return the recorded TensorGraph."""
         produced: set[str] = {rec.output_value_id for rec in self._nodes}
@@ -207,8 +221,7 @@ class TensorGraphBuilder:
                     input_value_ids.append(vid)
                     seen.add(vid)
         inputs = [(vid, None) for vid in input_value_ids]
-        # Phase 1: single-output — exposes only the last recorded node as the graph output; multi-output is a deferred follow-up.
-        outputs = [self._nodes[-1].output_value_id] if self._nodes else []
+        outputs = list(self._outputs) if self._outputs else [self._nodes[-1].output_value_id] if self._nodes else []
         return TensorGraph(nodes=self._nodes, inputs=inputs, outputs=outputs)
 
     def __enter__(self) -> TensorGraphBuilder:
