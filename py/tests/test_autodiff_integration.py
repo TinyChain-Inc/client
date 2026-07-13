@@ -18,7 +18,10 @@ from tinychain.autodiff import (
     AutodiffError,
     AutodiffResult,
     DerivativeMetadata,
+    DivOperator,
     MatmulOperator,
+    MulOperator,
+    SubOperator,
     TensorGraph,
     TensorGraphBuilder,
     TensorNodeRecord,
@@ -170,12 +173,18 @@ def test_vjp_registry_has_rule():
 
 
 def test_vjp_registry_supported_types():
-    """supported_types() returns all 3 current operators (Add, Matmul, Transpose)."""
+    """supported_types() returns the built-in VJP operator types."""
     registry = default_vjp_registry()
     supported = registry.supported_types()
 
-    assert set(supported) == {AddOperator, MatmulOperator, TransposeOperator}
-    assert len(supported) == 3
+    assert set(supported) == {
+        AddOperator,
+        SubOperator,
+        MulOperator,
+        DivOperator,
+        MatmulOperator,
+        TransposeOperator,
+    }
 
 
 # --- Step 8: missing derivative behavior ---
@@ -302,9 +311,8 @@ print(program.metadata.source_graph_id)
 
 
 def test_vjp_rule_declaration_order():
-    """Reversed-order rule definitions in a temp registry match normal-order
-    coverage: all three operator types are registered regardless of decorator
-    application order."""
+    """Reversed-order rule definitions in a temp registry keep their
+    registered operator types regardless of decorator application order."""
 
     reversed_registry = VjpRegistry()
 
@@ -329,12 +337,10 @@ def test_vjp_rule_declaration_order():
         def apply(self, context):
             ...
 
-    normal_registry = default_vjp_registry()
-
-    assert set(reversed_registry.supported_types()) == set(normal_registry.supported_types())
     assert reversed_registry.has_rule(AddOperator())
     assert reversed_registry.has_rule(MatmulOperator())
     assert reversed_registry.has_rule(TransposeOperator())
+    assert set(reversed_registry.supported_types()) == {AddOperator, MatmulOperator, TransposeOperator}
 
 
 # --- Step 12: builder guard released on exception ---

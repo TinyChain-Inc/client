@@ -112,10 +112,6 @@ class VjpRegistry:
             other._rules[operator_type] = rule
 
 
-# Module-level registry for decorator-based registration
-_registry = VjpRegistry()
-
-
 @dataclass(frozen=True)
 class BroadcastReductionPlan:
     result_shape: tuple[int, ...]
@@ -158,7 +154,6 @@ class BroadcastReductionPlanner:
         )
 
 
-@_registry.rule(AddOperator)
 class AddVjpRule:
     operator_type = AddOperator
 
@@ -263,7 +258,6 @@ class _ElementwiseVjpRule:
         return reduced_id
 
 
-@_registry.rule(SubOperator)
 class SubVjpRule(_ElementwiseVjpRule):
     operator_type = SubOperator
 
@@ -301,7 +295,6 @@ class SubVjpRule(_ElementwiseVjpRule):
         return VjpResult(gradients=gradients, derivative_nodes=derivative_nodes)
 
 
-@_registry.rule(MulOperator)
 class MulVjpRule(_ElementwiseVjpRule):
     operator_type = MulOperator
 
@@ -345,7 +338,6 @@ class MulVjpRule(_ElementwiseVjpRule):
         return VjpResult(gradients=gradients, derivative_nodes=derivative_nodes)
 
 
-@_registry.rule(DivOperator)
 class DivVjpRule(_ElementwiseVjpRule):
     operator_type = DivOperator
 
@@ -416,7 +408,6 @@ def _transpose_last_two_perm(rank: int) -> list[int]:
     return list(range(rank - 2)) + [rank - 1, rank - 2]
 
 
-@_registry.rule(MatmulOperator)
 class MatmulVjpRule:
     """Build requested matmul VJP branches, reducing broadcast batches."""
 
@@ -580,7 +571,6 @@ def _inverse_permutation(perm: tuple[int, ...]) -> tuple[int, ...]:
     return tuple(inverse)
 
 
-@_registry.rule(TransposeOperator)
 class TransposeVjpRule:
     operator_type = TransposeOperator
 
@@ -607,12 +597,15 @@ class TransposeVjpRule:
 
 
 def default_vjp_registry() -> VjpRegistry:
-    """Return the default VJP registry with all pre-registered rules.
-
-    The rules are registered via the @_registry.rule decorator at class
-    definition time. This function returns a copy of the module-level registry
-    to avoid mutation of the shared instance.
-    """
+    """Return the default VJP registry with the built-in transform rules."""
     registry = VjpRegistry()
-    _registry.copy_into(registry)
+    for rule in (
+        AddVjpRule(),
+        SubVjpRule(),
+        MulVjpRule(),
+        DivVjpRule(),
+        MatmulVjpRule(),
+        TransposeVjpRule(),
+    ):
+        registry.register(rule)
     return registry
