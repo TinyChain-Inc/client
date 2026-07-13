@@ -42,11 +42,16 @@ staying thin and well-documented for new users.
 - Do not add custom request/response wrapper classes or hand-written payload/status
   parsing in examples or client APIs when framework surfaces already exist
   (`tc.backend`, `tc.execute`, `tc.Host`, `tc.testing.decode_json_body`).
-- Treat execution mode as contextual framework behavior: reflection/definition
-  contexts are deferred, imperative runtime calls are eager by default, and
+- Treat execution mode as contextual framework behavior:
+  - imperative mode means eager immediate execution (default Python behavior)
+  - deferred mode means Autograph planning/reflection that emits symbolic IR
   `with tc.backend(..., mode="deferred")` is the explicit planning override.
   Do not add package-level `deferred` kwargs, `*_op` helpers, or extra execution
   wrappers.
+- Enforce state-construction mode contracts for native collection wrappers:
+  imperative construction must instantiate a local native structure via
+  `tinychain-local` (or fail fast if unavailable), while deferred mode must
+  stay symbolic and never require a local runtime allocation.
 - Keep route type hints aligned with runtime TinyChain value types. Authoring
   conveniences such as `str` are allowed in route signatures, but bound route
   stubs must normalize annotations to the greatest common runtime TinyChain type
@@ -86,6 +91,10 @@ staying thin and well-documented for new users.
 - Prefer a v1-style form accessor pattern (`form_of(...)`-style helpers) for
   internal traversal and compilation logic. Do not rely on `.value/.ref/.op/.map/.tuple`
   field probing on symbolic wrappers.
+- Keep `form_of(...)` as the single canonical unwrapping helper for symbolic
+  forms. Do not introduce type-specific `*_form_of` helpers for wrappers.
+- In client/runtime wrapper logic, avoid direct `...__uri__` field dereference
+  for path strings. Prefer shared `tc.path(...)` / `tc.uri(...)` helpers.
 - Keep `tc.state.Value` as a minimal base with explicit concrete subclasses
   (`Null`, `Link`, `Bool`, `Number`, `String`, `Map`, `Tuple`). Do not add
   type-specific constructors/accessors on `Value`, and do not expose a `.value`
@@ -94,6 +103,11 @@ staying thin and well-documented for new users.
 - Keep symbolic wrappers focused on IR shape and serialization round-trips;
   runtime arithmetic/comparison/container behaviors belong on typed wrappers
   (`tc.Number`, `tc.Bool`, `tc.Tuple`, `tc.Map`, `tc.String`) and protocols.
+- Native runtime surface types (for example `tc.state.BTree`, tensor/view
+  wrappers, backend handles) should be explicit classes by default, not
+  `@dataclass` containers. Use dataclasses only when a type is truly passive
+  record data and the generated equality/constructor semantics are the desired
+  public contract.
 - Preserve concrete method type information for symbolic operation forms.
   Do not erase `Get/Put/Post/Delete` operation refs/defs behind parent-class
   method strings or generic `args` shape checks when constructing, validating,
@@ -107,7 +121,12 @@ staying thin and well-documented for new users.
   builder methods on `Scalar` (for example `_get`, `_post`, `_put`,
   `_post_ref`). Do not hand-write `TCRef(GetOpRef(...))`,
   `TCRef(PostOpRef(...))`, etc. in wrapper modules such as
-  `collection/tensor/core.py`.
+  `collection/tensor/core.py` and `state/collection/btree.py`.
+- Keep runtime-to-symbolic op normalization in one shared bridge
+  (`state.scalar.refs.OpRef.from_runtime(...)`) and route all wrapper
+  serialization/autobox paths through it. Do not add local
+  `from ...opref import ...` conversions or per-wrapper runtime-op
+  `isinstance` ladders (for example inside `to_json`).
   Keep URI values structured until the serialization/transport boundary; avoid
   extracting `.path` in symbolic wrappers.
 - Keep one canonical route-stub call shape in application code.

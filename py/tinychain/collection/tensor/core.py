@@ -13,7 +13,7 @@ from ...state.scalar import (
     Scalar,
     Tuple,
     autobox,
-    tcref_form_of,
+    form_of,
 )
 from ...autodiff.graph import AddOperator, MatmulOperator, TensorNodeRecord, TransposeOperator, get_active_builder
 from ._common import infer_broadcast_axes, normalize_permutation, normalize_shape, params, reduce_args
@@ -59,7 +59,7 @@ class Tensor(Comparable):
         if subject_root is not None:
             self._subject_root = subject_root
         elif ref is not None:
-            ref_form = tcref_form_of(ref)
+            ref_form = form_of(ref)
             self._subject_root = ref_form.key() if isinstance(ref_form, IdRef) else None
         else:
             self._subject_root = None
@@ -262,9 +262,7 @@ class Tensor(Comparable):
         op = SliceViewOp(kind="slice", bounds=bounds)
 
         def _symbolic_slice() -> "Tensor":
-            if self._subject_root is None:
-                return self._get(key=autobox(bounds), rtype=Tensor)
-            return Tensor._get_ref(self._subject_root, autobox(bounds))
+            return self._get(key=autobox(bounds), rtype=Tensor)
 
         return self._apply_view_transform(
             method="slice",
@@ -279,7 +277,7 @@ class Tensor(Comparable):
 
     def sum(self, axes: object = None, keepdims: bool = False) -> Scalar:
         """Returns Scalar. Autodiff (VJP) for reductions is unsupported in Phase 1."""
-        return self._post("sum", reduce_args(axes, keepdims), rtype=Scalar)
+        return Scalar._post_ref(self._subject_ref("sum"), reduce_args(axes, keepdims))
 
     def transpose(self, permutation: object = None) -> "Tensor":
         op = TransposeViewOp(kind="transpose", permutation=normalize_permutation(permutation))

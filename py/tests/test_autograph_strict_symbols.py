@@ -61,3 +61,59 @@ def test_autograph_allows_tinychain_expression_graphs() -> None:
     ir = compile_ir(A)
     route = next(route for route in ir["routes"] if route["path"] == "/route")
     assert "opdef" in route
+
+
+def test_autograph_rejects_context_api_name_collision_value() -> None:
+    class A(tc.Library):
+        publisher = "example-devco"
+        version = "0.1.0"
+
+        @tc.post
+        def route(self, x: tc.Number):
+            value = x
+            return value
+
+    with pytest.raises(Exception, match="name value is reserved in autograph mode"):
+        compile_ir(A)
+
+
+def test_autograph_rejects_context_api_name_collision_form() -> None:
+    class A(tc.Library):
+        publisher = "example-devco"
+        version = "0.1.0"
+
+        @tc.post
+        def route(self, x: tc.Number):
+            form = x
+            return form
+
+    with pytest.raises(Exception, match="name form is reserved in autograph mode"):
+        compile_ir(A)
+
+
+def test_autograph_rejects_context_api_name_collision_bind() -> None:
+    class A(tc.Library):
+        publisher = "example-devco"
+        version = "0.1.0"
+
+        @tc.post
+        def route(self, x: tc.Number):
+            bind = x
+            return bind
+
+    with pytest.raises(Exception, match="name bind is reserved in autograph mode"):
+        compile_ir(A)
+
+
+def test_autograph_rejects_context_api_name_collision_bind_auto() -> None:
+    class A(tc.Library):
+        publisher = "example-devco"
+        version = "0.1.0"
+
+        @tc.post
+        def route(self, x: tc.Number):
+            bind_auto = x
+            return bind_auto
+
+    with pytest.raises(Exception, match="name bind_auto is reserved in autograph mode"):
+        compile_ir(A)

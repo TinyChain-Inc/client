@@ -24,6 +24,9 @@ explicitly asks for advanced control.
 - Canonical route invocation style is keyword arguments (or one explicit
   `body=` payload). Positional route calls are compatibility-only and should not
   grow new conventions.
+- Route execution policy is explicit: outside backend contexts and in eager
+  backend mode, route calls execute immediately; deferred mode returns symbolic
+  plans; symbolic/context-bound call bodies skip eager auto-execution.
 - `tc.install(...)` is the canonical install helper for Python libraries and WASM
   implementations.
 - Auth context is framework-owned and derived from validated transport/auth state,
@@ -36,6 +39,11 @@ explicitly asks for advanced control.
   they are part of the ordinary user path.
 - `tc.execute(...)`, `tc.Host.execute(...)`, and `tc.Host.request(...)` remain
   advanced surfaces; route method calls are the ordinary application path.
+- `ContextResult` mapping contract is stable: mapping values expand into named
+  OpDef ids by default, and remain a single `result` value for routes typed as
+  generic `tc.Ref`.
+- Autograph local-name hygiene is strict: route-local bindings may not collide
+  with reserved runtime/context names.
 
 ## Current demo contract
 

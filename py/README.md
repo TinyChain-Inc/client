@@ -94,6 +94,17 @@ plan execution tooling), not the ordinary app path:
 - `tc.Host.execute(...)`
 - `tc.Host.request(...)`
 
+### Canonical OpRef bridge
+
+Keep runtime operation refs and symbolic operation refs aligned through one
+shared conversion point: `tc.state.scalar.refs.OpRef.from_runtime(...)`.
+
+- Wrapper serialization and autobox paths should rely on this shared bridge.
+- Do not add local runtime-op import/conversion blocks in wrapper modules
+  (for example, runtime `isinstance` ladders inside `to_json`).
+- This keeps op semantics consistent across wrappers (`BTree`, tensor wrappers,
+  and future collection/value wrappers) and avoids drift in op-shape handling.
+
 ### Canonical route stub call shape
 
 Prefer keyword arguments for route parameters:
@@ -110,6 +121,29 @@ result = library.route(body={"name": "Ada"})
 
 Avoid introducing new route-call conventions. Positional argument forms are
 supported for compatibility but are not the recommended authoring style.
+
+### Route execution policy
+
+Bound route method calls follow one execution policy:
+
+- Outside an explicit backend context, calls execute immediately.
+- Inside `tc.backend(..., mode="deferred")`, calls return symbolic refs/oprefs.
+- Inside eager backend contexts, calls execute immediately unless the call body
+  contains symbolic/context-bound values.
+
+This keeps ordinary application calls ergonomic while preserving deferred
+planning behavior for symbolic programs.
+
+### ContextResult mapping contract
+
+When route compilation receives a `ContextResult` mapping value:
+
+- Mapping entries are expanded into named OpDef form ids by default.
+- If the route return type is generic `tc.Ref`, the mapping is preserved as a
+  single `result` value.
+
+Use `-> tc.Ref` on routes that should return a structured mapping value rather
+than exposing mapping keys as top-level form ids.
 
 ## 60-second Greeter demo shape
 
@@ -498,6 +532,10 @@ autodiff, a backend artifact registry or backend artifact schema,
 hidden/internal route compiler behavior, Rust contracts, or production
 `tc-server` derivative execution.
 
+Autograph also reserves context/runtime binding names. Avoid local bindings such
+as `cxt`, `ctx`, `txn`, `result`, `bind`, `bind_auto`, `form`, `value`,
+`_tc_cxt`, and `_tc_autograph` in transformed route code.
+
 ### Executor auth and routing contract
 
 `tc.backend(...)` uses one remote auth rule:
@@ -721,6 +759,23 @@ There is one public route surface:
 - Reflection/install code compiles the route to IR.
 - Imperative runtime code calls the route eagerly.
 - `mode="deferred"` returns a typed plan when explicit planning is needed.
+
+### Execution mode contract (design rule)
+
+The Python client uses two execution modes with strict semantics:
+
+- Imperative mode: immediate eager execution (the default Python experience).
+- Deferred mode: Autograph planning/reflection that constructs symbolic `OpDef`
+  graphs and refs without immediate execution.
+
+State wrappers must preserve this contract:
+
+- In imperative mode, constructing native state types (for example
+  `tc.state.collection.BTree([...])`) must instantiate a local TinyChain-native
+  data structure via `tinychain-local`, or fail fast with a clear error.
+- In deferred mode (`with tc.backend(..., mode="deferred")` and related
+  reflection/planning contexts), constructors must remain symbolic and must not
+  require local native allocation.
 
 Minimal example:
 

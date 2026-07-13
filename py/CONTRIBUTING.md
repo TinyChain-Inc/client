@@ -38,10 +38,27 @@ exist yet). Mirror the structure of the Rust API (e.g., `tinychain/state.py`,
 4. **Run the Python tests** (`python -m pytest py/tests`) and the PyO3
    integration tests to ensure stubs and bindings agree.
 
+## Route execution and compile-contract coverage
+
+When changing route call behavior, compilation shape rules, or autograph
+lowering semantics, update/add tests in these focused modules:
+
+- `py/tests/test_route_execution_policy.py` for eager/deferred/symbolic call
+  dispatch policy.
+- `py/tests/test_library_routes.py` for route compile contracts and ContextResult
+  mapping behavior.
+- `py/tests/test_op_reflection_analysis.py` for reflection-heavy `tc.Ref`
+  route mapping behavior.
+- `py/tests/test_autograph_strict_symbols.py` for autograph reserved-name and
+  strict symbol rules.
+
 ## Ergonomic usage expectations
 
 - Do not hand-roll request/response wrappers (for example custom `Request`,
   `Response`, `Body`, or payload parser classes) in usage guides or examples.
+- Keep runtime `tinychain.opref.*` to symbolic `tc.state.OpRef` conversion
+  centralized in `state.scalar.refs.OpRef.from_runtime(...)`; do not duplicate
+  conversion imports/branches in wrapper modules.
 - Use framework-native execution surfaces:
   - `with tc.backend(...):` for contextual execution control
   - direct route method calls for default auto-execution

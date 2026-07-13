@@ -27,6 +27,48 @@ def _looks_like_tcref_map(obj: Mapping[str, object]) -> bool:
     return isinstance(key, str) and (key == OPREF_DELETE_TAG or key.startswith("/") or key.startswith("$"))
 
 
+def coerce_subject(subject: object) -> str:
+    if isinstance(subject, str):
+        return subject
+
+    while hasattr(subject, "_form"):
+        next_subject = getattr(subject, "_form")
+        if next_subject is subject:
+            break
+        subject = next_subject
+
+    if isinstance(subject, IdRef):
+        return subject.key()
+
+    if isinstance(subject, TCRef):
+        return coerce_subject(subject._form)
+
+    if isinstance(subject, OpRef):
+        return coerce_subject(subject.subject)
+
+    try:
+        from . import Scalar, form_of
+
+        if isinstance(subject, Scalar):
+            return coerce_subject(form_of(subject))
+    except (ImportError, AttributeError):
+        pass
+
+    if hasattr(subject, "to_json"):
+        try:
+            as_json = subject.to_json()
+            if isinstance(as_json, str):
+                return as_json
+        except (TypeError, ValueError, AttributeError):
+            pass
+
+    raise TypeError(f"expected op subject to be str, got {type(subject).__name__}")
+
+
+# Backward-compatible alias for existing internal call sites.
+_coerce_subject = coerce_subject
+
+
 class OpRef:
     """
     An IR-shaped OpRef encoding used by `tc-ir` and op-graph payloads.
@@ -58,6 +100,34 @@ class OpRef:
 
     def to_json(self) -> dict[str, object]:
         raise NotImplementedError()
+
+    @staticmethod
+    def from_runtime(obj: Any) -> "OpRef | None":
+        from ...opref import DeleteOpRef as RuntimeDeleteOpRef
+        from ...opref import GetOpRef as RuntimeGetOpRef
+        from ...opref import PostOpRef as RuntimePostOpRef
+        from ...opref import PutOpRef as RuntimePutOpRef
+
+        if isinstance(obj, RuntimeGetOpRef):
+            return GetOpRef(obj.path, obj.body)
+
+        if isinstance(obj, RuntimePutOpRef):
+            body = obj.body
+            if isinstance(body, (list, tuple)) and len(body) == 2:
+                return PutOpRef(obj.path, body[0], body[1])
+            raise TypeError("runtime PUT op requires [key, value] body for IR conversion")
+
+        if isinstance(obj, RuntimePostOpRef):
+            if obj.body is None:
+                return PostOpRef(obj.path, {})
+            if not isinstance(obj.body, dict):
+                raise TypeError("runtime POST op requires object body for IR conversion")
+            return PostOpRef(obj.path, obj.body)
+
+        if isinstance(obj, RuntimeDeleteOpRef):
+            return DeleteOpRef(obj.path, obj.body)
+
+        return None
 
     @staticmethod
     def from_json(obj: Any) -> "OpRef":
@@ -102,7 +172,7 @@ class GetOpRef(OpRef):
     def __init__(self, subject: str, key: "Scalar | Value | object" = None):
         from . import autobox
 
-        self._subject = subject
+        self._subject = coerce_subject(subject)
         self._key = autobox(key)
 
     @property
@@ -125,7 +195,7 @@ class PutOpRef(OpRef):
     def __init__(self, subject: str, key: "Scalar | Value | object", value: "Scalar | Value | object"):
         from . import autobox
 
-        self._subject = subject
+        self._subject = coerce_subject(subject)
         self._key = autobox(key)
         self._value = autobox(value)
 
@@ -153,7 +223,7 @@ class PostOpRef(OpRef):
         for key, value in _sorted_items(params):
             encoded[key] = autobox(value)
 
-        self._subject = subject
+        self._subject = coerce_subject(subject)
         self._params = encoded
 
     @property
@@ -176,7 +246,7 @@ class DeleteOpRef(OpRef):
     def __init__(self, subject: str, key: "Scalar | Value | object" = None):
         from . import autobox
 
-        self._subject = subject
+        self._subject = coerce_subject(subject)
         self._key = autobox(key)
 
     @property
@@ -208,12 +278,13 @@ class IdRef:
 
 
 class While:
-    __slots__ = ("cond", "op", "state")
+    __slots__ = ("cond", "op", "state", "_ctx")
 
-    def __init__(self, cond: "Scalar", op: "Scalar", state: "Scalar"):
+    def __init__(self, cond: "Scalar", op: "Scalar", state: "Scalar", *, ctx: object | None = None):
         self.cond = cond
         self.op = op
         self.state = state
+        self._ctx = ctx
 
     def __eq__(self, other: object) -> bool:
         return (
@@ -237,12 +308,13 @@ class While:
 
 
 class Cond:
-    __slots__ = ("cond", "then", "or_else")
+    __slots__ = ("cond", "then", "or_else", "_ctx")
 
-    def __init__(self, cond: "TCRef", then: "Scalar", or_else: "Scalar"):
+    def __init__(self, cond: "TCRef", then: "Scalar", or_else: "Scalar", *, ctx: object | None = None):
         self.cond = cond
         self.then = then
         self.or_else = or_else
+        self._ctx = ctx
 
     def __eq__(self, other: object) -> bool:
         return (
@@ -266,12 +338,13 @@ class Cond:
 
 
 class ForEach:
-    __slots__ = ("items", "op", "item_name")
+    __slots__ = ("items", "op", "item_name", "_ctx")
 
-    def __init__(self, items: "Scalar", op: "Scalar", item_name: str):
+    def __init__(self, items: "Scalar", op: "Scalar", item_name: str, *, ctx: object | None = None):
         self.items = items
         self.op = op
         self.item_name = item_name
+        self._ctx = ctx
 
     def __eq__(self, other: object) -> bool:
         return (
@@ -312,9 +385,9 @@ class TCRef:
         return hash(repr(self.to_json()))
 
     def to_json(self) -> dict[str, object]:
-        from . import _json_of
+        from . import _json_of, form_of
 
-        raw = _json_of(tcref_form_of(self))
+        raw = _json_of(form_of(self))
         if not isinstance(raw, dict):
             raise TypeError("TCRef form must encode to a map")
         return raw
@@ -376,8 +449,3 @@ class TCRef:
 
         return TCRef(OpRef.from_json(obj))
 
-
-def tcref_form_of(value: "TCRef | object") -> object:
-    if isinstance(value, TCRef):
-        return value._form
-    return value

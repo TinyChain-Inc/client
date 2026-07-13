@@ -4,6 +4,8 @@ import pathlib
 
 import tinychain as tc
 import tinychain.testing as tc_testing
+from tinychain.library import compile_ir
+from tinychain.state.scalar import OPDEF_POST
 
 from .support import install_token, require_cargo
 
@@ -167,3 +169,30 @@ def test_op_reflection_analysis(tmp_path: pathlib.Path) -> None:
             assert map_loop == "ok"
 
     tc_testing.run_with_timeout(45, _run)
+
+
+def test_ref_typed_reflection_route_mapping_is_result_value() -> None:
+    class C(tc.Library):
+        publisher = "example-devco"
+        version = "0.1.0"
+
+        @tc.post
+        def nested_if_count(self, items: tc.state.Scalar) -> tc.Ref:
+            state = {"items": items, "count": 0}
+            while len(state["items"]) > 0:
+                head = state["items"][0]
+                rest = state["items"][1:]
+                if head == 0:
+                    next_count = state["count"] + 1
+                else:
+                    next_count = state["count"]
+                state = {"items": rest, "count": next_count}
+            return {"count": state["count"]}
+
+    ir = compile_ir(C)
+    route = next(route for route in ir["routes"] if route["path"] == "/nested_if_count")
+    opdef = route["opdef"][OPDEF_POST]
+    names = [name for name, _ in opdef]
+
+    assert "result" in names
+    assert "count" not in names

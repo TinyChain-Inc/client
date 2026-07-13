@@ -35,6 +35,8 @@ from .scalar import (
     form_of,
 )
 from .context import Context, ContextResult, context, scoped_context, current_context
+from . import collection
+from .collection import Collection
 from ..collection.tensor import Tensor as _Tensor
 from .value import Bool, C64, C128, Complex, F32, F64, Float, I64, Integer, Link, Map, Null, Number, String, Tuple, U64, Value
 
@@ -88,6 +90,7 @@ __all__ = [
     "context",
     "scoped_context",
     "current_context",
+    "collection",
     "id",
     "map_of",
     "scalar_for_hint",
@@ -96,4 +99,5 @@ __all__ = [
     "while_loop",
     "for_each",
     "form_of",
+    "Collection",
 ]

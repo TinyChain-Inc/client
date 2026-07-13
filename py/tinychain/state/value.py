@@ -95,14 +95,26 @@ def form_of(value: "Value | object") -> object:
 
 
 class Null(Value):
-    __slots__ = ()
+    __slots__ = ("op",)
 
     __uri__: URI = uri(Value, "none")
 
-    def __init__(self):
+    def __init__(self, value: object = None):
+        op = _as_opref(value)
+        if op is not None:
+            super().__init__(None)
+            object.__setattr__(self, "op", op)
+            return
+
+        if value is not None:
+            raise TypeError("expected null value")
+
         super().__init__(None)
+        object.__setattr__(self, "op", None)
 
     def to_json(self) -> object:
+        if self.op is not None:
+            return self.op.to_json()
         return None
 
     @classmethod
@@ -138,10 +150,10 @@ class String(Value):
 
     def __init__(self, value: str | object):
         from ..opref import OpRef as RuntimeOpRef
-        from .scalar import OpRef as StateOpRef, TCRef, tcref_form_of
+        from .scalar import OpRef as StateOpRef, TCRef, form_of
 
         if isinstance(value, TCRef):
-            value = tcref_form_of(value)
+            value = form_of(value)
 
         if isinstance(value, (RuntimeOpRef, StateOpRef)):
             super().__init__(None)
@@ -156,7 +168,7 @@ class String(Value):
         if params is not None and kwargs:
             raise ValueError("String.render accepts a dict or kwargs, not both")
 
-        from .scalar import OpRef as StateOpRef, TCRef, autobox, form_of, tcref_form_of
+        from .scalar import OpRef as StateOpRef, TCRef, autobox, form_of
 
         render_params = kwargs if params is None else params
         if self.op is None and all(_is_literal_render_value(value) for value in render_params.values()):
@@ -174,7 +186,7 @@ class String(Value):
         if not isinstance(rendered_form, TCRef):
             raise TypeError("expected string render to produce an op ref")
 
-        ref_form = tcref_form_of(rendered_form)
+        ref_form = form_of(rendered_form)
         if not isinstance(ref_form, StateOpRef):
             raise TypeError("expected string render to produce an op ref")
 

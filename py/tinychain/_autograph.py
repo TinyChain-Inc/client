@@ -38,7 +38,12 @@ _RESERVED_NAMES = {
     "ctx",
     "txn",
     "result",
+    "bind",
+    "bind_auto",
+    "form",
+    "value",
     "_tc_autograph",
+    "_tc_cxt",
 }
 
 _ALLOWED_GLOBALS = {
@@ -149,14 +154,18 @@ class _AutographTransformer(ast.NodeTransformer):
             value=ast.Call(
                 func=ast.Attribute(
                     value=ast.Attribute(value=ast.Name(id="_tc_autograph", ctx=ast.Load()), attr="state", ctx=ast.Load()),
-                    attr="context",
+                    attr="Context",
                     ctx=ast.Load(),
                 ),
                 args=[],
                 keywords=[],
             ),
         )
-        return [import_stmt, ctx_stmt]
+        alias_stmt = ast.Assign(
+            targets=[ast.Name(id="_tc_cxt", ctx=ast.Store())],
+            value=ast.Name(id="cxt", ctx=ast.Load()),
+        )
+        return [import_stmt, ctx_stmt, alias_stmt]
 
     def _lower_stmt(self, stmt: ast.stmt) -> list[ast.stmt]:
         if isinstance(stmt, ast.Assign):
@@ -205,8 +214,14 @@ class _AutographTransformer(ast.NodeTransformer):
         return [ast.Assign(targets=[self._cxt_attr(name, ast.Store())], value=value)]
 
     def _lower_return(self, stmt: ast.Return) -> ast.Return:
-        value = self._lower_expr(stmt.value) if stmt.value is not None else None
-        return ast.Return(value=value)
+        value = self._lower_expr(stmt.value) if stmt.value is not None else ast.Constant(value=None)
+        return ast.Return(
+            value=ast.Call(
+                func=ast.Attribute(value=ast.Name(id="cxt", ctx=ast.Load()), attr="result", ctx=ast.Load()),
+                args=[value],
+                keywords=[],
+            )
+        )
 
     def _lower_if(self, stmt: ast.If) -> list[ast.stmt]:
         const = _eval_const_bool(stmt.test)
@@ -727,7 +742,9 @@ def _id_call(name: str) -> ast.Call:
             ctx=ast.Load(),
         ),
         args=[ast.Constant(value=name)],
-        keywords=[],
+        keywords=[
+            ast.keyword(arg="ctx", value=ast.Name(id="_tc_cxt", ctx=ast.Load())),
+        ],
     )
 
 
@@ -738,7 +755,7 @@ def _opdef_post(items: list[tuple[str, ast.expr]]) -> ast.Call:
             ast.Lambda(
                 args=ast.arguments(
                     posonlyargs=[],
-                    args=[],
+                    args=[ast.arg(arg="_tc_cxt")],
                     kwonlyargs=[],
                     kw_defaults=[],
                     defaults=[],
@@ -761,19 +778,17 @@ def _opdef_post(items: list[tuple[str, ast.expr]]) -> ast.Call:
 
 
 def _autograph_opdef_post(item_fns):
-    from .state import OpDef, current_context, scoped_context
+    from .state import OpDef, scoped_context
 
-    with scoped_context():
+    with scoped_context() as cxt:
         form: list[tuple[str, object]] = []
-        ctx = current_context()
         cursor = 0
         for item_fn in item_fns:
-            name, value = item_fn()
-            if ctx is not None:
-                ctx_form = list(ctx.form())
-                if len(ctx_form) > cursor:
-                    form.extend(ctx_form[cursor:])
-                    cursor = len(ctx_form)
+            name, value = item_fn(cxt)
+            ctx_form = list(cxt.form())
+            if len(ctx_form) > cursor:
+                form.extend(ctx_form[cursor:])
+                cursor = len(ctx_form)
             form.append((name, value))
         from .state import PostOpDef
 
