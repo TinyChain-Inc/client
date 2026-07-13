@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from .graph import TensorNodeRecord
 from .protocol import AutodiffError, AutodiffResult
@@ -60,10 +60,7 @@ class DerivativeExecutionDispatcher:
 
     library_cls: type
     kernel: object
-    token: object
-    data_dir: object | None = None
     route_name: str | None = None
-    _is_installed: bool = field(default=False, init=False, repr=False)
 
     def execute(
         self,
@@ -83,7 +80,6 @@ class DerivativeExecutionDispatcher:
                 f"missing derivative execution input(s): {joined}",
             )
 
-        self._install_once()
         library = self.library_cls()
         route = getattr(library, route_name)
         call_values = {param: values[param] for param in params}
@@ -100,30 +96,4 @@ class DerivativeExecutionDispatcher:
         if not isinstance(gradients, list):
             gradients = [gradients]
         return AutodiffResult(gradients=gradients, metadata=program.metadata)
-
-    def _install_once(self) -> None:
-        if self._is_installed:
-            return
-
-        try:
-            import tinychain as tc
-
-            response = tc.install(
-                self.library_cls,
-                kernel=self.kernel,
-                data_dir=self.data_dir,
-                token=self.token,
-            )
-        except AutodiffError:
-            raise
-        except (AssertionError, RuntimeError, TypeError, ValueError) as exc:
-            raise AutodiffError("missing_derivative_ir", str(exc)) from exc
-
-        status = getattr(response, "status", None)
-        if status not in (None, 200, 204):
-            raise AutodiffError(
-                "missing_derivative_ir",
-                f"derivative execution library install failed with status {status}",
-            )
-        self._is_installed = True
 

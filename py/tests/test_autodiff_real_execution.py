@@ -120,7 +120,6 @@ def test_real_dispatcher_missing_value_uses_autodiff_error() -> None:
     dispatcher = DerivativeExecutionDispatcher(
         library_cls=library_cls,
         kernel=object(),
-        token=object(),
     )
 
     with pytest.raises(AutodiffError) as error:
@@ -144,11 +143,11 @@ def test_real_dispatcher_executes_installed_route_against_local_backend(tmp_path
     )
     token = install_token(library_cls.class_id().path)
     kernel = handle.local()
+    install_response = tc.install(library_cls, kernel=kernel, data_dir=tmp_path, token=token)
+    assert install_response.status == 204
     dispatcher = DerivativeExecutionDispatcher(
         library_cls=library_cls,
         kernel=kernel,
-        token=token,
-        data_dir=tmp_path,
     )
 
     seed = tc.Tensor(native=dense_f64([2], [1.0, 2.0]))
