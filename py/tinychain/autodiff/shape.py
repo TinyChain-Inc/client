@@ -5,6 +5,7 @@ from collections.abc import Mapping, Sequence
 from .protocol import AutodiffError
 
 
+# Client-side shape metadata only; runtime route params receive concrete ints.
 ShapeDim = int | str
 Shape = tuple[ShapeDim, ...]
 ConcreteShape = tuple[int, ...]
