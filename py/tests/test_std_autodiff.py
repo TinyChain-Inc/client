@@ -4,7 +4,16 @@ import pytest
 from tinychain.autodiff.vjp import (
     VjpRegistry,
     AddOperator,
+    DivOperator,
     MatmulOperator,
+    MaxOperator,
+    MeanOperator,
+    MinOperator,
+    MulOperator,
+    ProductOperator,
+    ReshapeOperator,
+    SubOperator,
+    SumOperator,
     TransposeOperator,
     VjpRule,
     VjpContext,
@@ -207,21 +216,30 @@ def test_vjp_registry_manual_register_backwards_compatibility():
     assert registry.lookup(AddOperator()) is rule_instance
 
 
-def test_vjp_registry_default_registry_has_all_three_rules():
-    """Test that default_vjp_registry() returns all 3 registered rule types."""
+def test_vjp_registry_default_registry_has_phase5_rules():
+    """Test that default_vjp_registry() returns all Phase 5 rule types."""
     from tinychain.autodiff.vjp import default_vjp_registry
 
     registry = default_vjp_registry()
+    expected_types = {
+        AddOperator,
+        SubOperator,
+        MulOperator,
+        DivOperator,
+        SumOperator,
+        MeanOperator,
+        MaxOperator,
+        MinOperator,
+        ProductOperator,
+        ReshapeOperator,
+        MatmulOperator,
+        TransposeOperator,
+    }
 
-    assert registry.has_rule(AddOperator)
-    assert registry.has_rule(MatmulOperator)
-    assert registry.has_rule(TransposeOperator)
+    for operator_type in expected_types:
+        assert registry.has_rule(operator_type)
 
-    types = registry.supported_types()
-    assert len(types) == 3
-    assert AddOperator in types
-    assert MatmulOperator in types
-    assert TransposeOperator in types
+    assert set(registry.supported_types()) == expected_types
 
 
 def test_vjp_rule_declaration_order():

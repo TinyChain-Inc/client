@@ -18,7 +18,16 @@ from tinychain.autodiff import (
     AutodiffError,
     AutodiffResult,
     DerivativeMetadata,
+    DivOperator,
     MatmulOperator,
+    MaxOperator,
+    MeanOperator,
+    MinOperator,
+    MulOperator,
+    ProductOperator,
+    ReshapeOperator,
+    SubOperator,
+    SumOperator,
     TensorGraph,
     TensorGraphBuilder,
     TensorNodeRecord,
@@ -169,13 +178,30 @@ def test_vjp_registry_has_rule():
 # --- Step 7: VjpRegistry.supported_types() ---
 
 
+def _phase5_operator_types():
+    return {
+        AddOperator,
+        SubOperator,
+        MulOperator,
+        DivOperator,
+        SumOperator,
+        MeanOperator,
+        MaxOperator,
+        MinOperator,
+        ProductOperator,
+        ReshapeOperator,
+        MatmulOperator,
+        TransposeOperator,
+    }
+
+
 def test_vjp_registry_supported_types():
-    """supported_types() returns all 3 current operators (Add, Matmul, Transpose)."""
+    """supported_types() returns all Phase 5 operators."""
     registry = default_vjp_registry()
     supported = registry.supported_types()
 
-    assert set(supported) == {AddOperator, MatmulOperator, TransposeOperator}
-    assert len(supported) == 3
+    assert set(supported) == _phase5_operator_types()
+    assert len(supported) == len(_phase5_operator_types())
 
 
 # --- Step 8: missing derivative behavior ---
@@ -329,9 +355,12 @@ def test_vjp_rule_declaration_order():
         def apply(self, context):
             ...
 
-    normal_registry = default_vjp_registry()
-
-    assert set(reversed_registry.supported_types()) == set(normal_registry.supported_types())
+    assert set(reversed_registry.supported_types()) == {
+        AddOperator,
+        MatmulOperator,
+        TransposeOperator,
+    }
+    assert _phase5_operator_types().issuperset(reversed_registry.supported_types())
     assert reversed_registry.has_rule(AddOperator())
     assert reversed_registry.has_rule(MatmulOperator())
     assert reversed_registry.has_rule(TransposeOperator())
