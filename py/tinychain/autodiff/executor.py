@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 
 from .graph import TensorNodeRecord
 from .protocol import AutodiffError, AutodiffResult
@@ -15,6 +15,7 @@ from .reverse import DerivativeProgram
 
 
 NodeDispatcher = Callable[[TensorNodeRecord, list[object]], object]
+RouteExecutor = Callable[[Mapping[str, object]], object]
 
 
 @dataclass(frozen=True)
@@ -72,14 +73,10 @@ class ExecutionScheduler:
 
 @dataclass(slots=True)
 class DerivativeExecutionDispatcher:
-    """Execute a derivative program through one installed TinyChain route call."""
+    """Execute a derivative program through an injected route executor."""
 
-    library_cls: type
-    kernel: object
-    token: object
-    data_dir: object | None = None
-    route_name: str | None = None
-    _is_installed: bool = field(default=False, init=False, repr=False)
+    route_executor: RouteExecutor
+    params: tuple[str, ...]
 
     def execute(
         self,
@@ -88,12 +85,8 @@ class DerivativeExecutionDispatcher:
         values: Mapping[str, object],
         shape_bindings: Mapping[str, int] | None = None,
     ) -> AutodiffResult:
-        route_name = self.route_name or getattr(
-            self.library_cls, "__tc_derivative_route_name__", "execute"
-        )
-        params = tuple(getattr(self.library_cls, "__tc_derivative_params__", ()))
         _validate_program_shapes_resolved(program, values, shape_bindings)
-        missing = [param for param in params if param not in values]
+        missing = [param for param in self.params if param not in values]
         if missing:
             joined = ", ".join(repr(param) for param in missing)
             raise AutodiffError(
@@ -101,15 +94,9 @@ class DerivativeExecutionDispatcher:
                 f"missing derivative execution input(s): {joined}",
             )
 
-        self._install_once()
-        library = self.library_cls()
-        route = getattr(library, route_name)
-        call_values = {param: values[param] for param in params}
+        call_values = {param: values[param] for param in self.params}
         try:
-            import tinychain as tc
-
-            with tc.backend(self.kernel):
-                gradients = route(**call_values)
+            gradients = self.route_executor(call_values)
         except AutodiffError:
             raise
         except (AssertionError, RuntimeError, TypeError, ValueError) as exc:
@@ -118,33 +105,6 @@ class DerivativeExecutionDispatcher:
         if not isinstance(gradients, list):
             gradients = [gradients]
         return AutodiffResult(gradients=gradients, metadata=program.metadata)
-
-    def _install_once(self) -> None:
-        if self._is_installed:
-            return
-
-        try:
-            import tinychain as tc
-
-            response = tc.install(
-                self.library_cls,
-                kernel=self.kernel,
-                data_dir=self.data_dir,
-                token=self.token,
-            )
-        except AutodiffError:
-            raise
-        except (AssertionError, RuntimeError, TypeError, ValueError) as exc:
-            raise AutodiffError("missing_derivative_ir", str(exc)) from exc
-
-        status = getattr(response, "status", None)
-        if status not in (None, 200, 204):
-            raise AutodiffError(
-                "missing_derivative_ir",
-                f"derivative execution library install failed with status {status}",
-            )
-        self._is_installed = True
-
 
 
 def _runtime_shape_bindings(

@@ -6,6 +6,15 @@ from tinychain.autodiff.vjp import (
     AddOperator,
     MatmulOperator,
     TransposeOperator,
+    SubOperator,
+    MulOperator,
+    DivOperator,
+    SumOperator,
+    MeanOperator,
+    ReshapeOperator,
+    MaxOperator,
+    MinOperator,
+    ProductOperator,
     VjpRule,
     VjpContext,
     VjpResult,
@@ -172,11 +181,7 @@ def test_vjp_registry_supported_types():
         def apply(self, context: VjpContext) -> VjpResult:
             return VjpResult(gradients={}, derivative_nodes=[])
 
-    types = registry.supported_types()
-    assert len(types) == 3
-    assert AddOperator in types
-    assert MatmulOperator in types
-    assert TransposeOperator in types
+    assert set(registry.supported_types()) == {AddOperator, MatmulOperator, TransposeOperator}
 
 
 def test_vjp_registry_decorator_type_error():
@@ -207,21 +212,39 @@ def test_vjp_registry_manual_register_backwards_compatibility():
     assert registry.lookup(AddOperator()) is rule_instance
 
 
-def test_vjp_registry_default_registry_has_all_three_rules():
-    """Test that default_vjp_registry() returns all 3 registered rule types."""
+def test_vjp_registry_default_registry_has_builtin_rules():
+    """Test that default_vjp_registry() returns the built-in rule types."""
     from tinychain.autodiff.vjp import default_vjp_registry
 
     registry = default_vjp_registry()
 
     assert registry.has_rule(AddOperator)
+    assert registry.has_rule(SubOperator)
+    assert registry.has_rule(MulOperator)
+    assert registry.has_rule(DivOperator)
+    assert registry.has_rule(SumOperator)
+    assert registry.has_rule(MeanOperator)
+    assert registry.has_rule(ReshapeOperator)
+    assert registry.has_rule(MaxOperator)
+    assert registry.has_rule(MinOperator)
+    assert registry.has_rule(ProductOperator)
     assert registry.has_rule(MatmulOperator)
     assert registry.has_rule(TransposeOperator)
 
-    types = registry.supported_types()
-    assert len(types) == 3
-    assert AddOperator in types
-    assert MatmulOperator in types
-    assert TransposeOperator in types
+    assert set(registry.supported_types()) == {
+        AddOperator,
+        SubOperator,
+        MulOperator,
+        DivOperator,
+        SumOperator,
+        MeanOperator,
+        ReshapeOperator,
+        MaxOperator,
+        MinOperator,
+        ProductOperator,
+        MatmulOperator,
+        TransposeOperator,
+    }
 
 
 def test_vjp_rule_declaration_order():
