@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 from .graph import TensorNodeRecord
@@ -9,6 +9,7 @@ from .reverse import DerivativeProgram
 
 
 NodeDispatcher = Callable[[TensorNodeRecord, list[object]], object]
+RouteExecutor = Callable[[Mapping[str, object]], object]
 
 
 @dataclass(frozen=True)
@@ -52,3 +53,38 @@ class ExecutionScheduler:
             else:
                 gradients.append(environment[gradient_id])
         return AutodiffResult(gradients=gradients, metadata=program.metadata)
+
+
+@dataclass(slots=True)
+class DerivativeExecutionDispatcher:
+    """Execute a derivative program through an injected route executor."""
+
+    route_executor: RouteExecutor
+    params: tuple[str, ...]
+
+    def execute(
+        self,
+        program: DerivativeProgram,
+        *,
+        values: Mapping[str, object],
+    ) -> AutodiffResult:
+        missing = [param for param in self.params if param not in values]
+        if missing:
+            joined = ", ".join(repr(param) for param in missing)
+            raise AutodiffError(
+                "missing_derivative_ir",
+                f"missing derivative execution input(s): {joined}",
+            )
+
+        call_values = {param: values[param] for param in self.params}
+        try:
+            gradients = self.route_executor(call_values)
+        except AutodiffError:
+            raise
+        except (AssertionError, RuntimeError, TypeError, ValueError) as exc:
+            raise AutodiffError("missing_derivative_ir", str(exc)) from exc
+
+        if not isinstance(gradients, list):
+            gradients = [gradients]
+        return AutodiffResult(gradients=gradients, metadata=program.metadata)
+
