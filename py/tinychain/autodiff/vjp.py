@@ -7,7 +7,10 @@ from typing import Protocol, runtime_checkable
 from .graph import (
     AddOperator,
     BroadcastReduceOperator,
+    DivOperator,
     MatmulOperator,
+    MulOperator,
+    SubOperator,
     TensorNodeRecord,
     TensorOperator,
     TransposeOperator,
@@ -109,10 +112,6 @@ class VjpRegistry:
             other._rules[operator_type] = rule
 
 
-# Module-level registry for decorator-based registration
-_registry = VjpRegistry()
-
-
 @dataclass(frozen=True)
 class BroadcastReductionPlan:
     result_shape: tuple[int, ...]
@@ -155,7 +154,6 @@ class BroadcastReductionPlanner:
         )
 
 
-@_registry.rule(AddOperator)
 class AddVjpRule:
     operator_type = AddOperator
 
@@ -199,6 +197,209 @@ class AddVjpRule:
         return VjpResult(gradients=gradients, derivative_nodes=derivative_nodes)
 
 
+def _elementwise_binary_node(
+    *,
+    context: VjpContext,
+    operator: TensorOperator,
+    input_value_ids: list[str],
+    output_typespec: dict[str, object] | None,
+    op_params: dict[str, object] | None = None,
+) -> TensorNodeRecord:
+    return TensorNodeRecord(
+        node_id=context.next_node_id(),
+        output_value_id=context.next_value_id(),
+        operator=operator,
+        op_params=dict(op_params or {}),
+        input_value_ids=input_value_ids,
+        output_typespec=output_typespec,
+    )
+
+
+class _ElementwiseVjpRule:
+    operator_type: type[TensorOperator]
+
+    def __init__(self, planner: BroadcastReductionPlanner | None = None) -> None:
+        self._planner = planner or BroadcastReductionPlanner()
+
+    def _validate_binary(self, context: VjpContext, name: str) -> tuple[str, str, tuple[int, ...], dict[str, object] | None]:
+        if len(context.node.input_value_ids) != 2:
+            raise AutodiffError("malformed_derivative_ir", f"{name} VJP requires exactly two inputs")
+        lhs_id, rhs_id = context.node.input_value_ids
+        result_shape = typespec_shape(context.node.output_typespec)
+        result_typespec = context.node.output_typespec
+        return lhs_id, rhs_id, result_shape, result_typespec
+
+    def _reduce_to_operand(
+        self,
+        *,
+        context: VjpContext,
+        gradient_id: str,
+        operand_id: str,
+        result_shape: tuple[int, ...],
+        derivative_nodes: list[TensorNodeRecord],
+    ) -> str:
+        operand_typespec = context.value_typespecs.get(operand_id)
+        operand_shape = typespec_shape(operand_typespec)
+        plan = self._planner.plan(result_shape=result_shape, operand_shape=operand_shape)
+        if not plan.axes:
+            return gradient_id
+
+        reduced_id = context.next_value_id()
+        derivative_nodes.append(
+            TensorNodeRecord(
+                node_id=context.next_node_id(),
+                output_value_id=reduced_id,
+                operator=BroadcastReduceOperator(),
+                op_params={"target_shape": list(plan.operand_shape)},
+                input_value_ids=[gradient_id],
+                output_typespec=operand_typespec,
+            )
+        )
+        return reduced_id
+
+
+class SubVjpRule(_ElementwiseVjpRule):
+    operator_type = SubOperator
+
+    def apply(self, context: VjpContext) -> VjpResult:
+        lhs_id, rhs_id, result_shape, result_typespec = self._validate_binary(context, "sub")
+        gradients: dict[str, str] = {}
+        derivative_nodes: list[TensorNodeRecord] = []
+
+        if lhs_id in context.needed_input_value_ids:
+            gradients[lhs_id] = self._reduce_to_operand(
+                context=context,
+                gradient_id=context.upstream_value_id,
+                operand_id=lhs_id,
+                result_shape=result_shape,
+                derivative_nodes=derivative_nodes,
+            )
+
+        if rhs_id in context.needed_input_value_ids:
+            negated = _elementwise_binary_node(
+                context=context,
+                operator=MulOperator(),
+                input_value_ids=[context.upstream_value_id],
+                output_typespec=result_typespec,
+                op_params={"right_literal": -1.0},
+            )
+            derivative_nodes.append(negated)
+            gradients[rhs_id] = self._reduce_to_operand(
+                context=context,
+                gradient_id=negated.output_value_id,
+                operand_id=rhs_id,
+                result_shape=result_shape,
+                derivative_nodes=derivative_nodes,
+            )
+
+        return VjpResult(gradients=gradients, derivative_nodes=derivative_nodes)
+
+
+class MulVjpRule(_ElementwiseVjpRule):
+    operator_type = MulOperator
+
+    def apply(self, context: VjpContext) -> VjpResult:
+        lhs_id, rhs_id, result_shape, result_typespec = self._validate_binary(context, "mul")
+        gradients: dict[str, str] = {}
+        derivative_nodes: list[TensorNodeRecord] = []
+
+        if lhs_id in context.needed_input_value_ids:
+            lhs_raw = _elementwise_binary_node(
+                context=context,
+                operator=MulOperator(),
+                input_value_ids=[context.upstream_value_id, rhs_id],
+                output_typespec=result_typespec,
+            )
+            derivative_nodes.append(lhs_raw)
+            gradients[lhs_id] = self._reduce_to_operand(
+                context=context,
+                gradient_id=lhs_raw.output_value_id,
+                operand_id=lhs_id,
+                result_shape=result_shape,
+                derivative_nodes=derivative_nodes,
+            )
+
+        if rhs_id in context.needed_input_value_ids:
+            rhs_raw = _elementwise_binary_node(
+                context=context,
+                operator=MulOperator(),
+                input_value_ids=[context.upstream_value_id, lhs_id],
+                output_typespec=result_typespec,
+            )
+            derivative_nodes.append(rhs_raw)
+            gradients[rhs_id] = self._reduce_to_operand(
+                context=context,
+                gradient_id=rhs_raw.output_value_id,
+                operand_id=rhs_id,
+                result_shape=result_shape,
+                derivative_nodes=derivative_nodes,
+            )
+
+        return VjpResult(gradients=gradients, derivative_nodes=derivative_nodes)
+
+
+class DivVjpRule(_ElementwiseVjpRule):
+    operator_type = DivOperator
+
+    def apply(self, context: VjpContext) -> VjpResult:
+        lhs_id, rhs_id, result_shape, result_typespec = self._validate_binary(context, "div")
+        gradients: dict[str, str] = {}
+        derivative_nodes: list[TensorNodeRecord] = []
+
+        if lhs_id in context.needed_input_value_ids:
+            lhs_raw = _elementwise_binary_node(
+                context=context,
+                operator=DivOperator(),
+                input_value_ids=[context.upstream_value_id, rhs_id],
+                output_typespec=result_typespec,
+            )
+            derivative_nodes.append(lhs_raw)
+            gradients[lhs_id] = self._reduce_to_operand(
+                context=context,
+                gradient_id=lhs_raw.output_value_id,
+                operand_id=lhs_id,
+                result_shape=result_shape,
+                derivative_nodes=derivative_nodes,
+            )
+
+        if rhs_id in context.needed_input_value_ids:
+            numerator = _elementwise_binary_node(
+                context=context,
+                operator=MulOperator(),
+                input_value_ids=[context.upstream_value_id, lhs_id],
+                output_typespec=result_typespec,
+            )
+            denominator = _elementwise_binary_node(
+                context=context,
+                operator=MulOperator(),
+                input_value_ids=[rhs_id, rhs_id],
+                output_typespec=result_typespec,
+            )
+            quotient = _elementwise_binary_node(
+                context=context,
+                operator=DivOperator(),
+                input_value_ids=[numerator.output_value_id, denominator.output_value_id],
+                output_typespec=result_typespec,
+            )
+            negated = _elementwise_binary_node(
+                context=context,
+                operator=MulOperator(),
+                input_value_ids=[quotient.output_value_id],
+                output_typespec=result_typespec,
+                op_params={"right_literal": -1.0},
+            )
+            derivative_nodes.extend([numerator, denominator, quotient, negated])
+            gradients[rhs_id] = self._reduce_to_operand(
+                context=context,
+                gradient_id=negated.output_value_id,
+                operand_id=rhs_id,
+                result_shape=result_shape,
+                derivative_nodes=derivative_nodes,
+            )
+
+        return VjpResult(gradients=gradients, derivative_nodes=derivative_nodes)
+
+
 def _swap_last_two_dims(shape: tuple[int, ...]) -> tuple[int, ...]:
     return shape[:-2] + (shape[-1], shape[-2])
 
@@ -207,7 +408,6 @@ def _transpose_last_two_perm(rank: int) -> list[int]:
     return list(range(rank - 2)) + [rank - 1, rank - 2]
 
 
-@_registry.rule(MatmulOperator)
 class MatmulVjpRule:
     """Build requested matmul VJP branches, reducing broadcast batches."""
 
@@ -371,7 +571,6 @@ def _inverse_permutation(perm: tuple[int, ...]) -> tuple[int, ...]:
     return tuple(inverse)
 
 
-@_registry.rule(TransposeOperator)
 class TransposeVjpRule:
     operator_type = TransposeOperator
 
@@ -398,12 +597,15 @@ class TransposeVjpRule:
 
 
 def default_vjp_registry() -> VjpRegistry:
-    """Return the default VJP registry with all pre-registered rules.
-
-    The rules are registered via the @_registry.rule decorator at class
-    definition time. This function returns a copy of the module-level registry
-    to avoid mutation of the shared instance.
-    """
+    """Return the default VJP registry with the built-in transform rules."""
     registry = VjpRegistry()
-    _registry.copy_into(registry)
+    for rule in (
+        AddVjpRule(),
+        SubVjpRule(),
+        MulVjpRule(),
+        DivVjpRule(),
+        MatmulVjpRule(),
+        TransposeVjpRule(),
+    ):
+        registry.register(rule)
     return registry

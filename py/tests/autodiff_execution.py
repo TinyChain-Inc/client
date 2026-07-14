@@ -5,7 +5,10 @@ import numpy as np
 from tinychain.autodiff import (
     AddOperator,
     BroadcastReduceOperator,
+    DivOperator,
     MatmulOperator,
+    MulOperator,
+    SubOperator,
     TensorNodeRecord,
     TransposeOperator,
 )
@@ -19,11 +22,23 @@ class NumpyAutodiffDispatcher:
             return np.asarray(args[0]) + np.asarray(args[1])
         if isinstance(node.operator, BroadcastReduceOperator):
             return self._broadcast_reduce(np.asarray(args[0]), node.op_params["target_shape"])
+        if isinstance(node.operator, SubOperator):
+            return np.asarray(args[0]) - self._right_arg(node, args)
+        if isinstance(node.operator, MulOperator):
+            return np.asarray(args[0]) * self._right_arg(node, args)
+        if isinstance(node.operator, DivOperator):
+            return np.asarray(args[0]) / self._right_arg(node, args)
         if isinstance(node.operator, MatmulOperator):
             return np.matmul(np.asarray(args[0]), np.asarray(args[1]))
         if isinstance(node.operator, TransposeOperator):
             return np.transpose(np.asarray(args[0]), axes=node.op_params["perm"])
         raise AssertionError(f"unsupported test operator {node.operator!r}")
+
+    @staticmethod
+    def _right_arg(node: TensorNodeRecord, args: list[object]) -> object:
+        if "right_literal" in node.op_params:
+            return node.op_params["right_literal"]
+        return np.asarray(args[1])
 
     @staticmethod
     def _broadcast_reduce(value: np.ndarray, target_shape: object) -> np.ndarray:
