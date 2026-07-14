@@ -427,7 +427,7 @@ def build_derivative_execution_library(
     if artifact_class_name is not None:
         _validate_execution_library_identity(class_name, artifact_class_name)
 
-    compiled = compile_derivative_program(program)
+    compiled = compile_derivative_program(program, defer_symbolic_shape_params=True)
     _validate_execution_params(compiled.params)
     opdef = compiled.opdef
     source = _execution_route_source(route_name, compiled.params)
@@ -444,6 +444,7 @@ def build_derivative_execution_library(
                 "version": version,
                 "__tc_derivative_route_name__": route_name,
                 "__tc_derivative_params__": compiled.params,
+                "__tc_derivative_shape_params__": compiled.shape_params or {},
                 "__tc_derivative_results__": compiled.results,
                 route_name: Route("POST", route_form, source=source),
             },
