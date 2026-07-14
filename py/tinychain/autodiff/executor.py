@@ -9,6 +9,7 @@ from .reverse import DerivativeProgram
 
 
 NodeDispatcher = Callable[[TensorNodeRecord, list[object]], object]
+RouteExecutor = Callable[[Mapping[str, object]], object]
 
 
 @dataclass(frozen=True)
@@ -56,11 +57,10 @@ class ExecutionScheduler:
 
 @dataclass(slots=True)
 class DerivativeExecutionDispatcher:
-    """Execute a derivative program through one installed TinyChain route call."""
+    """Execute a derivative program through an injected route executor."""
 
-    library_cls: type
-    kernel: object
-    route_name: str | None = None
+    route_executor: RouteExecutor
+    params: tuple[str, ...]
 
     def execute(
         self,
@@ -68,11 +68,7 @@ class DerivativeExecutionDispatcher:
         *,
         values: Mapping[str, object],
     ) -> AutodiffResult:
-        route_name = self.route_name or getattr(
-            self.library_cls, "__tc_derivative_route_name__", "execute"
-        )
-        params = tuple(getattr(self.library_cls, "__tc_derivative_params__", ()))
-        missing = [param for param in params if param not in values]
+        missing = [param for param in self.params if param not in values]
         if missing:
             joined = ", ".join(repr(param) for param in missing)
             raise AutodiffError(
@@ -80,14 +76,9 @@ class DerivativeExecutionDispatcher:
                 f"missing derivative execution input(s): {joined}",
             )
 
-        library = self.library_cls()
-        route = getattr(library, route_name)
-        call_values = {param: values[param] for param in params}
+        call_values = {param: values[param] for param in self.params}
         try:
-            import tinychain as tc
-
-            with tc.backend(self.kernel):
-                gradients = route(**call_values)
+            gradients = self.route_executor(call_values)
         except AutodiffError:
             raise
         except (AssertionError, RuntimeError, TypeError, ValueError) as exc:
