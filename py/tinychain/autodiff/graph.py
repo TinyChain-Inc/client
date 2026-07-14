@@ -42,6 +42,48 @@ class DivOperator(TensorOperator):
 
 
 @dataclass(frozen=True)
+class SumOperator(TensorOperator):
+    def __init__(self) -> None:
+        object.__setattr__(self, "route_name", "sum")
+
+
+@dataclass(frozen=True)
+class MeanOperator(TensorOperator):
+    def __init__(self) -> None:
+        object.__setattr__(self, "route_name", "mean")
+
+
+@dataclass(frozen=True)
+class MaxOperator(TensorOperator):
+    def __init__(self) -> None:
+        object.__setattr__(self, "route_name", "max")
+
+
+@dataclass(frozen=True)
+class MinOperator(TensorOperator):
+    def __init__(self) -> None:
+        object.__setattr__(self, "route_name", "min")
+
+
+@dataclass(frozen=True)
+class ProductOperator(TensorOperator):
+    def __init__(self) -> None:
+        object.__setattr__(self, "route_name", "product")
+
+
+@dataclass(frozen=True)
+class ReshapeOperator(TensorOperator):
+    def __init__(self) -> None:
+        object.__setattr__(self, "route_name", "reshape")
+
+
+@dataclass(frozen=True)
+class BroadcastOperator(TensorOperator):
+    def __init__(self) -> None:
+        object.__setattr__(self, "route_name", "broadcast")
+
+
+@dataclass(frozen=True)
 class BroadcastReduceOperator(TensorOperator):
     def __init__(self) -> None:
         object.__setattr__(self, "route_name", "broadcast_reduce")

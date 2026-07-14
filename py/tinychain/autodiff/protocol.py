@@ -18,6 +18,8 @@ AUTODIFF_ERROR_CATEGORIES: tuple[str, ...] = (
     "broadcast_shape_mismatch",
     "matmul_shape_mismatch",
     "invalid_permutation",
+    "reduction_shape_mismatch",
+    "unsupported_reduction",
     "seed_shape_mismatch",
     "malformed_derivative_ir",
     "side_effecting_route_unsupported",

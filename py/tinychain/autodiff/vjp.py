@@ -6,11 +6,18 @@ from typing import Protocol, runtime_checkable
 
 from .graph import (
     AddOperator,
+    BroadcastOperator,
     BroadcastReduceOperator,
     DivOperator,
     MatmulOperator,
+    MaxOperator,
+    MeanOperator,
+    MinOperator,
     MulOperator,
+    ProductOperator,
+    ReshapeOperator,
     SubOperator,
+    SumOperator,
     TensorNodeRecord,
     TensorOperator,
     TransposeOperator,
@@ -399,6 +406,206 @@ class DivVjpRule(_ElementwiseVjpRule):
 
         return VjpResult(gradients=gradients, derivative_nodes=derivative_nodes)
 
+
+
+def _same_dtype_typespec(reference: dict[str, object] | None, shape: tuple[int, ...]) -> dict[str, object]:
+    typespec: dict[str, object] = {"shape": list(shape)}
+    if reference is not None and "dtype" in reference:
+        typespec["dtype"] = reference["dtype"]
+    return typespec
+
+
+def _normalize_reduction_axes(axes: object, rank: int, route_name: str) -> tuple[int, ...]:
+    if axes is None:
+        raise AutodiffError(
+            "unsupported_reduction",
+            f"{route_name} VJP requires explicit axes; axes=None is not supported yet",
+        )
+    if type(axes) is int:
+        raw_axes = [axes]
+    elif isinstance(axes, Sequence) and not isinstance(axes, (str, bytes)):
+        raw_axes = list(axes)
+    else:
+        raise AutodiffError("malformed_derivative_ir", f"{route_name} axes must be an int or sequence")
+
+    normalized: list[int] = []
+    for axis in raw_axes:
+        if type(axis) is not int:
+            raise AutodiffError("malformed_derivative_ir", f"{route_name} axes must be integers")
+        normalized_axis = axis + rank if axis < 0 else axis
+        if normalized_axis < 0 or normalized_axis >= rank:
+            raise AutodiffError("reduction_shape_mismatch", f"{route_name} axis {axis} is out of bounds for rank {rank}")
+        if normalized_axis in normalized:
+            raise AutodiffError("malformed_derivative_ir", f"{route_name} axes cannot contain duplicates")
+        normalized.append(normalized_axis)
+    return tuple(normalized)
+
+
+def _reduced_shape(input_shape: tuple[int, ...], axes: tuple[int, ...], keepdims: bool) -> tuple[int, ...]:
+    if keepdims:
+        return tuple(1 if axis in axes else dim for axis, dim in enumerate(input_shape))
+    return tuple(dim for axis, dim in enumerate(input_shape) if axis not in axes)
+
+
+class _ReductionVjpRule:
+    operator_type: type[TensorOperator]
+    route_name: str
+
+    def _validate_unary(self, context: VjpContext) -> tuple[str, dict[str, object] | None, tuple[int, ...], tuple[int, ...], bool]:
+        if len(context.node.input_value_ids) != 1:
+            raise AutodiffError("malformed_derivative_ir", f"{self.route_name} VJP requires exactly one input")
+        input_id = context.node.input_value_ids[0]
+        input_typespec = context.value_typespecs.get(input_id)
+        input_shape = typespec_shape(input_typespec)
+        axes = _normalize_reduction_axes(context.node.op_params.get("axes"), len(input_shape), self.route_name)
+        keepdims = bool(context.node.op_params.get("keepdims", False))
+        expected_output_shape = _reduced_shape(input_shape, axes, keepdims)
+        output_shape = typespec_shape(context.node.output_typespec)
+        if output_shape != expected_output_shape:
+            raise AutodiffError(
+                "reduction_shape_mismatch",
+                f"{self.route_name} output shape {output_shape} does not match expected {expected_output_shape}",
+            )
+        return input_id, input_typespec, input_shape, axes, keepdims
+
+    def _expand_upstream(
+        self,
+        *,
+        context: VjpContext,
+        input_typespec: dict[str, object] | None,
+        input_shape: tuple[int, ...],
+        axes: tuple[int, ...],
+        keepdims: bool,
+    ) -> tuple[str, list[TensorNodeRecord]]:
+        derivative_nodes: list[TensorNodeRecord] = []
+        gradient_id = context.upstream_value_id
+        if not keepdims:
+            singleton_shape = tuple(1 if axis in axes else dim for axis, dim in enumerate(input_shape))
+            reshape_node = TensorNodeRecord(
+                node_id=context.next_node_id(),
+                output_value_id=context.next_value_id(),
+                operator=ReshapeOperator(),
+                op_params={"shape": list(singleton_shape)},
+                input_value_ids=[gradient_id],
+                output_typespec=_same_dtype_typespec(input_typespec, singleton_shape),
+            )
+            derivative_nodes.append(reshape_node)
+            gradient_id = reshape_node.output_value_id
+
+        broadcast_node = TensorNodeRecord(
+            node_id=context.next_node_id(),
+            output_value_id=context.next_value_id(),
+            operator=BroadcastOperator(),
+            op_params={"shape": list(input_shape)},
+            input_value_ids=[gradient_id],
+            output_typespec=input_typespec,
+        )
+        derivative_nodes.append(broadcast_node)
+        return broadcast_node.output_value_id, derivative_nodes
+
+
+@_registry.rule(SumOperator)
+class SumVjpRule(_ReductionVjpRule):
+    operator_type = SumOperator
+    route_name = "sum"
+
+    def apply(self, context: VjpContext) -> VjpResult:
+        input_id, input_typespec, input_shape, axes, keepdims = self._validate_unary(context)
+        if input_id not in context.needed_input_value_ids:
+            return VjpResult(gradients={}, derivative_nodes=[])
+        gradient_id, derivative_nodes = self._expand_upstream(
+            context=context,
+            input_typespec=input_typespec,
+            input_shape=input_shape,
+            axes=axes,
+            keepdims=keepdims,
+        )
+        return VjpResult(gradients={input_id: gradient_id}, derivative_nodes=derivative_nodes)
+
+
+@_registry.rule(MeanOperator)
+class MeanVjpRule(_ReductionVjpRule):
+    operator_type = MeanOperator
+    route_name = "mean"
+
+    def apply(self, context: VjpContext) -> VjpResult:
+        input_id, input_typespec, input_shape, axes, keepdims = self._validate_unary(context)
+        if input_id not in context.needed_input_value_ids:
+            return VjpResult(gradients={}, derivative_nodes=[])
+        gradient_id, derivative_nodes = self._expand_upstream(
+            context=context,
+            input_typespec=input_typespec,
+            input_shape=input_shape,
+            axes=axes,
+            keepdims=keepdims,
+        )
+        factor = 1
+        for axis in axes:
+            factor *= input_shape[axis]
+        scaled = TensorNodeRecord(
+            node_id=context.next_node_id(),
+            output_value_id=context.next_value_id(),
+            operator=DivOperator(),
+            op_params={"right_literal": float(factor)},
+            input_value_ids=[gradient_id],
+            output_typespec=input_typespec,
+        )
+        derivative_nodes.append(scaled)
+        return VjpResult(gradients={input_id: scaled.output_value_id}, derivative_nodes=derivative_nodes)
+
+
+@_registry.rule(ReshapeOperator)
+class ReshapeVjpRule:
+    operator_type = ReshapeOperator
+
+    def apply(self, context: VjpContext) -> VjpResult:
+        if len(context.node.input_value_ids) != 1:
+            raise AutodiffError("malformed_derivative_ir", "reshape VJP requires exactly one input")
+        input_id = context.node.input_value_ids[0]
+        if input_id not in context.needed_input_value_ids:
+            return VjpResult(gradients={}, derivative_nodes=[])
+        input_typespec = context.value_typespecs.get(input_id)
+        input_shape = typespec_shape(input_typespec)
+        gradient_id = context.next_value_id()
+        gradient_node = TensorNodeRecord(
+            node_id=context.next_node_id(),
+            output_value_id=gradient_id,
+            operator=ReshapeOperator(),
+            op_params={"shape": list(input_shape)},
+            input_value_ids=[context.upstream_value_id],
+            output_typespec=input_typespec,
+        )
+        return VjpResult(gradients={input_id: gradient_id}, derivative_nodes=[gradient_node])
+
+
+class _UnsupportedReductionVjpRule:
+    operator_type: type[TensorOperator]
+    route_name: str
+    reason: str
+
+    def apply(self, context: VjpContext) -> VjpResult:
+        raise AutodiffError("unsupported_reduction", f"{self.route_name} VJP is unsupported: {self.reason}")
+
+
+@_registry.rule(MaxOperator)
+class MaxVjpRule(_UnsupportedReductionVjpRule):
+    operator_type = MaxOperator
+    route_name = "max"
+    reason = "exact gradients require equality masks and tie handling not expressible with current routes"
+
+
+@_registry.rule(MinOperator)
+class MinVjpRule(_UnsupportedReductionVjpRule):
+    operator_type = MinOperator
+    route_name = "min"
+    reason = "exact gradients require equality masks and tie handling not expressible with current routes"
+
+
+@_registry.rule(ProductOperator)
+class ProductVjpRule(_UnsupportedReductionVjpRule):
+    operator_type = ProductOperator
+    route_name = "product"
+    reason = "zero-safe product gradients require masking/counting primitives not expressible with current routes"
 
 def _swap_last_two_dims(shape: tuple[int, ...]) -> tuple[int, ...]:
     return shape[:-2] + (shape[-1], shape[-2])
