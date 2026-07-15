@@ -233,8 +233,101 @@ stub backed by remote/WASM execution, or an explicit TinyChain op definition.
 
 Route source capture is not automatic route-body tracing for autodiff. Discovery
 does not inspect Python route bodies to infer derivative rules, does not compile
-or execute user route code during discovery, does not install derivative routes,
-and does not add backend or `tc-server` derivative execution.
+or execute user route code during discovery, and does not install derivative
+routes during discovery.
+
+Phase 5 real execution is still experimental, but supported tensor graph targets
+now follow a single-installed-route model: `generate(...)` produces a
+Python-owned `DerivativeProgram`, `compile_derivative_program(...)` lowers that
+program to normal TinyChain route IR, `build_derivative_execution_library(...)`
+wraps the compiled route in an installable `Library`, and
+`DerivativeExecutionDispatcher` installs and calls that one route through the
+active local backend. Production execution must not drive derivative nodes one by
+one from Python; `ExecutionScheduler` and injected NumPy dispatch remain unit-test
+seams.
+
+A minimal real-execution shape looks like this:
+
+```python
+import tinychain as tc
+from tinychain.autodiff import (
+    AddOperator,
+    DerivativeExecutionDispatcher,
+    DerivativeMetadata,
+    DerivativeProgram,
+    TensorNodeRecord,
+    build_derivative_execution_library,
+)
+
+metadata = DerivativeMetadata(
+    source_graph_id="graph",
+    transform_version="0.1.0",
+    tensor_op_contract_version="0.1.0",
+    wrt_signature=("x",),
+    seed_contract="seed matches output",
+)
+program = DerivativeProgram(
+    nodes=[
+        TensorNodeRecord(
+            node_id="n0",
+            output_value_id="gradient",
+            operator=AddOperator(),
+            op_params={},
+            input_value_ids=["seed", "other"],
+        )
+    ],
+    gradients={"x": "gradient"},
+    output_gradients=["gradient"],
+    metadata=metadata,
+)
+execution_library = build_derivative_execution_library(
+    publisher="demo",
+    class_name="AddDerivativeExecution",
+    version="0.1.0",
+    program=program,
+)
+dispatcher = DerivativeExecutionDispatcher(
+    library_cls=execution_library,
+    kernel=local_kernel,
+    token=install_token,
+)
+result = dispatcher.execute(
+    program,
+    values={"seed": seed_tensor, "other": other_tensor},
+)
+(gradient,) = result.gradients
+print(gradient.values)
+```
+
+For this program, the decoded gradient is the normal TinyChain tensor result of
+`seed.add(other)`, returned from a single installed `execute` route call.
+
+Phase 5 supports Add/Sub/Mul/Div, Matmul, Transpose, Sum, Mean, Reshape,
+Broadcast, broadcast reduction, symbolic shape metadata with runtime or explicit
+shape bindings, explicit multi-output graphs, ordered multi-`wrt` gradients, and
+remote route metadata discovery where class-level or bound-instance metadata is
+available. Max, Min, and Product are recognized but fail clearly when a VJP is
+not expressible with the current route primitives.
+
+Multi-output and ordered multi-`wrt` selection are explicit:
+
+```python
+from tinychain.autodiff import generate
+
+program = generate(
+    graph,
+    output_value_id=["loss", "auxiliary"],
+    wrt=["right", "left"],
+    seed=["loss_seed", "auxiliary_seed"],
+)
+# result.gradients follows wrt order: right gradient, then left gradient.
+```
+
+Current exclusions are part of the API contract: complex tensor dtypes,
+slice/general-view gradients beyond reshape, stable backward-compatible
+`tc.grad` guarantees, backend artifact registry behavior, server/Rust derivative
+changes, and automatic tracing of arbitrary Python route bodies remain out of
+scope.
 
 Autograph enforces strict TinyChain-only symbol usage inside compiled route
 expressions. Names must resolve to route parameters, prior local bindings,

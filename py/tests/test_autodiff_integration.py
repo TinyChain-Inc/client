@@ -19,8 +19,8 @@ from tinychain.autodiff import (
     AutodiffResult,
     DerivativeMetadata,
     DivOperator,
-    MaxOperator,
     MatmulOperator,
+    MaxOperator,
     MeanOperator,
     MinOperator,
     MulOperator,
@@ -178,25 +178,30 @@ def test_vjp_registry_has_rule():
 # --- Step 7: VjpRegistry.supported_types() ---
 
 
-def test_vjp_registry_supported_types():
-    """supported_types() returns the built-in VJP operator types."""
-    registry = default_vjp_registry()
-    supported = registry.supported_types()
-
-    assert set(supported) == {
+def _phase5_operator_types():
+    return {
         AddOperator,
         SubOperator,
         MulOperator,
         DivOperator,
         SumOperator,
         MeanOperator,
-        ReshapeOperator,
         MaxOperator,
         MinOperator,
         ProductOperator,
+        ReshapeOperator,
         MatmulOperator,
         TransposeOperator,
     }
+
+
+def test_vjp_registry_supported_types():
+    """supported_types() returns the built-in VJP operator types."""
+    registry = default_vjp_registry()
+    supported = registry.supported_types()
+
+    assert set(supported) == _phase5_operator_types()
+    assert len(supported) == len(_phase5_operator_types())
 
 
 # --- Step 8: missing derivative behavior ---
@@ -349,6 +354,7 @@ def test_vjp_rule_declaration_order():
         def apply(self, context):
             ...
 
+    assert _phase5_operator_types().issuperset(reversed_registry.supported_types())
     assert reversed_registry.has_rule(AddOperator())
     assert reversed_registry.has_rule(MatmulOperator())
     assert reversed_registry.has_rule(TransposeOperator())
