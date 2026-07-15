@@ -380,6 +380,106 @@ def test_tc_grad_route_target_returns_plan_for_valid_artifact_metadata() -> None
     assert plan.artifact_digest == "sha256:abc123"
 
 
+def test_remote_authority_route_discovery_preserves_local_metadata_behavior(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def forbidden_behavior(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("remote discovery must not execute, fetch, compile, or install")
+
+    monkeypatch.setattr("tinychain.host.requests.request", forbidden_behavior)
+    monkeypatch.setattr("tinychain.library.compile_ir", forbidden_behavior)
+    monkeypatch.setattr("tinychain.library.install", forbidden_behavior)
+    monkeypatch.setattr(tc, "execute", forbidden_behavior)
+
+    class RemoteAuthorityMetadataLibrary(RouteIdentityLibrary):
+        authority = tc.URI.parse("https://api.example.test")
+
+    metadata = _route_tensor_metadata(
+        artifact_source_library="https://api.example.test/lib/example-devco/remote_authority_metadata_library/0.1.0",
+        artifact_source_route="https://api.example.test/lib/example-devco/remote_authority_metadata_library/0.1.0/path/create",
+    )
+    RemoteAuthorityMetadataLibrary.derivative_routes = {"create": metadata.to_dict()}
+
+    plan = tc.grad(
+        RemoteAuthorityMetadataLibrary().create,
+        wrt="value",
+        seed_typespec=_tensor_type_spec(shape=[2, 2]).to_dict(),
+    )
+
+    assert isinstance(plan, RouteDerivativePlan)
+    assert (
+        plan.route_identity.library_uri
+        == "https://api.example.test/lib/example-devco/remote_authority_metadata_library/0.1.0"
+    )
+    assert (
+        plan.route_identity.route_uri
+        == "https://api.example.test/lib/example-devco/remote_authority_metadata_library/0.1.0/path/create"
+    )
+    assert plan.requested_wrt == ("value",)
+    assert plan.compatibility_status == ROUTE_DERIVATIVE_COMPATIBILITY_COMPATIBLE
+
+
+def test_remote_installed_route_discovery_uses_instance_metadata_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def forbidden_behavior(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("remote discovery must not execute, fetch, compile, or install")
+
+    monkeypatch.setattr("tinychain.host.requests.request", forbidden_behavior)
+    monkeypatch.setattr("tinychain.library.compile_ir", forbidden_behavior)
+    monkeypatch.setattr("tinychain.library.install", forbidden_behavior)
+    monkeypatch.setattr(tc, "execute", forbidden_behavior)
+
+    class RemoteInstalledMetadataLibrary(RouteIdentityLibrary):
+        authority = tc.URI.parse("https://api.example.test")
+
+    library = RemoteInstalledMetadataLibrary()
+    metadata = _route_tensor_metadata(
+        artifact_source_library="https://api.example.test/lib/example-devco/remote_installed_metadata_library/0.1.0",
+        artifact_source_route="https://api.example.test/lib/example-devco/remote_installed_metadata_library/0.1.0/path/create",
+    )
+    library.derivative_routes = {"/create": metadata.to_dict()}
+
+    plan = discover_route_derivative(
+        library.create,
+        wrt=("value",),
+        seed_typespec=_tensor_type_spec(shape=[2, 2]),
+    )
+
+    assert plan.route_identity.library_uri.startswith("https://api.example.test/")
+    assert plan.route_identity.route_name == "create"
+    assert plan.artifact_digest == "sha256:abc123"
+
+
+def test_remote_installed_route_missing_instance_metadata_is_route_specific() -> None:
+    class RemoteMissingMetadataLibrary(RouteIdentityLibrary):
+        authority = tc.URI.parse("https://api.example.test")
+
+    with pytest.raises(AutodiffError) as exc_info:
+        discover_route_derivative(RemoteMissingMetadataLibrary().create, wrt="value")
+
+    assert exc_info.value.category == "non_differentiable_route"
+    assert (
+        "https://api.example.test/lib/example-devco/remote_missing_metadata_library/0.1.0/path/create"
+        in str(exc_info.value)
+    )
+    assert "missing derivative metadata" in str(exc_info.value)
+
+
+def test_remote_installed_route_rejects_malformed_instance_metadata_mapping() -> None:
+    class RemoteMalformedMetadataLibrary(RouteIdentityLibrary):
+        authority = tc.URI.parse("https://api.example.test")
+
+    library = RemoteMalformedMetadataLibrary()
+    library.derivative_routes = ("create", _route_tensor_metadata())
+
+    with pytest.raises(AutodiffError) as exc_info:
+        lookup_route_derivative_metadata(library.create)
+
+    assert exc_info.value.category == "non_differentiable_route"
+    assert "derivative_routes must be a mapping" in str(exc_info.value)
+
+
 def test_discover_route_derivative_rejects_side_effecting_metadata() -> None:
     class SideEffectMetadataLibrary(RouteIdentityLibrary):
         derivative_routes = {"create": _route_tensor_metadata(is_pure=False)}
