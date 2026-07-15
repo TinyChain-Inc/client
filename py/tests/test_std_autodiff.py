@@ -9,6 +9,12 @@ from tinychain.autodiff.vjp import (
     SubOperator,
     MulOperator,
     DivOperator,
+    SumOperator,
+    MeanOperator,
+    ReshapeOperator,
+    MaxOperator,
+    MinOperator,
+    ProductOperator,
     VjpRule,
     VjpContext,
     VjpResult,
@@ -216,6 +222,12 @@ def test_vjp_registry_default_registry_has_builtin_rules():
     assert registry.has_rule(SubOperator)
     assert registry.has_rule(MulOperator)
     assert registry.has_rule(DivOperator)
+    assert registry.has_rule(SumOperator)
+    assert registry.has_rule(MeanOperator)
+    assert registry.has_rule(ReshapeOperator)
+    assert registry.has_rule(MaxOperator)
+    assert registry.has_rule(MinOperator)
+    assert registry.has_rule(ProductOperator)
     assert registry.has_rule(MatmulOperator)
     assert registry.has_rule(TransposeOperator)
 
@@ -224,6 +236,12 @@ def test_vjp_registry_default_registry_has_builtin_rules():
         SubOperator,
         MulOperator,
         DivOperator,
+        SumOperator,
+        MeanOperator,
+        ReshapeOperator,
+        MaxOperator,
+        MinOperator,
+        ProductOperator,
         MatmulOperator,
         TransposeOperator,
     }

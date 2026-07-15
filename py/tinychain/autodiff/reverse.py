@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ..serialize import serialize
 from .accumulate import GradientAccumulator
@@ -18,6 +18,15 @@ class DerivativeProgram:
     gradients: dict[str, str]
     output_gradients: list[str | None]
     metadata: DerivativeMetadata
+    value_typespecs: dict[str, dict[str, object]] = field(default_factory=dict)
+
+    def __serialize__(self) -> dict[str, object]:
+        return {
+            "nodes": self.nodes,
+            "gradients": self.gradients,
+            "output_gradients": self.output_gradients,
+            "metadata": self.metadata,
+        }
 
     def to_dict(self) -> dict:
         return serialize(self)
@@ -139,6 +148,10 @@ class ReverseTraversal:
                 wrt_signature=tuple(wrt),
                 seed_contract=f"{seed_value_id} matches {output_value_id}",
             ),
+            value_typespecs={
+                value_id: dict(typespec)
+                for value_id, typespec in sorted(value_typespecs.items())
+            },
         )
 
     def _value_typespecs(self, graph: TensorGraph) -> dict[str, dict[str, object]]:

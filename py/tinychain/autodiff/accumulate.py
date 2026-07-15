@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 
 from .graph import AddOperator, BroadcastReduceOperator, TensorNodeRecord
 from .protocol import AutodiffError
-from .seed import typespec_shape
+from .shape import Shape, typespec_ranked_shape
 from .vjp import BroadcastReductionPlanner
 
 
@@ -23,7 +23,7 @@ class GradientAccumulator:
             return None, []
 
         target_typespec = self.value_typespecs.get(value_id)
-        target_shape = typespec_shape(target_typespec)
+        target_shape = typespec_ranked_shape(target_typespec)
         normalized: list[str] = []
         nodes: list[TensorNodeRecord] = []
 
@@ -71,7 +71,7 @@ class GradientAccumulator:
         contribution: str,
         *,
         target_typespec: dict[str, object] | None,
-        target_shape: tuple[int, ...],
+        target_shape: Shape,
         next_value_id,
         next_node_id,
     ) -> tuple[str, list[TensorNodeRecord]]:
@@ -79,7 +79,7 @@ class GradientAccumulator:
         if contribution_typespec is None:
             return contribution, []
 
-        contribution_shape = typespec_shape(contribution_typespec)
+        contribution_shape = typespec_ranked_shape(contribution_typespec)
         if contribution_shape == target_shape:
             return contribution, []
 
@@ -89,7 +89,10 @@ class GradientAccumulator:
                 "broadcast gradient contributions require derivative node id generators",
             )
 
-        self._planner.plan(result_shape=contribution_shape, operand_shape=target_shape)
+        plan = self._planner.plan(result_shape=contribution_shape, operand_shape=target_shape)
+        if not plan.axes:
+            return contribution, []
+
         reduced_id = next_value_id()
         self._record_typespec(reduced_id, target_typespec)
         return reduced_id, [

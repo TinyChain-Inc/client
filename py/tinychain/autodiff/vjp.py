@@ -23,7 +23,7 @@ from .graph import (
     TransposeOperator,
 )
 from .protocol import AutodiffError
-from .seed import typespec_shape
+from .shape import Shape, typespec_ranked_shape, typespec_shape
 
 
 @dataclass(frozen=True)
@@ -121,8 +121,8 @@ class VjpRegistry:
 
 @dataclass(frozen=True)
 class BroadcastReductionPlan:
-    result_shape: tuple[int, ...]
-    operand_shape: tuple[int, ...]
+    result_shape: Shape
+    operand_shape: Shape
     axes: tuple[int, ...]
 
 
@@ -130,8 +130,8 @@ class BroadcastReductionPlanner:
     def plan(
         self,
         *,
-        result_shape: tuple[int, ...],
-        operand_shape: tuple[int, ...],
+        result_shape: Shape,
+        operand_shape: Shape,
     ) -> BroadcastReductionPlan:
         if len(operand_shape) > len(result_shape):
             raise AutodiffError(
@@ -148,6 +148,13 @@ class BroadcastReductionPlanner:
                 continue
             if operand_dim == 1:
                 axes.append(axis)
+                continue
+            if isinstance(operand_dim, str) and isinstance(result_dim, str):
+                raise AutodiffError(
+                    "unresolved_symbolic_shape",
+                    f"operand dim {operand_dim!r} cannot be proven compatible with result dim {result_dim!r}",
+                )
+            if isinstance(operand_dim, str) or isinstance(result_dim, str):
                 continue
             raise AutodiffError(
                 "broadcast_shape_mismatch",
@@ -172,7 +179,7 @@ class AddVjpRule:
             raise AutodiffError("malformed_derivative_ir", "add VJP requires exactly two inputs")
 
         lhs_id, rhs_id = context.node.input_value_ids
-        result_shape = typespec_shape(context.node.output_typespec)
+        result_shape = typespec_ranked_shape(context.node.output_typespec)
         gradients: dict[str, str] = {}
         derivative_nodes: list[TensorNodeRecord] = []
 
@@ -181,7 +188,7 @@ class AddVjpRule:
                 continue
 
             operand_typespec = context.value_typespecs.get(input_id)
-            operand_shape = typespec_shape(operand_typespec)
+            operand_shape = typespec_ranked_shape(operand_typespec)
             plan = self._planner.plan(result_shape=result_shape, operand_shape=operand_shape)
             if plan.axes:
                 gradient_id = context.next_value_id()
@@ -228,11 +235,11 @@ class _ElementwiseVjpRule:
     def __init__(self, planner: BroadcastReductionPlanner | None = None) -> None:
         self._planner = planner or BroadcastReductionPlanner()
 
-    def _validate_binary(self, context: VjpContext, name: str) -> tuple[str, str, tuple[int, ...], dict[str, object] | None]:
+    def _validate_binary(self, context: VjpContext, name: str) -> tuple[str, str, Shape, dict[str, object] | None]:
         if len(context.node.input_value_ids) != 2:
             raise AutodiffError("malformed_derivative_ir", f"{name} VJP requires exactly two inputs")
         lhs_id, rhs_id = context.node.input_value_ids
-        result_shape = typespec_shape(context.node.output_typespec)
+        result_shape = typespec_ranked_shape(context.node.output_typespec)
         result_typespec = context.node.output_typespec
         return lhs_id, rhs_id, result_shape, result_typespec
 
@@ -242,11 +249,11 @@ class _ElementwiseVjpRule:
         context: VjpContext,
         gradient_id: str,
         operand_id: str,
-        result_shape: tuple[int, ...],
+        result_shape: Shape,
         derivative_nodes: list[TensorNodeRecord],
     ) -> str:
         operand_typespec = context.value_typespecs.get(operand_id)
-        operand_shape = typespec_shape(operand_typespec)
+        operand_shape = typespec_ranked_shape(operand_typespec)
         plan = self._planner.plan(result_shape=result_shape, operand_shape=operand_shape)
         if not plan.axes:
             return gradient_id
@@ -408,7 +415,7 @@ class DivVjpRule(_ElementwiseVjpRule):
 
 
 
-def _same_dtype_typespec(reference: dict[str, object] | None, shape: tuple[int, ...]) -> dict[str, object]:
+def _same_dtype_typespec(reference: dict[str, object] | None, shape: Shape) -> dict[str, object]:
     typespec: dict[str, object] = {"shape": list(shape)}
     if reference is not None and "dtype" in reference:
         typespec["dtype"] = reference["dtype"]
@@ -441,7 +448,7 @@ def _normalize_reduction_axes(axes: object, rank: int, route_name: str) -> tuple
     return tuple(normalized)
 
 
-def _reduced_shape(input_shape: tuple[int, ...], axes: tuple[int, ...], keepdims: bool) -> tuple[int, ...]:
+def _reduced_shape(input_shape: Shape, axes: tuple[int, ...], keepdims: bool) -> Shape:
     if keepdims:
         return tuple(1 if axis in axes else dim for axis, dim in enumerate(input_shape))
     return tuple(dim for axis, dim in enumerate(input_shape) if axis not in axes)
@@ -451,16 +458,16 @@ class _ReductionVjpRule:
     operator_type: type[TensorOperator]
     route_name: str
 
-    def _validate_unary(self, context: VjpContext) -> tuple[str, dict[str, object] | None, tuple[int, ...], tuple[int, ...], bool]:
+    def _validate_unary(self, context: VjpContext) -> tuple[str, dict[str, object] | None, Shape, tuple[int, ...], bool]:
         if len(context.node.input_value_ids) != 1:
             raise AutodiffError("malformed_derivative_ir", f"{self.route_name} VJP requires exactly one input")
         input_id = context.node.input_value_ids[0]
         input_typespec = context.value_typespecs.get(input_id)
-        input_shape = typespec_shape(input_typespec)
+        input_shape = typespec_ranked_shape(input_typespec)
         axes = _normalize_reduction_axes(context.node.op_params.get("axes"), len(input_shape), self.route_name)
         keepdims = bool(context.node.op_params.get("keepdims", False))
         expected_output_shape = _reduced_shape(input_shape, axes, keepdims)
-        output_shape = typespec_shape(context.node.output_typespec)
+        output_shape = typespec_ranked_shape(context.node.output_typespec)
         if output_shape != expected_output_shape:
             raise AutodiffError(
                 "reduction_shape_mismatch",
@@ -473,7 +480,7 @@ class _ReductionVjpRule:
         *,
         context: VjpContext,
         input_typespec: dict[str, object] | None,
-        input_shape: tuple[int, ...],
+        input_shape: Shape,
         axes: tuple[int, ...],
         keepdims: bool,
     ) -> tuple[str, list[TensorNodeRecord]]:
@@ -504,7 +511,6 @@ class _ReductionVjpRule:
         return broadcast_node.output_value_id, derivative_nodes
 
 
-@_registry.rule(SumOperator)
 class SumVjpRule(_ReductionVjpRule):
     operator_type = SumOperator
     route_name = "sum"
@@ -523,7 +529,6 @@ class SumVjpRule(_ReductionVjpRule):
         return VjpResult(gradients={input_id: gradient_id}, derivative_nodes=derivative_nodes)
 
 
-@_registry.rule(MeanOperator)
 class MeanVjpRule(_ReductionVjpRule):
     operator_type = MeanOperator
     route_name = "mean"
@@ -541,7 +546,13 @@ class MeanVjpRule(_ReductionVjpRule):
         )
         factor = 1
         for axis in axes:
-            factor *= input_shape[axis]
+            dimension = input_shape[axis]
+            if isinstance(dimension, str):
+                raise AutodiffError(
+                    "unresolved_symbolic_shape",
+                    f"mean reduction dimension {dimension!r} must resolve before scaling",
+                )
+            factor *= dimension
         scaled = TensorNodeRecord(
             node_id=context.next_node_id(),
             output_value_id=context.next_value_id(),
@@ -554,7 +565,6 @@ class MeanVjpRule(_ReductionVjpRule):
         return VjpResult(gradients={input_id: scaled.output_value_id}, derivative_nodes=derivative_nodes)
 
 
-@_registry.rule(ReshapeOperator)
 class ReshapeVjpRule:
     operator_type = ReshapeOperator
 
@@ -565,7 +575,7 @@ class ReshapeVjpRule:
         if input_id not in context.needed_input_value_ids:
             return VjpResult(gradients={}, derivative_nodes=[])
         input_typespec = context.value_typespecs.get(input_id)
-        input_shape = typespec_shape(input_typespec)
+        input_shape = typespec_ranked_shape(input_typespec)
         gradient_id = context.next_value_id()
         gradient_node = TensorNodeRecord(
             node_id=context.next_node_id(),
@@ -587,27 +597,24 @@ class _UnsupportedReductionVjpRule:
         raise AutodiffError("unsupported_reduction", f"{self.route_name} VJP is unsupported: {self.reason}")
 
 
-@_registry.rule(MaxOperator)
 class MaxVjpRule(_UnsupportedReductionVjpRule):
     operator_type = MaxOperator
     route_name = "max"
     reason = "exact gradients require equality masks and tie handling not expressible with current routes"
 
 
-@_registry.rule(MinOperator)
 class MinVjpRule(_UnsupportedReductionVjpRule):
     operator_type = MinOperator
     route_name = "min"
     reason = "exact gradients require equality masks and tie handling not expressible with current routes"
 
 
-@_registry.rule(ProductOperator)
 class ProductVjpRule(_UnsupportedReductionVjpRule):
     operator_type = ProductOperator
     route_name = "product"
     reason = "zero-safe product gradients require masking/counting primitives not expressible with current routes"
 
-def _swap_last_two_dims(shape: tuple[int, ...]) -> tuple[int, ...]:
+def _swap_last_two_dims(shape: Shape) -> Shape:
     return shape[:-2] + (shape[-1], shape[-2])
 
 
@@ -630,12 +637,17 @@ class MatmulVjpRule:
         lhs_id, rhs_id = context.node.input_value_ids
         lhs_typespec = context.value_typespecs.get(lhs_id)
         rhs_typespec = context.value_typespecs.get(rhs_id)
-        lhs_shape = typespec_shape(lhs_typespec)
-        rhs_shape = typespec_shape(rhs_typespec)
+        lhs_shape = typespec_ranked_shape(lhs_typespec)
+        rhs_shape = typespec_ranked_shape(rhs_typespec)
 
         if len(lhs_shape) < 2 or len(rhs_shape) < 2:
             raise AutodiffError("matmul_shape_mismatch", "matmul operands must have rank >= 2")
         if lhs_shape[-1] != rhs_shape[-2]:
+            if isinstance(lhs_shape[-1], str) or isinstance(rhs_shape[-2], str):
+                raise AutodiffError(
+                    "unresolved_symbolic_shape",
+                    f"matmul inner dimensions {lhs_shape[-1]!r} and {rhs_shape[-2]!r} cannot be proven equal",
+                )
             raise AutodiffError(
                 "matmul_shape_mismatch",
                 f"inner dimensions mismatch: A last dim {lhs_shape[-1]}, B second-to-last dim {rhs_shape[-2]}",
@@ -647,7 +659,7 @@ class MatmulVjpRule:
             return VjpResult(gradients={}, derivative_nodes=[])
 
         m, k, n = lhs_shape[-2], lhs_shape[-1], rhs_shape[-1]
-        result_shape = typespec_shape(context.node.output_typespec)
+        result_shape = typespec_ranked_shape(context.node.output_typespec)
         batch_z = result_shape[:-2]
 
         dtype = lhs_typespec.get("dtype") if lhs_typespec else None
@@ -787,7 +799,7 @@ class TransposeVjpRule:
 
         input_id = context.node.input_value_ids[0]
         input_typespec = context.value_typespecs.get(input_id)
-        input_shape = typespec_shape(input_typespec)
+        input_shape = typespec_ranked_shape(input_typespec)
         perm = _validate_permutation(context.node.op_params.get("perm"), len(input_shape))
         inverse_perm = _inverse_permutation(perm)
 
@@ -811,6 +823,12 @@ def default_vjp_registry() -> VjpRegistry:
         SubVjpRule(),
         MulVjpRule(),
         DivVjpRule(),
+        SumVjpRule(),
+        MeanVjpRule(),
+        ReshapeVjpRule(),
+        MaxVjpRule(),
+        MinVjpRule(),
+        ProductVjpRule(),
         MatmulVjpRule(),
         TransposeVjpRule(),
     ):

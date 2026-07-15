@@ -23,6 +23,7 @@ from .graph import (
     TransposeOperator,
 )
 from .protocol import AutodiffError
+from .shape import parse_shape, resolve_shape, resolve_shape_value
 from .reverse import DerivativeProgram
 
 
@@ -33,9 +34,15 @@ class CompiledDerivativeProgram:
     params: tuple[str, ...]
     results: tuple[str, ...]
     opdef: PostOpDef
+    shape_params: dict[str, str] | None = None
 
 
-def compile_derivative_program(program: DerivativeProgram) -> CompiledDerivativeProgram:
+def compile_derivative_program(
+    program: DerivativeProgram,
+    *,
+    symbol_bindings: Mapping[str, int] | None = None,
+    defer_symbolic_shape_params: bool = False,
+) -> CompiledDerivativeProgram:
     """Compile a ``DerivativeProgram`` into deterministic route-shaped IR.
 
     The generated ``PostOpDef`` uses symbolic route parameters for free input
@@ -48,6 +55,10 @@ def compile_derivative_program(program: DerivativeProgram) -> CompiledDerivative
     form: list[tuple[str, Scalar]] = []
     values: dict[str, Scalar] = {}
     free_inputs: list[str] = []
+    reserved_params = set(_free_input_ids(program))
+    shape_params: list[str] = []
+    shape_param_symbols: dict[str, str] = {}
+    shape_symbol_params: dict[str, str] = {}
 
     for node in program.nodes:
         inputs: list[Scalar] = []
@@ -57,7 +68,16 @@ def compile_derivative_program(program: DerivativeProgram) -> CompiledDerivative
                 free_inputs.append(value_id)
             inputs.append(values[value_id])
 
-        output = _compile_node(node, inputs)
+        output = _compile_node(
+            node,
+            inputs,
+            symbol_bindings=symbol_bindings,
+            defer_symbolic_shape_params=defer_symbolic_shape_params,
+            shape_params=shape_params,
+            shape_param_symbols=shape_param_symbols,
+            shape_symbol_params=shape_symbol_params,
+            used_params=reserved_params,
+        )
         produced_ids.add(node.output_value_id)
         form.append((node.output_value_id, output))
         values[node.output_value_id] = state_id(node.output_value_id)
@@ -76,13 +96,49 @@ def compile_derivative_program(program: DerivativeProgram) -> CompiledDerivative
 
     form.append(("result", tuple_of(result_values)))
     return CompiledDerivativeProgram(
-        params=tuple(dict.fromkeys(free_inputs)),
+        params=tuple(dict.fromkeys([*free_inputs, *shape_params])),
         results=tuple(result_ids),
         opdef=PostOpDef(form),
+        shape_params=dict(shape_param_symbols) or None,
     )
 
 
-def _compile_node(node: TensorNodeRecord, inputs: list[Scalar]) -> Tensor:
+
+def _free_input_ids(program: DerivativeProgram) -> tuple[str, ...]:
+    produced_ids: set[str] = set()
+    values: set[str] = set()
+    free_inputs: list[str] = []
+
+    for node in program.nodes:
+        for value_id in node.input_value_ids:
+            if value_id not in values:
+                values.add(value_id)
+                free_inputs.append(value_id)
+        produced_ids.add(node.output_value_id)
+        values.add(node.output_value_id)
+
+    for value_id in program.output_gradients:
+        if value_id is None:
+            continue
+        if value_id not in values:
+            values.add(value_id)
+            if value_id not in produced_ids:
+                free_inputs.append(value_id)
+
+    return tuple(dict.fromkeys(free_inputs))
+
+
+def _compile_node(
+    node: TensorNodeRecord,
+    inputs: list[Scalar],
+    *,
+    symbol_bindings: Mapping[str, int] | None,
+    defer_symbolic_shape_params: bool,
+    shape_params: list[str],
+    shape_param_symbols: dict[str, str],
+    shape_symbol_params: dict[str, str],
+    used_params: set[str],
+) -> Tensor:
     if isinstance(node.operator, AddOperator):
         _require_arity(node, inputs, 2)
         return Tensor._post_ref(inputs[0]._subject_ref("add"), {"r": inputs[1]})
@@ -117,12 +173,30 @@ def _compile_node(node: TensorNodeRecord, inputs: list[Scalar]) -> Tensor:
 
     if isinstance(node.operator, ReshapeOperator):
         _require_arity(node, inputs, 1)
-        shape = _required_param(node, "shape")
+        shape = _shape_param(
+            node,
+            "shape",
+            symbol_bindings,
+            defer_symbolic_shape_params=defer_symbolic_shape_params,
+            shape_params=shape_params,
+            shape_param_symbols=shape_param_symbols,
+            shape_symbol_params=shape_symbol_params,
+            used_params=used_params,
+        )
         return Tensor._post_ref(inputs[0]._subject_ref("reshape"), {"shape": shape})
 
     if isinstance(node.operator, BroadcastOperator):
         _require_arity(node, inputs, 1)
-        shape = _required_param(node, "shape")
+        shape = _shape_param(
+            node,
+            "shape",
+            symbol_bindings,
+            defer_symbolic_shape_params=defer_symbolic_shape_params,
+            shape_params=shape_params,
+            shape_param_symbols=shape_param_symbols,
+            shape_symbol_params=shape_symbol_params,
+            used_params=used_params,
+        )
         return Tensor._post_ref(inputs[0]._subject_ref("broadcast"), {"shape": shape})
 
     if isinstance(node.operator, TransposeOperator):
@@ -134,7 +208,16 @@ def _compile_node(node: TensorNodeRecord, inputs: list[Scalar]) -> Tensor:
 
     if isinstance(node.operator, BroadcastReduceOperator):
         _require_arity(node, inputs, 1)
-        target_shape = _required_param(node, "target_shape")
+        target_shape = _shape_param(
+            node,
+            "target_shape",
+            symbol_bindings,
+            defer_symbolic_shape_params=defer_symbolic_shape_params,
+            shape_params=shape_params,
+            shape_param_symbols=shape_param_symbols,
+            shape_symbol_params=shape_symbol_params,
+            used_params=used_params,
+        )
         return Tensor._post_ref(
             inputs[0]._subject_ref("broadcast_reduce"), {"target_shape": target_shape}
         )
@@ -207,6 +290,88 @@ def _required_param(node: TensorNodeRecord, name: str) -> object:
     if not isinstance(node.op_params, Mapping) or name not in node.op_params:
         raise _malformed(f"operator {node.operator.route_name!r} missing param {name!r}")
     return node.op_params[name]
+
+
+def _shape_param(
+    node: TensorNodeRecord,
+    name: str,
+    symbol_bindings: Mapping[str, int] | None,
+    *,
+    defer_symbolic_shape_params: bool,
+    shape_params: list[str],
+    shape_param_symbols: dict[str, str],
+    shape_symbol_params: dict[str, str],
+    used_params: set[str],
+) -> list[object]:
+    value = _required_param(node, name)
+    label = f"operator {node.operator.route_name!r} param {name!r}"
+    if defer_symbolic_shape_params:
+        return _deferred_shape_value(
+            value,
+            symbol_bindings,
+            shape_params=shape_params,
+            shape_param_symbols=shape_param_symbols,
+            shape_symbol_params=shape_symbol_params,
+            used_params=used_params,
+            label=label,
+        )
+    return resolve_shape_value(value, symbol_bindings, label=label)
+
+
+def _deferred_shape_value(
+    value: object,
+    bindings: Mapping[str, int] | None,
+    *,
+    shape_params: list[str],
+    shape_param_symbols: dict[str, str],
+    shape_symbol_params: dict[str, str],
+    used_params: set[str],
+    label: str,
+) -> list[object]:
+    shape: list[object] = []
+    binding_map = dict(bindings or {})
+    for dim in parse_shape(value, label=label):
+        if isinstance(dim, int):
+            shape.append(dim)
+            continue
+        if dim in binding_map:
+            shape.append(resolve_shape((dim,), binding_map, label=label)[0])
+            continue
+        param = _shape_symbol_param(
+            dim,
+            shape_params=shape_params,
+            shape_param_symbols=shape_param_symbols,
+            shape_symbol_params=shape_symbol_params,
+            used_params=used_params,
+        )
+        shape.append(state_id(param))
+    return shape
+
+
+def _shape_symbol_param(
+    symbol: str,
+    *,
+    shape_params: list[str],
+    shape_param_symbols: dict[str, str],
+    shape_symbol_params: dict[str, str],
+    used_params: set[str],
+) -> str:
+    existing = shape_symbol_params.get(symbol)
+    if existing is not None:
+        return existing
+
+    base = f"__tc_shape_{symbol}"
+    param = base
+    suffix = 1
+    unavailable = used_params | set(shape_param_symbols)
+    while param in unavailable:
+        param = f"{base}_{suffix}"
+        suffix += 1
+
+    shape_symbol_params[symbol] = param
+    shape_param_symbols[param] = symbol
+    shape_params.append(param)
+    return param
 
 
 def _transpose_permutation(node: TensorNodeRecord) -> object:

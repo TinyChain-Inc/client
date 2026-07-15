@@ -147,8 +147,11 @@ def test_real_dispatcher_executes_installed_route_against_local_backend(tmp_path
     assert install_response.status == 204
     library = library_cls()
     route = getattr(library, getattr(library_cls, "__tc_derivative_route_name__"))
+    route_calls = 0
 
     def execute_route(call_values: dict[str, object]) -> object:
+        nonlocal route_calls
+        route_calls += 1
         with tc.backend(kernel):
             return route(**call_values)
 
@@ -169,4 +172,5 @@ def test_real_dispatcher_executes_installed_route_against_local_backend(tmp_path
     assert isinstance(gradient, tc.Tensor)
     assert gradient.shape == [2]
     assert gradient.values == [11.0, 22.0]
+    assert route_calls == 1
     assert result.metadata == program.metadata
