@@ -39,9 +39,9 @@ def grad(
     target: object,
     *,
     wrt: object = None,
-    seed: str = "seed",
-    output_value_id: str | None = None,
-    seed_typespec: dict[str, object] | None = None,
+    seed: str | list[str] = "seed",
+    output_value_id: str | list[str] | None = None,
+    seed_typespec: dict[str, object] | list[dict[str, object] | None] | None = None,
 ) -> object:
     """Generate a derivative program or route derivative discovery plan.
 
@@ -60,7 +60,7 @@ def grad(
         if selected_output is None:
             if not target.outputs:
                 raise AutodiffError("malformed_derivative_ir", "TensorGraph has no outputs")
-            selected_output = target.outputs[0]
+            selected_output = target.outputs[0] if len(target.outputs) == 1 else list(target.outputs)
         return generate(
             target,
             selected_output,

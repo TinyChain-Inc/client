@@ -126,11 +126,11 @@ def __getattr__(name: str) -> object:
 
 def generate(
     graph: TensorGraph,
-    output_value_id: str,
+    output_value_id: str | list[str],
     wrt: list[str],
-    seed: str,
+    seed: str | list[str],
     *,
-    seed_typespec: dict[str, object] | None = None,
+    seed_typespec: dict[str, object] | list[dict[str, object] | None] | None = None,
     graph_id: str | None = None,
 ) -> DerivativeProgram:
     """Experimentally build a structured Python derivative program.
@@ -152,12 +152,21 @@ def generate(
     metadata; otherwise a stable SHA-256 content hash of the graph structure is
     computed automatically.
     """
+    output_value_ids = output_value_id if isinstance(output_value_id, list) else [output_value_id]
+    seed_value_ids = seed if isinstance(seed, list) else [seed]
+    seed_typespecs = seed_typespec if isinstance(seed_typespec, list) else None
+    single_seed_typespec = None if isinstance(seed_typespec, list) else seed_typespec
+    if len(output_value_ids) != len(seed_value_ids):
+        raise TypeError("generate requires one seed value id per output value id")
     return ReverseTraversal().build(
         graph=graph,
-        output_value_id=output_value_id,
+        output_value_id=output_value_ids[0],
+        output_value_ids=output_value_ids,
         wrt=wrt,
-        seed_value_id=seed,
-        seed_typespec=seed_typespec,
+        seed_value_id=seed_value_ids[0],
+        seed_value_ids=seed_value_ids,
+        seed_typespec=single_seed_typespec,
+        seed_typespecs=seed_typespecs,
         source_graph_id=graph_id,
     )
 

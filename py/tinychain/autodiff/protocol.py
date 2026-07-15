@@ -48,13 +48,18 @@ class AutodiffError(Exception):
     def from_dict(cls, data: dict[str, object]) -> AutodiffError:
         return cls(category=str(data["category"]), message=str(data["message"]))
 
+def _string_or_strings(value: object) -> str | list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    return str(value)
+
 
 @dataclass(frozen=True)
 class AutodiffRequest:
     graph: object
-    output_value_id: str
+    output_value_id: str | list[str]
     wrt: list[str]
-    seed_value_id: str
+    seed_value_id: str | list[str]
     tensor_op_contract_version: str
     transform_version: str
 
@@ -65,9 +70,9 @@ class AutodiffRequest:
     def from_dict(cls, data: dict[str, object]) -> AutodiffRequest:
         return cls(
             graph=data["graph"],
-            output_value_id=str(data["output_value_id"]),
+            output_value_id=_string_or_strings(data["output_value_id"]),
             wrt=[str(item) for item in data["wrt"]],
-            seed_value_id=str(data["seed_value_id"]),
+            seed_value_id=_string_or_strings(data["seed_value_id"]),
             tensor_op_contract_version=str(data["tensor_op_contract_version"]),
             transform_version=str(data["transform_version"]),
         )
