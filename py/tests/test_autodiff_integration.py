@@ -196,7 +196,7 @@ def _phase5_operator_types():
 
 
 def test_vjp_registry_supported_types():
-    """supported_types() returns all Phase 5 operators."""
+    """supported_types() returns the built-in VJP operator types."""
     registry = default_vjp_registry()
     supported = registry.supported_types()
 
@@ -328,9 +328,8 @@ print(program.metadata.source_graph_id)
 
 
 def test_vjp_rule_declaration_order():
-    """Reversed-order rule definitions in a temp registry match normal-order
-    coverage: all three operator types are registered regardless of decorator
-    application order."""
+    """Reversed-order rule definitions in a temp registry keep their
+    registered operator types regardless of decorator application order."""
 
     reversed_registry = VjpRegistry()
 
@@ -355,15 +354,11 @@ def test_vjp_rule_declaration_order():
         def apply(self, context):
             ...
 
-    assert set(reversed_registry.supported_types()) == {
-        AddOperator,
-        MatmulOperator,
-        TransposeOperator,
-    }
     assert _phase5_operator_types().issuperset(reversed_registry.supported_types())
     assert reversed_registry.has_rule(AddOperator())
     assert reversed_registry.has_rule(MatmulOperator())
     assert reversed_registry.has_rule(TransposeOperator())
+    assert set(reversed_registry.supported_types()) == {AddOperator, MatmulOperator, TransposeOperator}
 
 
 # --- Step 12: builder guard released on exception ---

@@ -181,11 +181,7 @@ def test_vjp_registry_supported_types():
         def apply(self, context: VjpContext) -> VjpResult:
             return VjpResult(gradients={}, derivative_nodes=[])
 
-    types = registry.supported_types()
-    assert len(types) == 3
-    assert AddOperator in types
-    assert MatmulOperator in types
-    assert TransposeOperator in types
+    assert set(registry.supported_types()) == {AddOperator, MatmulOperator, TransposeOperator}
 
 
 def test_vjp_registry_decorator_type_error():
@@ -216,8 +212,8 @@ def test_vjp_registry_manual_register_backwards_compatibility():
     assert registry.lookup(AddOperator()) is rule_instance
 
 
-def test_vjp_registry_default_registry_has_phase5_rules():
-    """Test that default_vjp_registry() returns all Phase 5 rule types."""
+def test_vjp_registry_default_registry_has_builtin_rules():
+    """Test that default_vjp_registry() returns the built-in rule types."""
     from tinychain.autodiff.vjp import default_vjp_registry
 
     registry = default_vjp_registry()
