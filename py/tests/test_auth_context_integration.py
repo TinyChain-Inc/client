@@ -43,18 +43,23 @@ def test_framework_auth_context_available_in_local_and_wasm_routes(tmp_path: pat
 
     wasm_path = ensure_wasm_example_built("opref_to_remote")
     secret_key_b64 = tc.auth.generate_actor_secret(ACTOR_ID)
-    proc, authority = tc_testing.start_rust_example(
-        "http_rpc_native_host",
-        args=(
-            "--bind=127.0.0.1:0",
-            f"--actor-id={ACTOR_ID}",
-            "--alg=falcon512",
-            f"--secret-key-b64={secret_key_b64}",
-        ),
-        root=REPO_ROOT,
-        prefer_binary=True,
-        require_binary=True,
-    )
+    try:
+        proc, authority = tc_testing.start_rust_example(
+            "http_rpc_native_host",
+            args=(
+                "--bind=127.0.0.1:0",
+                f"--actor-id={ACTOR_ID}",
+                "--alg=falcon512",
+                f"--secret-key-b64={secret_key_b64}",
+            ),
+            root=REPO_ROOT,
+            prefer_binary=True,
+            require_binary=True,
+        )
+    except RuntimeError as err:
+        if "Operation not permitted" in str(err):
+            pytest.skip("sandbox does not permit launching local Rust host example")
+        raise
 
     try:
         b = Example(authority=tc.URI.parse(authority))

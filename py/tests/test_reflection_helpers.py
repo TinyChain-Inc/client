@@ -15,13 +15,13 @@ from tinychain.graph_reflection import (
 
 
 def test_typespec_valid_construction():
-    ts = TypeSpec(class_uri="/state/tensor", params={"dtype": "float32", "ndim": 2})
-    assert ts.class_uri == "/state/tensor"
+    ts = TypeSpec(class_uri="/state/collection/tensor", params={"dtype": "float32", "ndim": 2})
+    assert ts.class_uri == "/state/collection/tensor"
     assert ts.params == {"dtype": "float32", "ndim": 2}
 
 
 def test_typespec_round_trip():
-    ts = TypeSpec(class_uri="/state/tensor", params={"dtype": "float32"})
+    ts = TypeSpec(class_uri="/state/collection/tensor", params={"dtype": "float32"})
     recovered = TypeSpec.from_dict(ts.to_dict())
     assert recovered == ts
 
@@ -53,13 +53,13 @@ def test_typespec_from_dict_missing_key_raises():
 
 def test_typespec_non_json_serializable_params_raises():
     with pytest.raises(ReflectionError) as exc_info:
-        TypeSpec(class_uri="/state/tensor", params={"bad": object()})
+        TypeSpec(class_uri="/state/collection/tensor", params={"bad": object()})
     assert exc_info.value.category == "invalid_type_spec"
 
 
 def test_typespec_defensive_copy_isolation():
     caller_params: dict = {"dtype": "float32"}
-    ts = TypeSpec(class_uri="/state/tensor", params=caller_params)
+    ts = TypeSpec(class_uri="/state/collection/tensor", params=caller_params)
     caller_params["dtype"] = "int8"
     caller_params["extra"] = "injected"
     assert ts.params == {"dtype": "float32"}
@@ -69,7 +69,7 @@ def test_typespec_defensive_copy_isolation():
 
 
 def test_typed_value_ref_valid_construction():
-    ts = TypeSpec(class_uri="/state/tensor", params={})
+    ts = TypeSpec(class_uri="/state/collection/tensor", params={})
     ref = TypedValueRef(namespace="my_ns", value="x", output=None, value_type=ts)
     assert ref.value == "x"
     assert ref.namespace == "my_ns"
@@ -77,7 +77,7 @@ def test_typed_value_ref_valid_construction():
 
 
 def test_typed_value_ref_round_trip():
-    ts = TypeSpec(class_uri="/state/tensor", params={"ndim": 3})
+    ts = TypeSpec(class_uri="/state/collection/tensor", params={"ndim": 3})
     ref = TypedValueRef(namespace="ns", value="y", output="out0", value_type=ts)
     recovered = TypedValueRef.from_dict(ref.to_dict())
     assert recovered == ref
@@ -91,7 +91,7 @@ def test_typed_value_ref_round_trip_no_namespace():
 
 
 def test_typed_value_ref_empty_value_raises():
-    ts = TypeSpec(class_uri="/state/tensor", params={})
+    ts = TypeSpec(class_uri="/state/collection/tensor", params={})
     with pytest.raises(ReflectionError) as exc_info:
         TypedValueRef(namespace=None, value="", output=None, value_type=ts)
     assert exc_info.value.category == "invalid_typed_value_ref"

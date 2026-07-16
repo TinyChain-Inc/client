@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Mapping
 
-from ..state import PostOpDef, Scalar, Tensor, id as state_id, tuple_of
+from ..collection.tensor import Tensor
+from ..state import PostOpDef, Scalar, id as state_id, tuple_of
 from .graph import (
     AddOperator,
     BroadcastOperator,

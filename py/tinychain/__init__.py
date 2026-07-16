@@ -8,10 +8,11 @@ from .executor import execute as _dispatch_execute
 from .opref import OpRef
 from . import opref
 from .ref import Ref
-from .state.tensor import Tensor, concatenate, einsum, split, tile
+from .collection.tensor import Tensor, concatenate, einsum, split, tile
 from .state.value import Bool, C64, C128, Complex, F32, F64, Float, I64, Integer, Link, Map, Null, Number, String, Tuple, U64
 from .uri import CanonicalResourceName, URI, authority, origin, uri
 from . import compute
+from . import collection
 from . import state
 from . import kernel
 from . import auth
@@ -51,6 +52,7 @@ __all__ = [
     "URI",
     "CanonicalResourceName",
     "compute",
+    "collection",
     "state",
     "kernel",
     "install",

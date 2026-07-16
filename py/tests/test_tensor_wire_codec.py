@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 import tinychain as tc
-from tinychain.state.tensor._wire import (
+from tinychain.collection.tensor._wire import (
     decode_storage_layout,
     decode_storage_schema,
     decode_view_schema,
@@ -10,11 +10,11 @@ from tinychain.state.tensor._wire import (
     encode_storage_schema,
     encode_view_schema,
 )
-from tinychain.state.tensor.schema import TensorStorageLayout, TensorStorageSchema
+from tinychain.collection.tensor.schema import TensorStorageLayout, TensorStorageSchema
 
 
 def test_storage_schema_wire_roundtrip():
-    x = tc.state.Tensor(ref=tc.state.TCRef(tc.state.IdRef("x")))
+    x = tc.Tensor(ref=tc.state.TCRef(tc.state.IdRef("x")))
 
     schema = x.to_storage_schema(base_shape=[2, 3], layout="sparse", sparse_axis=1)
     wire = encode_storage_schema(schema)
@@ -52,7 +52,7 @@ def test_storage_schema_rejects_non_positive_dimensions():
 
 
 def test_view_schema_wire_contract_shape():
-    x = tc.state.Tensor(ref=tc.state.TCRef(tc.state.IdRef("x")))
+    x = tc.Tensor(ref=tc.state.TCRef(tc.state.IdRef("x")))
     wire = encode_view_schema(
         x.transpose([1, 0]).broadcast([3, 2]).to_view_schema(base_shape=[1, 3])
     )

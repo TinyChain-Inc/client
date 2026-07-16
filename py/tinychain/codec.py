@@ -28,7 +28,7 @@ def _decode_tensor(payload: object) -> object:
 
     try:
         from . import _local
-        from .state.tensor import Tensor
+        from .collection.tensor import Tensor
 
         local = _local.backend()
         native_tensor = getattr(local, "Tensor", None)
