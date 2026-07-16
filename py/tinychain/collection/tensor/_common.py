@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable as IterableABC
 
-from ..scalar import Scalar, autobox
+from ...state.scalar import Scalar, autobox
 
 
 def params(**kwargs: object) -> dict[str, Scalar]:

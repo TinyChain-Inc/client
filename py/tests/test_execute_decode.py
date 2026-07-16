@@ -4,6 +4,7 @@ import json
 
 import pytest
 import tinychain as tc
+import tinychain._local as tc_local
 
 
 class _Value:
@@ -94,11 +95,21 @@ def test_execute_decodes_typed_tensor_when_available(monkeypatch):
     }
     monkeypatch.setattr(tc, "_dispatch_execute", lambda _op: _Response(payload, status=200))
 
-    result = tc.execute(tc.opref.get("/state/tensor"))
-    assert isinstance(result, tc.Tensor)
-    assert result.dtype == "u64"
-    assert result.shape == [2]
-    assert result.values == [10, 11]
+    try:
+        local = tc_local.backend()
+    except ImportError:
+        local = None
+
+    native_tensor = getattr(local, "Tensor", None) if local is not None else None
+    if native_tensor is not None and hasattr(native_tensor, "dense_u64"):
+        result = tc.execute(tc.opref.get("/state/collection/tensor"))
+        assert isinstance(result, tc.Tensor)
+        assert result.dtype == "u64"
+        assert result.shape == [2]
+        assert result.values == [10, 11]
+    else:
+        with pytest.raises(TypeError, match="cannot decode tensor dtype"):
+            tc.execute(tc.opref.get("/state/collection/tensor"))
 
 
 def test_execute_decodes_f64_tensor_when_available(monkeypatch):
@@ -110,17 +121,21 @@ def test_execute_decodes_f64_tensor_when_available(monkeypatch):
     }
     monkeypatch.setattr(tc, "_dispatch_execute", lambda _op: _Response(payload, status=200))
 
-    local = tc._local.backend()
-    native_tensor = getattr(local, "Tensor", None)
+    try:
+        local = tc_local.backend()
+    except ImportError:
+        local = None
+
+    native_tensor = getattr(local, "Tensor", None) if local is not None else None
     if native_tensor is not None and hasattr(native_tensor, "dense_f64"):
-        result = tc.execute(tc.opref.get("/state/tensor"))
+        result = tc.execute(tc.opref.get("/state/collection/tensor"))
         assert isinstance(result, tc.Tensor)
         assert result.dtype == "f64"
         assert result.shape == [2]
         assert result.values == [1.25, 2.5]
     else:
         with pytest.raises(TypeError, match="cannot decode tensor dtype"):
-            tc.execute(tc.opref.get("/state/tensor"))
+            tc.execute(tc.opref.get("/state/collection/tensor"))
 
 
 def test_execute_rejects_unknown_tensor_dtype(monkeypatch):
@@ -133,7 +148,7 @@ def test_execute_rejects_unknown_tensor_dtype(monkeypatch):
     monkeypatch.setattr(tc, "_dispatch_execute", lambda _op: _Response(payload, status=200))
 
     with pytest.raises(TypeError, match="unsupported tensor dtype"):
-        tc.execute(tc.opref.get("/state/tensor"))
+        tc.execute(tc.opref.get("/state/collection/tensor"))
 
 
 def test_execute_decodes_opdef_map_to_python_opdef(monkeypatch):

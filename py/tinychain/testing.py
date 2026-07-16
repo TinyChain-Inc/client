@@ -5,6 +5,8 @@ import selectors
 import signal
 import subprocess
 import time
+import shutil
+import os
 from typing import Callable, Iterable, Optional, Tuple, TypeVar
 
 from .codec import decode_payload, decode_response_body
@@ -19,13 +21,25 @@ def decode_json_body(response: "object"):
 def response_json(response: "object"):
     return decode_json_body(response)
 
+def cargo_command() -> str | None:
+    preferred = os.path.expanduser("~/.cargo/bin/cargo")
+    for path in (preferred, shutil.which("cargo"), "/snap/bin/cargo"):
+        if path is None:
+            continue
+        if os.path.isfile(path) and os.access(path, os.X_OK):
+            return path
+
+    return None
+
+
 def cargo_available() -> bool:
-    try:
-        subprocess.run(["cargo", "--version"], check=True, capture_output=True, text=True)
-        return True
-    except FileNotFoundError:
+    cmd = cargo_command()
+    if cmd is None:
         return False
-    except subprocess.CalledProcessError:
+    try:
+        subprocess.run([cmd, "--version"], check=True, capture_output=True, text=True)
+        return True
+    except (FileNotFoundError, subprocess.CalledProcessError):
         return False
 
 
@@ -117,10 +131,13 @@ def start_rust_example(
 
     if not cargo_available():
         raise RuntimeError("`cargo` not found; install Rust tooling to run this example")
+    cargo = cargo_command()
+    if cargo is None:
+        raise RuntimeError("`cargo` not found; install Rust tooling to run this example")
 
     proc = subprocess.Popen(
         [
-            "cargo",
+            cargo,
             "run",
             "--manifest-path",
             str(root / "tc-server" / "Cargo.toml"),

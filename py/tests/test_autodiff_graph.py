@@ -13,7 +13,7 @@ from tinychain.autodiff import (
 
 
 def _make_tensor(name: str) -> tc.Tensor:
-    return tc.state.Tensor(ref=tc.state.TCRef(tc.state.IdRef(name)))
+    return tc.Tensor(ref=tc.state.TCRef(tc.state.IdRef(name)))
 
 
 def _json(value):

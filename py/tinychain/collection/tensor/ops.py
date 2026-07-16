@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ..scalar import Scalar, autobox
+from ...state.scalar import Scalar, autobox
 from .core import Tensor
 from .routes import tensor_route
 

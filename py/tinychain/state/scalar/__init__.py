@@ -202,7 +202,7 @@ def _scalar_class_for_hint(hint: object) -> type["Scalar"]:
 
     if isinstance(hint, type):
         try:
-            from ..tensor import Tensor
+            from ...collection.tensor import Tensor
         except ImportError:
             Tensor = None
 

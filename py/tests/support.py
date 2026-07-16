@@ -73,10 +73,12 @@ def ensure_wasm_example_built(example_name: str) -> pathlib.Path:
         )
 
     require_cargo()
+    cargo = tc_testing.cargo_command()
+    assert cargo is not None
     try:
         subprocess.run(
             [
-                "cargo",
+                cargo,
                 "build",
                 "--manifest-path",
                 str(REPO_ROOT / "tc-wasm" / "Cargo.toml"),

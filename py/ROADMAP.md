@@ -80,6 +80,13 @@ via `Tensor(native=...)` (requires `tinychain-local`; see the README note on ten
 response decoding). Symbolic `tc.Tensor` instances remain fully usable for deferred
 planning and route definitions without the local backend.
 
+### Collection module consolidation
+
+Tensor is now owned by `tinychain.collection.tensor` (and exported via
+`tinychain.collection`) instead of `tinychain.state.tensor`. This is intentional
+preparation for grouping additional collection types (`btree`, `table`) under the
+same `collection` module boundary.
+
 ### `tc.grad` reserved stub
 
 `tc.grad(target, wrt=...)` is a reserved stub for the JAX-like autodiff transform API.

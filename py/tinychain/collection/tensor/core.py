@@ -4,8 +4,8 @@ from collections.abc import Callable
 from numbers import Number as NumberABC
 from typing import Literal
 
-from ...uri import URI
-from ..scalar import (
+from ...uri import URI, path
+from ...state.scalar import (
     Bool,
     Comparable,
     IdRef,
@@ -442,9 +442,21 @@ class Tensor(Comparable):
         if self._native is None:
             return super().to_json()
 
+        dtype = self.dtype
+        if isinstance(dtype, str):
+            normalized = dtype.strip().lower()
+            dtype = {
+                "f32": path("state", "scalar", "value", "number", "float", "32"),
+                "float32": path("state", "scalar", "value", "number", "float", "32"),
+                "f64": path("state", "scalar", "value", "number", "float", "64"),
+                "float64": path("state", "scalar", "value", "number", "float", "64"),
+                "u64": path("state", "scalar", "value", "number", "uint", "64"),
+                "uint64": path("state", "scalar", "value", "number", "uint", "64"),
+            }.get(normalized, dtype)
+
         return {
             str(TENSOR_CLASS_URI): [
-                [self.dtype, self.shape],
+                [dtype, self.shape],
                 self.values,
             ]
         }
