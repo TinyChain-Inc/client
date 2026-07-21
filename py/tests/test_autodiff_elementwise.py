@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from tinychain.autodiff import (
+    AddOperator,
     AutodiffError,
     BroadcastReduceOperator,
     DerivativeMetadata,
@@ -109,6 +110,40 @@ def test_sub_vjp_broadcast_rhs_reduces_negated_gradient():
 
     (dy,) = result.gradients
     np.testing.assert_allclose(dy, -np.sum(seed, axis=0, keepdims=True), rtol=1e-5)
+
+
+def test_mul_vjp_repeated_input_accumulates_both_partials():
+    graph = TensorGraph(
+        nodes=[
+            TensorNodeRecord(
+                node_id="n0",
+                output_value_id="v1",
+                operator=MulOperator(),
+                op_params={},
+                input_value_ids=["v0", "v0"],
+                output_typespec=_typespec((2, 3)),
+            )
+        ],
+        inputs=[("v0", _typespec((2, 3)))],
+        outputs=["v1"],
+    )
+    program = generate(graph, "v1", ["v0"], "seed")
+
+    assert _operator_types(program.nodes) == [MulOperator, MulOperator, AddOperator]
+    lhs_partial, rhs_partial, accumulated = program.nodes
+    assert accumulated.input_value_ids == [lhs_partial.output_value_id, rhs_partial.output_value_id]
+    assert program.gradients == {"v0": accumulated.output_value_id}
+    assert program.output_gradients == [accumulated.output_value_id]
+
+    seed = np.array([[1.0, 1.5, 2.0], [2.5, 3.0, 3.5]], dtype=np.float32)
+    value = np.array([[2.0, 4.0, 6.0], [8.0, 10.0, 12.0]], dtype=np.float32)
+    result = ExecutionScheduler(NumpyAutodiffDispatcher()).execute(
+        program,
+        values={"seed": seed, "v0": value},
+    )
+
+    (gradient,) = result.gradients
+    np.testing.assert_allclose(gradient, 2 * seed * value, rtol=1e-5)
 
 
 def test_mul_vjp_broadcast_rhs_executes_correct_gradients():

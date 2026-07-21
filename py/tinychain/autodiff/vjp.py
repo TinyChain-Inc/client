@@ -316,6 +316,8 @@ class MulVjpRule(_ElementwiseVjpRule):
         lhs_id, rhs_id, result_shape, result_typespec = self._validate_binary(context, "mul")
         gradients: dict[str, str] = {}
         derivative_nodes: list[TensorNodeRecord] = []
+        lhs_gradient_id: str | None = None
+        rhs_gradient_id: str | None = None
 
         if lhs_id in context.needed_input_value_ids:
             lhs_raw = _elementwise_binary_node(
@@ -325,13 +327,14 @@ class MulVjpRule(_ElementwiseVjpRule):
                 output_typespec=result_typespec,
             )
             derivative_nodes.append(lhs_raw)
-            gradients[lhs_id] = self._reduce_to_operand(
+            lhs_gradient_id = self._reduce_to_operand(
                 context=context,
                 gradient_id=lhs_raw.output_value_id,
                 operand_id=lhs_id,
                 result_shape=result_shape,
                 derivative_nodes=derivative_nodes,
             )
+            gradients[lhs_id] = lhs_gradient_id
 
         if rhs_id in context.needed_input_value_ids:
             rhs_raw = _elementwise_binary_node(
@@ -341,13 +344,24 @@ class MulVjpRule(_ElementwiseVjpRule):
                 output_typespec=result_typespec,
             )
             derivative_nodes.append(rhs_raw)
-            gradients[rhs_id] = self._reduce_to_operand(
+            rhs_gradient_id = self._reduce_to_operand(
                 context=context,
                 gradient_id=rhs_raw.output_value_id,
                 operand_id=rhs_id,
                 result_shape=result_shape,
                 derivative_nodes=derivative_nodes,
             )
+            gradients[rhs_id] = rhs_gradient_id
+
+        if lhs_id == rhs_id and lhs_gradient_id is not None and rhs_gradient_id is not None:
+            accumulated = _elementwise_binary_node(
+                context=context,
+                operator=AddOperator(),
+                input_value_ids=[lhs_gradient_id, rhs_gradient_id],
+                output_typespec=context.value_typespecs.get(lhs_id),
+            )
+            derivative_nodes.append(accumulated)
+            gradients[lhs_id] = accumulated.output_value_id
 
         return VjpResult(gradients=gradients, derivative_nodes=derivative_nodes)
 
