@@ -2,7 +2,7 @@ import inspect
 
 import pytest
 import tinychain as tc
-import tinychain.state.tensor as tensor_module
+import tinychain.collection.tensor as tensor_module
 
 
 def _json(value):
@@ -25,8 +25,8 @@ def test_tensor_reflection_preserves_tensor_hint():
 
 
 def test_tensor_basic_method_shapes_are_canonical_refs():
-    x = tc.state.Tensor(ref=tc.state.TCRef(tc.state.IdRef("x")))
-    y = tc.state.Tensor(ref=tc.state.TCRef(tc.state.IdRef("y")))
+    x = tc.Tensor(ref=tc.state.TCRef(tc.state.IdRef("x")))
+    y = tc.Tensor(ref=tc.state.TCRef(tc.state.IdRef("y")))
 
     assert _json(x @ y) == {"$x/matmul": {"r": {"$y": []}}}
     assert _json(x.reshape([2, 3])) == {"$x/reshape": [[2, 3]]}
@@ -36,8 +36,8 @@ def test_tensor_basic_method_shapes_are_canonical_refs():
 
 
 def test_tensor_v1_surface_helpers_are_available():
-    x = tc.state.Tensor(ref=tc.state.TCRef(tc.state.IdRef("x")))
-    y = tc.state.Tensor(ref=tc.state.TCRef(tc.state.IdRef("y")))
+    x = tc.Tensor(ref=tc.state.TCRef(tc.state.IdRef("x")))
+    y = tc.Tensor(ref=tc.state.TCRef(tc.state.IdRef("y")))
 
     assert _json(tc.einsum("ij,jk->ik", [x, y])) == {
         str(tc.uri("state", "collection", "tensor", "einsum")): {
@@ -76,14 +76,14 @@ def test_tensor_internal_route_helpers_are_not_public_api():
 
 
 def test_tensor_reverse_add_and_mul_use_tensor_subject():
-    x = tc.state.Tensor(ref=tc.state.TCRef(tc.state.IdRef("x")))
+    x = tc.Tensor(ref=tc.state.TCRef(tc.state.IdRef("x")))
 
     assert _json(1 + x) == {"$x/add": {"r": 1}}
     assert _json(2 * x) == {"$x/mul": {"r": 2}}
 
 
 def test_tensor_reverse_sub_and_div_require_tensor_lhs():
-    x = tc.state.Tensor(ref=tc.state.TCRef(tc.state.IdRef("x")))
+    x = tc.Tensor(ref=tc.state.TCRef(tc.state.IdRef("x")))
 
     with pytest.raises(TypeError, match="reverse subtraction"):
         _ = 1 - x
@@ -93,8 +93,8 @@ def test_tensor_reverse_sub_and_div_require_tensor_lhs():
 
 
 def test_tensor_binary_ops_emit_minimal_payload_when_known():
-    x = tc.state.Tensor(ref=tc.state.TCRef(tc.state.IdRef("x")))
-    y = tc.state.Tensor(ref=tc.state.TCRef(tc.state.IdRef("y")))
+    x = tc.Tensor(ref=tc.state.TCRef(tc.state.IdRef("x")))
+    y = tc.Tensor(ref=tc.state.TCRef(tc.state.IdRef("y")))
 
     assert _json(x + y) == {
         "$x/add": {
@@ -104,8 +104,8 @@ def test_tensor_binary_ops_emit_minimal_payload_when_known():
 
 
 def test_tensor_matmul_emits_minimal_payload_when_known():
-    lhs = tc.state.Tensor(ref=tc.state.TCRef(tc.state.IdRef("lhs")))
-    rhs = tc.state.Tensor(ref=tc.state.TCRef(tc.state.IdRef("rhs")))
+    lhs = tc.Tensor(ref=tc.state.TCRef(tc.state.IdRef("lhs")))
+    rhs = tc.Tensor(ref=tc.state.TCRef(tc.state.IdRef("rhs")))
 
     assert _json(lhs @ rhs) == {
         "$lhs/matmul": {
@@ -115,7 +115,7 @@ def test_tensor_matmul_emits_minimal_payload_when_known():
 
 
 def test_tensor_logical_not_emits_minimal_payload_when_known():
-    tensor = tc.state.Tensor(ref=tc.state.TCRef(tc.state.IdRef("tensor")))
+    tensor = tc.Tensor(ref=tc.state.TCRef(tc.state.IdRef("tensor")))
 
     assert _json(tensor.logical_not()) == {
         "$tensor/not": {
@@ -124,7 +124,7 @@ def test_tensor_logical_not_emits_minimal_payload_when_known():
 
 
 def test_tensor_records_view_ops_for_symbolic_transforms():
-    x = tc.state.Tensor(ref=tc.state.TCRef(tc.state.IdRef("x")))
+    x = tc.Tensor(ref=tc.state.TCRef(tc.state.IdRef("x")))
 
     y = x.transpose([1, 0]).broadcast([3, 2, 4]).reshape([24]).slice([0, 10])
 
@@ -148,7 +148,7 @@ def test_tensor_native_transform_path_uses_native_backend():
         def reshape(self, shape):
             return NativeTensor(list(shape))
 
-    x = tc.state.Tensor(native=NativeTensor([2, 3]))
+    x = tc.Tensor(native=NativeTensor([2, 3]))
 
     y = x.transpose([1, 0]).broadcast([4, 3, 2]).reshape([24])
 
@@ -159,7 +159,7 @@ def test_tensor_native_transform_path_uses_native_backend():
 
 
 def test_tensor_view_spec_is_canonicalized_from_transform_chain():
-    x = tc.state.Tensor(ref=tc.state.TCRef(tc.state.IdRef("x")))
+    x = tc.Tensor(ref=tc.state.TCRef(tc.state.IdRef("x")))
 
     y = x.transpose([1, 0]).reshape([6]).broadcast([2, 6])
     spec = y.view_spec()
@@ -188,7 +188,7 @@ def test_tensor_materialize_view_spec_uses_backend_adapter_if_supported():
                 current = current.apply_view_op(op)
             return current
 
-    x = tc.state.Tensor(native=Adapter([2, 3]))
+    x = tc.Tensor(native=Adapter([2, 3]))
     y = x.transpose([1, 0])
 
     z = y.materialize_view_spec()
@@ -212,7 +212,7 @@ def test_tensor_materialize_view_spec_prefers_wire_backend_hook():
             self.wire = wire
             return Adapter([6])
 
-    x = tc.state.Tensor(native=Adapter([2, 3]))
+    x = tc.Tensor(native=Adapter([2, 3]))
     y = x.transpose([1, 0])
     y._view_ops_materialized = False
 
@@ -222,7 +222,7 @@ def test_tensor_materialize_view_spec_prefers_wire_backend_hook():
 
 
 def test_view_spec_compiles_transpose_and_broadcast_to_view_schema():
-    x = tc.state.Tensor(ref=tc.state.TCRef(tc.state.IdRef("x")))
+    x = tc.Tensor(ref=tc.state.TCRef(tc.state.IdRef("x")))
     spec = x.transpose([1, 0]).broadcast([3, 2]).view_spec()
 
     schema = spec.to_view_schema(base_shape=[1, 3])
@@ -236,7 +236,7 @@ def test_view_spec_compiles_transpose_and_broadcast_to_view_schema():
     ]
 
 def test_tensor_to_view_schema_requires_base_shape_for_symbolic_tensors():
-    x = tc.state.Tensor(ref=tc.state.TCRef(tc.state.IdRef("x"))).transpose([1, 0])
+    x = tc.Tensor(ref=tc.state.TCRef(tc.state.IdRef("x"))).transpose([1, 0])
 
     with pytest.raises(TypeError, match="base_shape"):
         x.to_view_schema()
@@ -250,7 +250,7 @@ def test_tensor_to_view_schema_uses_native_shape_when_available():
         def transpose(self, permutation):
             return NativeTensor([self.shape[i] for i in permutation])
 
-    x = tc.state.Tensor(native=NativeTensor([2, 3])).transpose([1, 0])
+    x = tc.Tensor(native=NativeTensor([2, 3])).transpose([1, 0])
     schema = x.to_view_schema()
     schema_json = schema.to_json()
 
@@ -262,7 +262,7 @@ def test_tensor_to_view_schema_uses_native_shape_when_available():
 
 
 def test_view_spec_compiles_slice_at_and_in_to_view_schema():
-    x = tc.state.Tensor(ref=tc.state.TCRef(tc.state.IdRef("x")))
+    x = tc.Tensor(ref=tc.state.TCRef(tc.state.IdRef("x")))
     spec = x.slice([1, (0, 4, 2)]).view_spec()
 
     schema = spec.to_view_schema(base_shape=[3, 4])
@@ -276,7 +276,7 @@ def test_view_spec_compiles_slice_at_and_in_to_view_schema():
 
 
 def test_view_spec_slice_rank_mismatch_raises():
-    x = tc.state.Tensor(ref=tc.state.TCRef(tc.state.IdRef("x")))
+    x = tc.Tensor(ref=tc.state.TCRef(tc.state.IdRef("x")))
     spec = x.slice([0]).view_spec()
 
     with pytest.raises(ValueError, match="rank"):
@@ -284,7 +284,7 @@ def test_view_spec_slice_rank_mismatch_raises():
 
 
 def test_tensor_storage_schema_compiles_concrete_shape_and_layout():
-    x = tc.state.Tensor(ref=tc.state.TCRef(tc.state.IdRef("x")))
+    x = tc.Tensor(ref=tc.state.TCRef(tc.state.IdRef("x")))
 
     schema = x.to_storage_schema(base_shape=[2, 3], layout="sparse", sparse_axis=1)
 

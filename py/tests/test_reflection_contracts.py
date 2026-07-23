@@ -26,7 +26,7 @@ def test_operation_contract_fields_preserved():
     )
     assert contract.method_uri == "/tensor/add/v2"
     assert contract.params_schema == schema
-    spec = TypeSpec(class_uri="/state/tensor", params={"dtype": "float32"})
+    spec = TypeSpec(class_uri="/state/collection/tensor", params={"dtype": "float32"})
     assert contract.infer_outputs([spec], {}) == [spec]
 
 

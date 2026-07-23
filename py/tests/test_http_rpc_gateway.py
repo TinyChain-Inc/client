@@ -13,11 +13,16 @@ def test_pyo3_kernel_resolves_opref_over_http_gateway(tmp_path):
         pytest.skip("`cargo` not found; install Rust tooling to run this test")
     tc_local, _ = require_tinychain_local(require_library_definition=True)
 
-    proc, addr = tc_testing.start_rust_example(
-        "http_rpc_native_host",
-        args=("--bind=127.0.0.1:0",),
-        prefer_binary=False,
-    )
+    try:
+        proc, addr = tc_testing.start_rust_example(
+            "http_rpc_native_host",
+            args=("--bind=127.0.0.1:0",),
+            prefer_binary=False,
+        )
+    except RuntimeError as err:
+        if "Operation not permitted" in str(err):
+            pytest.skip("sandbox does not permit launching local Rust host example")
+        raise
     try:
         b_root = tc.uri("lib", "example-devco", "example", "0.1.0").path
         b_hello = tc.uri("lib", "example-devco", "example", "0.1.0", "example-devco", "example", "0.1.0", "hello").path

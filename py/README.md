@@ -182,6 +182,9 @@ Use `tc.Tensor` in route signatures and method bodies for symbolic tensor
 authoring. Its methods mirror the v1 Tensor ergonomics while compiling to
 canonical TinyChain op references:
 
+`Tensor` now lives under `tinychain.collection` (`tc.collection.Tensor`), with
+`tc.Tensor` as the canonical shorthand.
+
 ```python
 class Math(tc.Library):
     publisher = "demo"

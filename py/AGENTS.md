@@ -106,7 +106,8 @@ staying thin and well-documented for new users.
 - High-level symbolic wrappers must construct refs through the canonical typed
   builder methods on `Scalar` (for example `_get`, `_post`, `_put`,
   `_post_ref`). Do not hand-write `TCRef(GetOpRef(...))`,
-  `TCRef(PostOpRef(...))`, etc. in wrapper modules such as `state/tensor.py`.
+  `TCRef(PostOpRef(...))`, etc. in wrapper modules such as
+  `collection/tensor/core.py`.
   Keep URI values structured until the serialization/transport boundary; avoid
   extracting `.path` in symbolic wrappers.
 - Keep one canonical route-stub call shape in application code.

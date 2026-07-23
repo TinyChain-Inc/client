@@ -35,24 +35,10 @@ from .scalar import (
     form_of,
 )
 from .context import Context, ContextResult, context, scoped_context, current_context
-from .tensor import (
-    TensorStorageLayout,
-    TensorStorageSchema,
-    TensorViewAxis,
-    TensorViewAxisMap,
-    TensorViewSchema,
-    Tensor,
-    TensorBackend,
-    TensorWireTensorBackend,
-    TensorViewSpec,
-    concatenate,
-    einsum,
-    split,
-    tile,
-)
+from ..collection.tensor import Tensor as _Tensor
 from .value import Bool, C64, C128, Complex, F32, F64, Float, I64, Integer, Link, Map, Null, Number, String, Tuple, U64, Value
 
-Numeric: TypeAlias = Scalar | Tensor
+Numeric: TypeAlias = Scalar | _Tensor
 
 __all__ = [
     "Op",
@@ -94,19 +80,6 @@ __all__ = [
     "Map",
     "Tuple",
     "String",
-    "Tensor",
-    "TensorViewSpec",
-    "TensorBackend",
-    "TensorStorageLayout",
-    "TensorStorageSchema",
-    "TensorViewAxisMap",
-    "TensorViewAxis",
-    "TensorViewSchema",
-    "TensorWireTensorBackend",
-    "concatenate",
-    "einsum",
-    "split",
-    "tile",
     "autobox",
     "after",
     "cond",
