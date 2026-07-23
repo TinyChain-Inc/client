@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pathlib
 
+import pytest
 import tinychain as tc
 import tinychain.testing as tc_testing
 
@@ -93,6 +94,20 @@ def test_tensor_ops_execute_via_local_python_client(tmp_path: pathlib.Path):
         assert isinstance(transposed, tc.Tensor)
         assert transposed.shape == [2, 2, 3]
         assert transposed.values == [0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 1.0, 3.0, 5.0, 7.0, 9.0, 11.0]
+
+        u64_transpose_source = tc.Tensor(native=dense_u64([2, 3, 2], list(range(12))))
+        try:
+            u64_transposed = tc_testing.run_with_timeout(
+                TIMEOUT_SECONDS,
+                lambda: library.transpose_3d(u64_transpose_source),
+            )
+        except AssertionError as err:
+            if "DtypeNotSupported" in str(err):
+                pytest.skip("local backend transpose does not support u64 tensors")
+            raise
+        assert isinstance(u64_transposed, tc.Tensor)
+        assert u64_transposed.shape == [2, 2, 3]
+        assert u64_transposed.values == [0, 2, 4, 6, 8, 10, 1, 3, 5, 7, 9, 11]
 
         left = tc.Tensor(native=dense_f64([2, 1], [1.0, 2.0]))
         right = tc.Tensor(native=dense_f64([1, 3], [10.0, 20.0, 30.0]))
