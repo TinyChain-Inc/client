@@ -15,7 +15,7 @@ from .ref import Ref
 from . import _autograph
 from .state import ContextResult, DeleteOpDef, DeleteOpRef, GetOpDef, GetOpRef, IdRef, OpDef, OpRef as StateOpRef, PostOpDef, PostOpRef, PutOpDef, PutOpRef, Scalar, TCRef, autobox, context, current_context, form_of, map_of as scalar_map_of, scalar_for_hint, scoped_context, tcref_form_of, tuple_of as scalar_tuple_of
 from .state.value import Bool, Map, Number, String, Tuple, Value
-from .uri import URI, _class_resource_name, _segment, uri as _uri
+from .uri import CanonicalResourceName, URI, _class_resource_name, _segment, uri as _uri
 
 def _is_method(form: Callable[..., Any]) -> bool:
     names = list(getattr(form, "__code__", None).co_varnames or ())
@@ -459,6 +459,8 @@ class Library:
 
     Subclasses use class-level manifest metadata and route decorators.
     """
+
+    canonical_resource_name: CanonicalResourceName
 
     def __init__(
         self,

@@ -250,6 +250,63 @@ def test_library_subclasses_do_not_accept_name_override():
         A()
 
 
+def test_library_accepts_typed_canonical_external_resource_name():
+    class LegacyClient(tc.Library):
+        publisher = "example-devco"
+        canonical_resource_name = tc.CanonicalResourceName("legacy-client")
+        version = "0.1.0"
+
+    assert LegacyClient().id().path == "/lib/example-devco/legacy-client/0.1.0"
+
+
+def test_library_derives_resource_name_when_no_canonical_name_is_declared():
+    class OrdinaryClient(tc.Library):
+        publisher = "example-devco"
+        version = "0.1.0"
+
+    assert OrdinaryClient().id().path == "/lib/example-devco/ordinary_client/0.1.0"
+
+
+def test_library_rejects_untyped_canonical_resource_name():
+    class LegacyClient(tc.Library):
+        publisher = "example-devco"
+        canonical_resource_name = "legacy-client"
+        version = "0.1.0"
+
+    with pytest.raises(TypeError, match="must be a CanonicalResourceName"):
+        LegacyClient()
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        "",
+        "legacy/client",
+        ".",
+        "..",
+        "LegacyClient",
+        "legacy client",
+        "legacy--client",
+        None,
+    ),
+)
+def test_canonical_resource_name_rejects_invalid_values(value: object):
+    with pytest.raises(ValueError, match="canonical resource name"):
+        tc.CanonicalResourceName(value)
+
+
+@pytest.mark.parametrize("field", ("publisher", "name", "version"))
+def test_library_instances_reject_constructor_metadata_overrides(field):
+    class A(tc.Library):
+        publisher = "example-devco"
+        version = "0.1.0"
+
+    with pytest.raises(
+        TypeError, match="manifest metadata must be declared on the class"
+    ):
+        A(**{field: "override"})
+
+
 def test_library_instances_do_not_accept_dependency_overrides():
     class A(tc.Library):
         publisher = "example-devco"
