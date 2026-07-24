@@ -88,12 +88,39 @@ def _segment(label: str, value: str) -> str:
     return value
 
 
+@dataclass(frozen=True, slots=True)
+class CanonicalResourceName:
+    """A validated external resource name for a Library with a legacy URI."""
+
+    value: str
+
+    def __post_init__(self) -> None:
+        value = _segment("canonical resource name", self.value)
+        if re.fullmatch(r"[a-z0-9]+(?:[-_][a-z0-9]+)*", value) is None:
+            raise ValueError(
+                "canonical resource name must contain only lowercase letters, "
+                "digits, and single '-' or '_' separators"
+            )
+
+    def __str__(self) -> str:
+        return self.value
+
+
 def _class_resource_name(cls: type) -> str:
     explicit = cls.__dict__.get("name")
     if explicit is not None:
         raise TypeError(
             "Library name overrides are not supported; derive the resource name from the class name"
         )
+
+    canonical = cls.__dict__.get("canonical_resource_name")
+    if canonical is not None:
+        if not isinstance(canonical, CanonicalResourceName):
+            raise TypeError(
+                "Library canonical_resource_name must be a CanonicalResourceName"
+            )
+        return canonical.value
+
     return _python_name_to_resource(cls.__name__)
 
 
