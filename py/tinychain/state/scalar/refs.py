@@ -50,11 +50,14 @@ def coerce_subject(subject: object) -> str:
     if isinstance(subject, IdRef):
         return subject.key()
 
-    if isinstance(subject, TCRef):
-        return coerce_subject(subject._form)
-
     if isinstance(subject, OpRef):
         return coerce_subject(subject.subject)
+
+    if isinstance(subject, TCRef):
+        inner = subject._form
+        if inner is subject:
+            raise TypeError(f"expected op subject to be str, got {type(subject).__name__}")
+        return coerce_subject(inner)
 
     try:
         from . import Scalar, form_of
@@ -79,7 +82,98 @@ def coerce_subject(subject: object) -> str:
 _coerce_subject = coerce_subject
 
 
-class OpRef:
+class TCRef:
+    __slots__ = ("_form",)
+
+    def __init__(self, form: "TCRef | Scalar | IdRef | Cond | While | ForEach"):
+        from . import Scalar
+
+        if isinstance(form, TCRef):
+            self._form = form._form
+            return
+
+        if not isinstance(form, (Scalar, IdRef, Cond, While, ForEach)):
+            raise TypeError("TCRef form must be TCRef, Scalar, IdRef, Cond, While, or ForEach")
+
+        self._form = form
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, TCRef) and self._form == other._form
+
+    def __hash__(self) -> int:
+        return hash((type(self._form), self._form))
+
+    def to_json(self) -> dict[str, object]:
+        from . import _json_of, form_of
+
+        raw = _json_of(form_of(self))
+        if not isinstance(raw, dict):
+            raise TypeError("TCRef form must encode to a map")
+        return raw
+
+    @staticmethod
+    def id(name: str) -> "TCRef":
+        return TCRef(IdRef(name))
+
+    @staticmethod
+    def from_json(obj: Any) -> "TCRef":
+        from . import Scalar
+
+        if not isinstance(obj, dict) or len(obj) != 1:
+            raise TypeError("expected a TCRef op map")
+
+        (key, value), = obj.items()
+        if not isinstance(key, str):
+            raise TypeError("expected TCRef map key to be a string")
+
+        if not _looks_like_tcref_map(obj):
+            raise TypeError("not a TCRef op map")
+
+        if key == TCREF_COND:
+            if not isinstance(value, list) or len(value) != 3:
+                raise TypeError("invalid Cond ref encoding")
+            raw_cond, raw_then, raw_or_else = value
+            cond = TCRef.from_json(raw_cond)
+            return TCRef(
+                Cond(
+                    cond,
+                    Scalar.from_json(raw_then),
+                    Scalar.from_json(raw_or_else),
+                )
+            )
+
+        if key == TCREF_WHILE:
+            if not isinstance(value, list) or len(value) != 3:
+                raise TypeError("invalid While ref encoding")
+            cond, op, state = value
+            return TCRef(
+                While(
+                    Scalar.from_json(cond),
+                    Scalar.from_json(op),
+                    Scalar.from_json(state),
+                )
+            )
+        if key == TCREF_FOR_EACH:
+            if not isinstance(value, list) or len(value) != 3:
+                raise TypeError("invalid ForEach ref encoding")
+            items, op, item_name = value
+            if not isinstance(item_name, str):
+                raise TypeError("expected ForEach item_name to be a string")
+            return TCRef(
+                ForEach(
+                    Scalar.from_json(items),
+                    Scalar.from_json(op),
+                    item_name,
+                )
+            )
+
+        if key.startswith("$") and isinstance(value, list) and not value:
+            return TCRef.id(key[1:])
+
+        return OpRef.from_json(obj)
+
+
+class OpRef(TCRef):
     """
     An IR-shaped OpRef encoding used by `tc-ir` and op-graph payloads.
 
@@ -89,6 +183,9 @@ class OpRef:
     __slots__ = ()
 
     METHOD: str = ""
+
+    def __init__(self):
+        self._form = self
 
     @property
     def method(self) -> str:
@@ -185,6 +282,7 @@ class GetOpRef(OpRef):
     def __init__(self, subject: str, key: "Scalar | Value | object" = None):
         from . import autobox
 
+        super().__init__()
         self._subject = coerce_subject(subject)
         self._key = autobox(key)
 
@@ -213,6 +311,7 @@ class PutOpRef(OpRef):
     def __init__(self, subject: str, key: "Scalar | Value | object", value: "Scalar | Value | object"):
         from . import autobox
 
+        super().__init__()
         self._subject = coerce_subject(subject)
         self._key = autobox(key)
         self._value = autobox(value)
@@ -242,6 +341,7 @@ class PostOpRef(OpRef):
     def __init__(self, subject: str, params: Mapping[str, "Scalar | Value | object"]):
         from . import autobox
 
+        super().__init__()
         encoded: dict[str, Scalar] = {}
         for key, value in _sorted_items(params):
             encoded[key] = autobox(value)
@@ -274,6 +374,7 @@ class DeleteOpRef(OpRef):
     def __init__(self, subject: str, key: "Scalar | Value | object" = None):
         from . import autobox
 
+        super().__init__()
         self._subject = coerce_subject(subject)
         self._key = autobox(key)
 
@@ -399,89 +500,3 @@ class ForEach:
             ]
         }
 
-
-class TCRef:
-    __slots__ = ("_form",)
-
-    def __init__(self, form: "OpRef | Scalar | IdRef | Cond | While | ForEach"):
-        from . import Scalar
-
-        if not isinstance(form, (OpRef, Scalar, IdRef, Cond, While, ForEach)):
-            raise TypeError("TCRef form must be OpRef, Scalar, IdRef, Cond, While, or ForEach")
-
-        self._form = form
-
-    def __eq__(self, other: object) -> bool:
-        return isinstance(other, TCRef) and self._form == other._form
-
-    def __hash__(self) -> int:
-        return hash((type(self._form), self._form))
-
-    def to_json(self) -> dict[str, object]:
-        from . import _json_of, form_of
-
-        raw = _json_of(form_of(self))
-        if not isinstance(raw, dict):
-            raise TypeError("TCRef form must encode to a map")
-        return raw
-
-    @staticmethod
-    def id(name: str) -> "TCRef":
-        return TCRef(IdRef(name))
-
-    @staticmethod
-    def from_json(obj: Any) -> "TCRef":
-        from . import Scalar
-
-        if not isinstance(obj, dict) or len(obj) != 1:
-            raise TypeError("expected a TCRef op map")
-
-        (key, value), = obj.items()
-        if not isinstance(key, str):
-            raise TypeError("expected TCRef map key to be a string")
-
-        if not _looks_like_tcref_map(obj):
-            raise TypeError("not a TCRef op map")
-
-        if key == TCREF_COND:
-            if not isinstance(value, list) or len(value) != 3:
-                raise TypeError("invalid Cond ref encoding")
-            raw_cond, raw_then, raw_or_else = value
-            cond = TCRef.from_json(raw_cond)
-            return TCRef(
-                Cond(
-                    cond,
-                    Scalar.from_json(raw_then),
-                    Scalar.from_json(raw_or_else),
-                )
-            )
-
-        if key == TCREF_WHILE:
-            if not isinstance(value, list) or len(value) != 3:
-                raise TypeError("invalid While ref encoding")
-            cond, op, state = value
-            return TCRef(
-                While(
-                    Scalar.from_json(cond),
-                    Scalar.from_json(op),
-                    Scalar.from_json(state),
-                )
-            )
-        if key == TCREF_FOR_EACH:
-            if not isinstance(value, list) or len(value) != 3:
-                raise TypeError("invalid ForEach ref encoding")
-            items, op, item_name = value
-            if not isinstance(item_name, str):
-                raise TypeError("expected ForEach item_name to be a string")
-            return TCRef(
-                ForEach(
-                    Scalar.from_json(items),
-                    Scalar.from_json(op),
-                    item_name,
-                )
-            )
-
-        if key.startswith("$") and isinstance(value, list) and not value:
-            return TCRef.id(key[1:])
-
-        return TCRef(OpRef.from_json(obj))

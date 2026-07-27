@@ -11,77 +11,6 @@ _ALLOWLIST_SEGMENTS: dict[str, set[str]] = {
     "state/scalar/refs.py": {"TCRef(IdRef(name))"},
 }
 
-_FORBIDDEN_BASE_SUBCLASS_NESTING: dict[str, set[str]] = {
-    "State": {
-        "Scalar",
-        "Collection",
-        "BTree",
-        "Value",
-        "Number",
-        "Bool",
-        "Map",
-        "Tuple",
-        "String",
-        "Link",
-        "Null",
-        "Integer",
-        "Float",
-        "Complex",
-        "I64",
-        "U64",
-        "F32",
-        "F64",
-        "C64",
-        "C128",
-        "Symbol",
-        "Iterable",
-        "Comparable",
-    },
-    "Scalar": {
-        "Value",
-        "Number",
-        "Bool",
-        "Map",
-        "Tuple",
-        "String",
-        "Link",
-        "Null",
-        "Integer",
-        "Float",
-        "Complex",
-        "I64",
-        "U64",
-        "F32",
-        "F64",
-        "C64",
-        "C128",
-        "Symbol",
-        "Iterable",
-        "Comparable",
-    },
-    "Value": {
-        "Number",
-        "Bool",
-        "Map",
-        "Tuple",
-        "String",
-        "Link",
-        "Null",
-        "Integer",
-        "Float",
-        "Complex",
-        "I64",
-        "U64",
-        "F32",
-        "F64",
-        "C64",
-        "C128",
-    },
-    "Collection": {"BTree"},
-    "OpRef": {"GetOpRef", "PutOpRef", "PostOpRef", "DeleteOpRef"},
-    "OpDef": {"GetOpDef", "PutOpDef", "PostOpDef", "DeleteOpDef"},
-}
-
 
 def _call_name(node: ast.AST) -> str | None:
     if isinstance(node, ast.Name):
@@ -91,8 +20,44 @@ def _call_name(node: ast.AST) -> str | None:
     return None
 
 
+def _collect_subclasses_by_base() -> dict[str, set[str]]:
+    direct_children: dict[str, set[str]] = {}
+    all_classes: set[str] = set()
+
+    for path in sorted(_SRC_ROOT.rglob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+
+            class_name = node.name
+            all_classes.add(class_name)
+            for base in node.bases:
+                base_name = _call_name(base)
+                if base_name is None:
+                    continue
+                direct_children.setdefault(base_name, set()).add(class_name)
+
+    subclasses_by_base: dict[str, set[str]] = {name: set() for name in all_classes}
+
+    for base in all_classes:
+        visited: set[str] = set()
+        stack = list(direct_children.get(base, ()))
+        while stack:
+            child = stack.pop()
+            if child in visited:
+                continue
+            visited.add(child)
+            stack.extend(direct_children.get(child, ()))
+        subclasses_by_base[base] = visited
+
+    return subclasses_by_base
+
+
 def test_symbolic_instantiation_style_guards() -> None:
     violations: list[str] = []
+    subclasses_by_base = _collect_subclasses_by_base()
 
     for path in sorted(_SRC_ROOT.rglob("*.py")):
         relative_path = path.relative_to(_SRC_ROOT).as_posix()
@@ -111,11 +76,11 @@ def test_symbolic_instantiation_style_guards() -> None:
                 violations.append(f"{relative_path}:{line}: {segment}")
                 continue
 
-            if name in _FORBIDDEN_BASE_SUBCLASS_NESTING and node.args:
+            if name in subclasses_by_base and node.args:
                 first_arg = node.args[0]
                 if isinstance(first_arg, ast.Call):
                     inner_name = _call_name(first_arg.func)
-                    if inner_name in _FORBIDDEN_BASE_SUBCLASS_NESTING[name]:
+                    if inner_name in subclasses_by_base[name]:
                         violations.append(f"{relative_path}:{line}: {segment}")
                         continue
 

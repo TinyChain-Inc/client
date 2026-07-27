@@ -40,12 +40,10 @@ class State:
 
     @classmethod
     def _from_opref(cls, opref, *, ctx: "Context | None" = None):
-        from .scalar import TCRef
-
         try:
             if ctx is None:
-                return cls(ref=TCRef(opref))
-            return cls(ref=TCRef(opref), ctx=ctx)
+                return cls(ref=opref)
+            return cls(ref=opref, ctx=ctx)
         except TypeError:
             state = cls(opref)
             if isinstance(state, State):
