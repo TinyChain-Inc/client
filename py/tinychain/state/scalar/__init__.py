@@ -14,20 +14,6 @@ from .opdef import (
     PutOpDef,
 )
 from .ops import Delete, Get, Op, Post, Put
-from .refs import (
-    Cond,
-    DeleteOpRef,
-    ForEach,
-    GetOpRef,
-    IdRef,
-    OpRef,
-    PostOpRef,
-    PutOpRef,
-    TCRef,
-    While,
-    _looks_like_tcref_map,
-    tcref_form_of,
-)
 
 if TYPE_CHECKING:
     from ..context import Context
@@ -50,17 +36,15 @@ SCALAR_ROOT_URI: URI = uri(State, "scalar")
 SCALAR_OP_ROOT_URI: URI = uri(SCALAR_ROOT_URI, "op")
 SCALAR_REFLECT_ROOT_URI: URI = uri(SCALAR_ROOT_URI, "reflect")
 SCALAR_OP_REFLECT_ROOT_URI: URI = uri(SCALAR_OP_ROOT_URI, "reflect")
-
-OPDEF_ROOT_PATH: str = path(SCALAR_OP_ROOT_URI)
-OPDEF_GET_PATH: str = path(SCALAR_OP_ROOT_URI, "get")
-OPDEF_PUT_PATH: str = path(SCALAR_OP_ROOT_URI, "put")
-OPDEF_POST_PATH: str = path(SCALAR_OP_ROOT_URI, "post")
-OPDEF_DELETE_PATH: str = path(SCALAR_OP_ROOT_URI, "delete")
-SCALAR_REFLECT_CLASS_PATH: str = path(SCALAR_REFLECT_ROOT_URI, "class")
-SCALAR_REFLECT_REF_PARTS_PATH: str = path(SCALAR_REFLECT_ROOT_URI, "ref_parts")
-OPDEF_REFLECT_FORM_PATH: str = path(SCALAR_OP_REFLECT_ROOT_URI, "form")
-OPDEF_REFLECT_LAST_ID_PATH: str = path(SCALAR_OP_REFLECT_ROOT_URI, "last_id")
-OPDEF_REFLECT_SCALARS_PATH: str = path(SCALAR_OP_REFLECT_ROOT_URI, "scalars")
+OPDEF_GET_URI: URI = uri(SCALAR_OP_ROOT_URI, "get")
+OPDEF_PUT_URI: URI = uri(SCALAR_OP_ROOT_URI, "put")
+OPDEF_POST_URI: URI = uri(SCALAR_OP_ROOT_URI, "post")
+OPDEF_DELETE_URI: URI = uri(SCALAR_OP_ROOT_URI, "delete")
+SCALAR_REFLECT_CLASS_URI: URI = uri(SCALAR_REFLECT_ROOT_URI, "class")
+SCALAR_REFLECT_REF_PARTS_URI: URI = uri(SCALAR_REFLECT_ROOT_URI, "ref_parts")
+OPDEF_REFLECT_FORM_URI: URI = uri(SCALAR_OP_REFLECT_ROOT_URI, "form")
+OPDEF_REFLECT_LAST_ID_URI: URI = uri(SCALAR_OP_REFLECT_ROOT_URI, "last_id")
+OPDEF_REFLECT_SCALARS_URI: URI = uri(SCALAR_OP_REFLECT_ROOT_URI, "scalars")
 
 
 def _sorted_items(obj: Mapping[str, Any]) -> list[tuple[str, Any]]:
@@ -116,8 +100,6 @@ def autobox(
             raise TypeError(f"unsupported runtime OpRef type {type(op).__name__}")
         return _scalar_like(obj, value=obj, ctx=value_ctx)
 
-    if isinstance(obj, Scalar):
-        return obj
     runtime_op = OpRef.from_runtime(obj)
     if runtime_op is not None:
         return _typed_from_op_ref(runtime_op)
@@ -125,8 +107,8 @@ def autobox(
         return Scalar(form_of(obj))
     if isinstance(obj, URI):
         return Scalar(value_link(obj))
-    if isinstance(obj, TCRef):
-        return _typed_from_tcref(obj)
+    if isinstance(obj, OpRef):
+        return _typed_from_op_ref(obj)
     if isinstance(obj, Cond):
         return _typed_from_cond(obj)
     if isinstance(obj, While):
@@ -136,11 +118,13 @@ def autobox(
     if isinstance(obj, ForEach):
         return Scalar(ref=obj)
     if isinstance(obj, IdRef):
-        return Scalar(ref=obj)
+        return Symbol(ref=obj)
+    if isinstance(obj, TCRef):
+        return _typed_from_tcref(obj)
+    if isinstance(obj, Scalar):
+        return obj
     if isinstance(obj, OpDef):
         return Scalar(obj)
-    if isinstance(obj, OpRef):
-        return _typed_from_op_ref(obj)
     if isinstance(obj, dict):
         return map_of({k: autobox(v) for k, v in _sorted_items(obj)})
     if isinstance(obj, (list, tuple)):
@@ -435,10 +419,10 @@ def _typed_from_op_ref(op_ref: OpRef) -> Scalar:
     ref = op_ref
 
     exact_dispatch: dict[str, type[Scalar]] = {
-        SCALAR_REFLECT_REF_PARTS_PATH: Tuple,
-        OPDEF_REFLECT_FORM_PATH: Tuple,
-        OPDEF_REFLECT_SCALARS_PATH: Tuple,
-        OPDEF_REFLECT_LAST_ID_PATH: String,
+        path(SCALAR_REFLECT_REF_PARTS_URI): Tuple,
+        path(OPDEF_REFLECT_FORM_URI): Tuple,
+        path(OPDEF_REFLECT_SCALARS_URI): Tuple,
+        path(OPDEF_REFLECT_LAST_ID_URI): String,
     }
     wrapper = exact_dispatch.get(subject)
     if wrapper is not None:
@@ -566,19 +550,19 @@ class Scalar(State):
         return rtype._post_ref(subject, {payload_key: payload_value}, ctx=self._ctx)
 
     def class_(self) -> "Scalar":
-        return self._reflect(SCALAR_REFLECT_CLASS_PATH, "scalar", self, rtype=Scalar)
+        return self._reflect(path(SCALAR_REFLECT_CLASS_URI), "scalar", self, rtype=Scalar)
 
     def ref_parts(self) -> "Tuple":
-        return cast(Tuple, self._reflect(SCALAR_REFLECT_REF_PARTS_PATH, "scalar", self, rtype=Tuple))
+        return cast(Tuple, self._reflect(path(SCALAR_REFLECT_REF_PARTS_URI), "scalar", self, rtype=Tuple))
 
     def reflect_form(self) -> "Tuple":
-        return cast(Tuple, self._reflect(OPDEF_REFLECT_FORM_PATH, "op", self, rtype=Tuple))
+        return cast(Tuple, self._reflect(path(OPDEF_REFLECT_FORM_URI), "op", self, rtype=Tuple))
 
     def reflect_last_id(self) -> "String":
-        return cast(String, self._reflect(OPDEF_REFLECT_LAST_ID_PATH, "op", self, rtype=String))
+        return cast(String, self._reflect(path(OPDEF_REFLECT_LAST_ID_URI), "op", self, rtype=String))
 
     def reflect_scalars(self) -> "Tuple":
-        return cast(Tuple, self._reflect(OPDEF_REFLECT_SCALARS_PATH, "op", self, rtype=Tuple))
+        return cast(Tuple, self._reflect(path(OPDEF_REFLECT_SCALARS_URI), "op", self, rtype=Tuple))
 
     @staticmethod
     def from_json(obj: Any) -> "Scalar":
@@ -597,7 +581,7 @@ class Scalar(State):
 
             if len(obj) == 1:
                 (key, _), = obj.items()
-                if isinstance(key, str) and key.startswith(OPDEF_ROOT_PATH):
+                if isinstance(key, str) and key.startswith(path(SCALAR_OP_ROOT_URI)):
                     return Scalar(OpDef.from_json(obj))
 
             # Decode TCRef/OpRef maps before generic Value maps to avoid
@@ -616,6 +600,23 @@ class Scalar(State):
             return map_of({k: Scalar.from_json(v) for k, v in _sorted_items(obj)})
 
         raise TypeError(f"cannot decode Scalar from {type(obj).__name__}")
+
+
+# Import ref types after Scalar is defined so TCRef can subclass Scalar without a cycle.
+from .refs import (
+    Cond,
+    DeleteOpRef,
+    ForEach,
+    GetOpRef,
+    IdRef,
+    OpRef,
+    PostOpRef,
+    PutOpRef,
+    TCRef,
+    While,
+    _looks_like_tcref_map,
+    tcref_form_of,
+)
 
 
 def _post_ref_call(

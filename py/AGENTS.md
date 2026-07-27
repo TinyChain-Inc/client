@@ -105,6 +105,10 @@ staying thin and well-documented for new users.
 - Keep symbolic wrappers focused on IR shape and serialization round-trips;
   runtime arithmetic/comparison/container behaviors belong on typed wrappers
   (`tc.Number`, `tc.Bool`, `tc.Tuple`, `tc.Map`, `tc.String`) and protocols.
+- Avoid shared-helper type ladders (`if/elif isinstance(...)`) for runtime
+  behavior dispatch. Prefer type-specific implementation on the owning wrapper
+  class/module. If a type ladder is unavoidable at a decode/normalization
+  boundary, isolate it in one explicit dispatch function and keep it small.
 - Preserve concrete method type information for symbolic operation forms.
   Do not erase `Get/Put/Post/Delete` operation refs/defs behind parent-class
   method strings or generic `args` shape checks when constructing, validating,

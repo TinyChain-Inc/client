@@ -17,6 +17,20 @@ _CANONICAL_PATH_PREFIXES: tuple[str, ...] = (
 )
 
 _ALLOWED_TRY_IMPORT_ROOTS: tuple[str, ...] = ("tensorflow", "torch", "jax")
+_TYPE_LADDER_ALLOWED_FUNCTIONS: frozenset[str] = frozenset(
+    {
+        # Explicit encode/decode boundaries.
+        "autobox",
+        "_json_of",
+        "from_json",
+        "_value_runtime",
+        "_scalar_like",
+        # Explicit route/result normalization boundaries.
+        "_compile_route_rtype",
+        "_compile_opdef_route",
+        "_to_opref",
+    }
+)
 
 
 def _is_state_root_uri_call(node: ast.Call) -> bool:
@@ -294,3 +308,82 @@ def test_state_scalar_path_naming_uses_constants_not_tag_or_path_helpers() -> No
                         violations.append(f"{relative_path}:{line}: {target.id}")
 
     assert not violations, "forbidden state/scalar path naming patterns found:\n" + "\n".join(violations)
+
+
+def _is_isinstance_call(test: ast.AST) -> bool:
+    if not isinstance(test, ast.Call):
+        return False
+
+    name = _call_name(test.func)
+    return name == "isinstance" and len(test.args) >= 1
+
+
+def _ladder_subject_key(test: ast.AST) -> str | None:
+    if not _is_isinstance_call(test):
+        return None
+
+    assert isinstance(test, ast.Call)
+    subject = test.args[0]
+    if not isinstance(subject, (ast.Name, ast.Attribute)):
+        return None
+
+    return ast.dump(subject)
+
+
+def _is_elif(node: ast.If, parent_by_child: dict[ast.AST, ast.AST]) -> bool:
+    parent = parent_by_child.get(node)
+    if not isinstance(parent, ast.If):
+        return False
+    return bool(parent.orelse) and parent.orelse[0] is node
+
+
+def _iter_if_ladder(node: ast.If) -> list[ast.If]:
+    ladder = [node]
+    cursor = node
+    while len(cursor.orelse) == 1 and isinstance(cursor.orelse[0], ast.If):
+        cursor = cursor.orelse[0]
+        ladder.append(cursor)
+    return ladder
+
+
+def test_type_ladder_dispatch_is_banned_outside_explicit_dispatch_boundaries() -> None:
+    violations: list[str] = []
+
+    for path in sorted(_SRC_ROOT.rglob("*.py")):
+        relative_path = path.relative_to(_SRC_ROOT).as_posix()
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        parent_by_child = _build_parent_map(tree)
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.If):
+                continue
+            if _is_elif(node, parent_by_child):
+                continue
+
+            ladder = _iter_if_ladder(node)
+            if len(ladder) < 3:
+                continue
+
+            keys = [_ladder_subject_key(branch.test) for branch in ladder]
+            if any(key is None for key in keys):
+                continue
+            if len(set(keys)) != 1:
+                continue
+
+            owner = parent_by_child.get(node)
+            while owner is not None and not isinstance(owner, ast.FunctionDef):
+                owner = parent_by_child.get(owner)
+
+            owner_name = owner.name if isinstance(owner, ast.FunctionDef) else None
+            if owner_name in _TYPE_LADDER_ALLOWED_FUNCTIONS:
+                continue
+
+            line = getattr(node, "lineno", 0)
+            segment = ast.get_source_segment(source, node) or "if ..."
+            violations.append(f"{relative_path}:{line}: {segment}")
+
+    assert not violations, (
+        "forbidden shared-helper type-dispatch ladders found; move behavior to type-specific implementations:\n"
+        + "\n".join(violations)
+    )

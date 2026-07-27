@@ -140,10 +140,6 @@ def _record_subject_token(subject: str, out: set[str], subject_ids: set[str]) ->
 def _collect_ref_ids_from_form(node: object, out: set[str], subject_ids: set[str]) -> None:
     from . import OpDef, Scalar, form_of
 
-    if isinstance(node, Scalar):
-        _collect_ref_ids_from_form(form_of(node), out, subject_ids)
-        return
-
     if isinstance(node, OpRef):
         _record_subject_token(node.subject, out, subject_ids)
         _collect_ref_ids_from_form(node.args, out, subject_ids)
@@ -158,6 +154,10 @@ def _collect_ref_ids_from_form(node: object, out: set[str], subject_ids: set[str
         if ref_form is node:
             return
         _collect_ref_ids_from_form(ref_form, out, subject_ids)
+        return
+
+    if isinstance(node, Scalar):
+        _collect_ref_ids_from_form(form_of(node), out, subject_ids)
         return
 
     runtime_op = OpRef.from_runtime(node)

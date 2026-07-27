@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Iterator, Sequence
 
+from ...uri import path
+
 if TYPE_CHECKING:
     from . import Scalar
 
@@ -42,19 +44,19 @@ class OpDef:
         return Scalar(ref=PostOpRef(subject, {"op": self}))
 
     def reflect_form(self) -> "Scalar":
-        from . import OPDEF_REFLECT_FORM_PATH
+        from . import OPDEF_REFLECT_FORM_URI
 
-        return self._reflect(OPDEF_REFLECT_FORM_PATH)
+        return self._reflect(path(OPDEF_REFLECT_FORM_URI))
 
     def reflect_last_id(self) -> "Scalar":
-        from . import OPDEF_REFLECT_LAST_ID_PATH
+        from . import OPDEF_REFLECT_LAST_ID_URI
 
-        return self._reflect(OPDEF_REFLECT_LAST_ID_PATH)
+        return self._reflect(path(OPDEF_REFLECT_LAST_ID_URI))
 
     def reflect_scalars(self) -> "Scalar":
-        from . import OPDEF_REFLECT_SCALARS_PATH
+        from . import OPDEF_REFLECT_SCALARS_URI
 
-        return self._reflect(OPDEF_REFLECT_SCALARS_PATH)
+        return self._reflect(path(OPDEF_REFLECT_SCALARS_URI))
 
     def class_(self) -> "Scalar":
         from . import Scalar
@@ -66,7 +68,7 @@ class OpDef:
 
     @staticmethod
     def from_json(obj: Any) -> "OpDef":
-        from . import OPDEF_DELETE_PATH, OPDEF_GET_PATH, OPDEF_POST_PATH, OPDEF_PUT_PATH, _decode_form
+        from . import OPDEF_DELETE_URI, OPDEF_GET_URI, OPDEF_POST_URI, OPDEF_PUT_URI, _decode_form
 
         if not isinstance(obj, dict) or len(obj) != 1:
             raise TypeError("expected an OpDef map")
@@ -75,7 +77,7 @@ class OpDef:
         if not isinstance(key, str):
             raise TypeError("expected OpDef map key to be a string")
 
-        if key == OPDEF_GET_PATH:
+        if key == path(OPDEF_GET_URI):
             if not isinstance(value, list) or len(value) != 2:
                 raise TypeError("invalid GET opdef encoding")
             key_name, form = value
@@ -83,7 +85,7 @@ class OpDef:
                 raise TypeError("expected GET key name to be a string")
             return GetOpDef(key_name, _decode_form(form))
 
-        if key == OPDEF_PUT_PATH:
+        if key == path(OPDEF_PUT_URI):
             if not isinstance(value, list) or len(value) != 3:
                 raise TypeError("invalid PUT opdef encoding")
             key_name, value_name, form = value
@@ -91,10 +93,10 @@ class OpDef:
                 raise TypeError("expected PUT key/value names to be strings")
             return PutOpDef(key_name, value_name, _decode_form(form))
 
-        if key == OPDEF_POST_PATH:
+        if key == path(OPDEF_POST_URI):
             return PostOpDef(_decode_form(value))
 
-        if key == OPDEF_DELETE_PATH:
+        if key == path(OPDEF_DELETE_URI):
             if not isinstance(value, list) or len(value) != 2:
                 raise TypeError("invalid DELETE opdef encoding")
             key_name, form = value
@@ -124,9 +126,9 @@ class GetOpDef(OpDef):
         return self._form
 
     def to_json(self) -> dict[str, object]:
-        from . import OPDEF_GET_PATH, _encode_form
+        from . import OPDEF_GET_URI, _encode_form
 
-        return {OPDEF_GET_PATH: [self.key, _encode_form(self.form)]}
+        return {path(OPDEF_GET_URI): [self.key, _encode_form(self.form)]}
 
 
 class PutOpDef(OpDef):
@@ -149,9 +151,9 @@ class PutOpDef(OpDef):
         return self._form
 
     def to_json(self) -> dict[str, object]:
-        from . import OPDEF_PUT_PATH, _encode_form
+        from . import OPDEF_PUT_URI, _encode_form
 
-        return {OPDEF_PUT_PATH: [self.key, self.value, _encode_form(self.form)]}
+        return {path(OPDEF_PUT_URI): [self.key, self.value, _encode_form(self.form)]}
 
 
 class PostOpDef(OpDef):
@@ -169,9 +171,9 @@ class PostOpDef(OpDef):
         return self._form
 
     def to_json(self) -> dict[str, object]:
-        from . import OPDEF_POST_PATH, _encode_form
+        from . import OPDEF_POST_URI, _encode_form
 
-        return {OPDEF_POST_PATH: _encode_form(self.form)}
+        return {path(OPDEF_POST_URI): _encode_form(self.form)}
 
 
 class DeleteOpDef(OpDef):
@@ -193,6 +195,6 @@ class DeleteOpDef(OpDef):
         return self._form
 
     def to_json(self) -> dict[str, object]:
-        from . import OPDEF_DELETE_PATH, _encode_form
+        from . import OPDEF_DELETE_URI, _encode_form
 
-        return {OPDEF_DELETE_PATH: [self.key, _encode_form(self.form)]}
+        return {path(OPDEF_DELETE_URI): [self.key, _encode_form(self.form)]}

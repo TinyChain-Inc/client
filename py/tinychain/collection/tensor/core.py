@@ -444,16 +444,16 @@ class Tensor(Comparable):
 
         dtype = self.dtype
         if isinstance(dtype, str):
-            from ...state.value import Number as ValueNumber
+            from ...state.value import Number
 
             normalized = dtype.strip().lower()
             dtype = {
-                "f32": path(ValueNumber, "float", "32"),
-                "float32": path(ValueNumber, "float", "32"),
-                "f64": path(ValueNumber, "float", "64"),
-                "float64": path(ValueNumber, "float", "64"),
-                "u64": path(ValueNumber, "uint", "64"),
-                "uint64": path(ValueNumber, "uint", "64"),
+                "f32": path(Number, "float", "32"),
+                "float32": path(Number, "float", "32"),
+                "f64": path(Number, "float", "64"),
+                "float64": path(Number, "float", "64"),
+                "u64": path(Number, "uint", "64"),
+                "uint64": path(Number, "uint", "64"),
             }.get(normalized, dtype)
 
         return {

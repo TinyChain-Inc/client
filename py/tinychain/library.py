@@ -812,7 +812,7 @@ def _inline_opref_refs(opdef: OpDef) -> OpDef:
         scalar_form = form_of(scalar)
         if isinstance(scalar_form, TCRef):
             ref_form = form_of(scalar_form)
-            if isinstance(ref_form, Scalar):
+            if isinstance(ref_form, Scalar) and not isinstance(ref_form, TCRef):
                 op_scalar = ref_form
             else:
                 op_scalar = None

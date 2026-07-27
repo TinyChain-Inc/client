@@ -3,14 +3,14 @@ from __future__ import annotations
 import json
 
 from .state.base import State
-from .state.value import Number as ValueNumber
+from .state.value import Number
 from .uri import path, uri
 
 
 _COLLECTION_TENSOR = path(uri(State, "collection", "tensor"))
-_DTYPE_F32 = path(ValueNumber, "float", "32")
-_DTYPE_F64 = path(ValueNumber, "float", "64")
-_DTYPE_U64 = path(ValueNumber, "uint", "64")
+_DTYPE_F32 = path(Number, "float", "32")
+_DTYPE_F64 = path(Number, "float", "64")
+_DTYPE_U64 = path(Number, "uint", "64")
 
 
 def _decode_tensor(payload: object) -> object:
@@ -93,9 +93,9 @@ def decode_payload(payload: object) -> object:
     if isinstance(unwrapped, dict):
         if len(unwrapped) == 1:
             (key, _value), = unwrapped.items()
-            from .state.scalar import OPDEF_ROOT_PATH
+            from .state.scalar import SCALAR_OP_ROOT_URI
 
-            if isinstance(key, str) and key.startswith(OPDEF_ROOT_PATH):
+            if isinstance(key, str) and key.startswith(path(SCALAR_OP_ROOT_URI)):
                 try:
                     return OpDef.from_json(unwrapped)
                 except (TypeError, ValueError):

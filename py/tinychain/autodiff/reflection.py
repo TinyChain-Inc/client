@@ -9,11 +9,9 @@ from autodiff — preserving domain neutrality.
 from __future__ import annotations
 
 from ..graph_reflection import ReflectionError, TypeSpec, TypedValueRef
-from ..state.base import State
-from ..uri import path, uri
+from ..uri import path
+from .constants import TENSOR_TYPESPEC_CLASS_URI
 from .reverse import DerivativeProgram
-
-TENSOR_TYPESPEC_CLASS_URI = path(uri(State, "collection", "tensor"))
 
 
 def tensor_typespec_to_type_spec(typespec_dict: dict) -> TypeSpec:
@@ -36,7 +34,7 @@ def tensor_typespec_to_type_spec(typespec_dict: dict) -> TypeSpec:
             "invalid_type_spec",
             f"tensor_typespec must be a dict, got {type(typespec_dict).__name__}",
         )
-    return TypeSpec(class_uri=TENSOR_TYPESPEC_CLASS_URI, params=dict(typespec_dict))
+    return TypeSpec(class_uri=path(TENSOR_TYPESPEC_CLASS_URI), params=dict(typespec_dict))
 
 
 def reflect_derivative_program(program: DerivativeProgram) -> list[TypedValueRef]:
@@ -64,7 +62,7 @@ def reflect_derivative_program(program: DerivativeProgram) -> list[TypedValueRef
         if node.output_typespec is not None:
             value_type = tensor_typespec_to_type_spec(node.output_typespec)
         else:
-            value_type = TypeSpec(class_uri=TENSOR_TYPESPEC_CLASS_URI, params={})
+            value_type = TypeSpec(class_uri=path(TENSOR_TYPESPEC_CLASS_URI), params={})
         ref = TypedValueRef(
             namespace=namespace,
             value=node.output_value_id,

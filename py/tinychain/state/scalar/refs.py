@@ -3,20 +3,20 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
 from ..base import State
+from . import Scalar
 from ...uri import URI, path, uri
 
 if TYPE_CHECKING:
-    from . import OpDef, Scalar
+    from . import OpDef
     from ..value import Value
 
 
 TCREF_ROOT_URI: URI = uri(State, "scalar", "ref")
 OPREF_ROOT_URI: URI = uri(TCREF_ROOT_URI, "op")
-
-TCREF_COND_PATH: str = path(TCREF_ROOT_URI, "cond")
-TCREF_WHILE_PATH: str = path(TCREF_ROOT_URI, "while")
-TCREF_FOR_EACH_PATH: str = path(TCREF_ROOT_URI, "for_each")
-OPREF_DELETE_PATH: str = path(OPREF_ROOT_URI, "delete")
+TCREF_COND_URI: URI = uri(TCREF_ROOT_URI, "cond")
+TCREF_WHILE_URI: URI = uri(TCREF_ROOT_URI, "while")
+TCREF_FOR_EACH_URI: URI = uri(TCREF_ROOT_URI, "for_each")
+OPREF_DELETE_URI: URI = uri(OPREF_ROOT_URI, "delete")
 
 
 def _sorted_items(obj: Mapping[str, Any]) -> list[tuple[str, Any]]:
@@ -28,24 +28,25 @@ def _looks_like_tcref_map(obj: Mapping[str, object]) -> bool:
         return False
 
     (key, _value), = obj.items()
-    return isinstance(key, str) and (key == OPREF_DELETE_PATH or key.startswith("/") or key.startswith("$"))
+    return isinstance(key, str) and (key == path(OPREF_DELETE_URI) or key.startswith("/") or key.startswith("$"))
 
 
-class TCRef:
-    __slots__ = ("_form",)
+class TCRef(Scalar):
     __uri__: URI = TCREF_ROOT_URI
 
     def __init__(self, form: "TCRef | Scalar"):
-        from . import Scalar
+        if form is self:
+            Scalar.__init__(self, ref=self)
+            return
 
         if isinstance(form, TCRef):
-            self._form = form._form
+            super().__init__(ref=form._form, ctx=form._ctx)
             return
 
         if not isinstance(form, Scalar):
             raise TypeError("TCRef form must be TCRef or Scalar")
 
-        self._form = form
+        super().__init__(form, ctx=form._ctx)
 
     def __eq__(self, other: object) -> bool:
         return isinstance(other, TCRef) and self._form == other._form
@@ -75,7 +76,7 @@ class TCRef:
         if not _looks_like_tcref_map(obj):
             raise TypeError("not a TCRef op map")
 
-        if key == TCREF_COND_PATH:
+        if key == path(TCREF_COND_URI):
             if not isinstance(value, list) or len(value) != 3:
                 raise TypeError("invalid Cond ref encoding")
             raw_cond, raw_then, raw_or_else = value
@@ -86,7 +87,7 @@ class TCRef:
                 Scalar.from_json(raw_or_else),
             )
 
-        if key == TCREF_WHILE_PATH:
+        if key == path(TCREF_WHILE_URI):
             if not isinstance(value, list) or len(value) != 3:
                 raise TypeError("invalid While ref encoding")
             cond, op, state = value
@@ -95,7 +96,7 @@ class TCRef:
                 Scalar.from_json(op),
                 Scalar.from_json(state),
             )
-        if key == TCREF_FOR_EACH_PATH:
+        if key == path(TCREF_FOR_EACH_URI):
             if not isinstance(value, list) or len(value) != 3:
                 raise TypeError("invalid ForEach ref encoding")
             items, op, item_name = value
@@ -120,13 +121,12 @@ class OpRef(TCRef):
     This is distinct from the runtime `tinychain.OpRef` request stub (HTTP method/path/body).
     """
 
-    __slots__ = ()
     __uri__: URI = OPREF_ROOT_URI
 
     METHOD: str = ""
 
     def __init__(self):
-        self._form = self
+        super().__init__(self)
 
     @property
     def method(self) -> str:
@@ -185,7 +185,7 @@ class OpRef(TCRef):
             raise TypeError("expected an OpRef map")
 
         (key, value), = obj.items()
-        if key == OPREF_DELETE_PATH:
+        if key == path(OPREF_DELETE_URI):
             if not isinstance(value, list) or len(value) != 2:
                 raise TypeError("invalid DELETE opref encoding")
             subject, raw_key = value
@@ -213,8 +213,6 @@ class OpRef(TCRef):
 
 
 class GetOpRef(OpRef):
-    __slots__ = ("_subject", "_key")
-
     METHOD = "GET"
 
     def __init__(self, subject: str, key: "Scalar | Value | object" = None):
@@ -239,8 +237,6 @@ class GetOpRef(OpRef):
 
 
 class PutOpRef(OpRef):
-    __slots__ = ("_subject", "_key", "_value")
-
     METHOD = "PUT"
 
     def __init__(self, subject: str, key: "Scalar | Value | object", value: "Scalar | Value | object"):
@@ -266,8 +262,6 @@ class PutOpRef(OpRef):
 
 
 class PostOpRef(OpRef):
-    __slots__ = ("_subject", "_params")
-
     METHOD = "POST"
 
     def __init__(self, subject: str, params: Mapping[str, "Scalar | Value | object"]):
@@ -296,8 +290,6 @@ class PostOpRef(OpRef):
 
 
 class DeleteOpRef(OpRef):
-    __slots__ = ("_subject", "_key")
-
     METHOD = "DELETE"
 
     def __init__(self, subject: str, key: "Scalar | Value | object" = None):
@@ -318,14 +310,12 @@ class DeleteOpRef(OpRef):
         return self._key.to_json()
 
     def to_json(self) -> dict[str, object]:
-        return {OPREF_DELETE_PATH: [self.subject, self.args]}
+        return {path(OPREF_DELETE_URI): [self.subject, self.args]}
 
 
 class IdRef(TCRef):
-    __slots__ = ("name",)
-
     def __init__(self, name: str):
-        self._form = self
+        super().__init__(self)
         self.name = name
 
     def __eq__(self, other: object) -> bool:
@@ -339,15 +329,11 @@ class IdRef(TCRef):
 
 
 class ControlRef(TCRef):
-    __slots__ = ()
-
     def __init__(self):
-        self._form = self
+        super().__init__(self)
 
 
 class While(ControlRef):
-    __slots__ = ("cond", "op", "state", "_ctx")
-
     def __init__(self, cond: "Scalar", op: "Scalar", state: "Scalar"):
         super().__init__()
         self.cond = cond
@@ -368,7 +354,7 @@ class While(ControlRef):
 
     def to_json(self) -> dict[str, object]:
         return {
-            TCREF_WHILE_PATH: [
+            path(TCREF_WHILE_URI): [
                 self.cond.to_json(),
                 self.op.to_json(),
                 self.state.to_json(),
@@ -377,8 +363,6 @@ class While(ControlRef):
 
 
 class Cond(ControlRef):
-    __slots__ = ("cond", "then", "or_else", "_ctx")
-
     def __init__(self, cond: "TCRef", then: "Scalar", or_else: "Scalar"):
         super().__init__()
         self.cond = cond
@@ -399,7 +383,7 @@ class Cond(ControlRef):
 
     def to_json(self) -> dict[str, object]:
         return {
-            TCREF_COND_PATH: [
+            path(TCREF_COND_URI): [
                 self.cond.to_json(),
                 self.then.to_json(),
                 self.or_else.to_json(),
@@ -408,8 +392,6 @@ class Cond(ControlRef):
 
 
 class ForEach(ControlRef):
-    __slots__ = ("items", "op", "item_name", "_ctx")
-
     def __init__(self, items: "Scalar", op: "Scalar", item_name: str):
         super().__init__()
         self.items = items
@@ -430,7 +412,7 @@ class ForEach(ControlRef):
 
     def to_json(self) -> dict[str, object]:
         return {
-            TCREF_FOR_EACH_PATH: [
+            path(TCREF_FOR_EACH_URI): [
                 self.items.to_json(),
                 self.op.to_json(),
                 self.item_name,
