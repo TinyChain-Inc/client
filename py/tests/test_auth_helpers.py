@@ -87,16 +87,6 @@ def test_mint_rjwt_token_imports_falcon_secret_key(monkeypatch):
     assert token.secret_key_b64 == secret
 
 
-def test_mint_rjwt_token_rejects_obsolete_cli_options():
-    with pytest.raises(ValueError):
-        tc.auth.mint_rjwt_token(
-            host="http://127.0.0.1:8702",
-            actor_id="a",
-            libs=["/lib/example/a/0.1.0"],
-            binary="/tmp/rjwt_install_token",
-        )
-
-
 def test_mint_rjwt_token_requires_claims():
     with pytest.raises(ValueError):
         tc.auth.mint_rjwt_token(host="http://127.0.0.1:8702", actor_id="a", libs=[])

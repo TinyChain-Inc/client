@@ -119,12 +119,38 @@ staying thin and well-documented for new users.
   `_post_ref`). Do not hand-write `TCRef(GetOpRef(...))`,
   `TCRef(PostOpRef(...))`, etc. in wrapper modules such as
   `collection/tensor/core.py`.
+- Do not use or reintroduce `TCRef.id(...)`. Construct id refs directly via
+  `IdRef(name)`, and keep `tc.state.id(name)` as the user-facing helper that
+  returns a typed symbolic scalar ref.
 - Keep URI values structured until the serialization/transport boundary; avoid
   extracting `.path` in symbolic wrappers.
 - In runtime/client modules, construct canonical TinyChain resource paths only
   through URI helpers (`tc.uri`, `tinychain.uri.path`, etc.). Do not hardcode
   literal `/state/...`, `/service/...`, `/lib/...`, `/class/...`, `/host/...`,
   or `/healthz...` strings outside tests/doc prose.
+- For native `/state/...` resources, define exactly one root URI on the owning
+  class/module (for example `State.__uri__`) and derive all descendants through
+  typed subjects (`uri(Type, ...)`, `path(Type, ...)`, `uri(root_uri, ...)`).
+  Do not scatter repeated `path("state", ...)`/`uri("state", ...)` constants
+  across runtime modules.
+- Ban `try: import ...` / `try: from ... import ...` in client/runtime code.
+  The only allowed exception is explicit conversion glue for optional large
+  external tensor ecosystems (`tensorflow`, `torch`, `jax`) where import
+  availability directly gates that conversion path.
+- For symbolic refs/opdefs, do not add `_cmp_key` helper APIs. Equality and
+  hashing must use one canonical representation (`to_json`/form), not parallel
+  comparison key paths.
+- Resolve active state context through the shared context helper
+  (`state.context.resolve_context`) rather than ad hoc `current_context()`
+  call sites.
+- Do not use `coerce` naming in symbolic/state runtime helpers. Where a helper
+  validates or wraps inputs, name it explicitly for its role (for example
+  `normalize_*`, `*_operand`, `autobox`) so no implicit-conversion semantics
+  are implied.
+- Naming convention for path metadata:
+  use `*_URI` for `URI` objects and `*_PATH` for serialized path strings.
+  Avoid `*_tag` naming for path-like values, and avoid `*_path()` helper
+  functions when a canonical module constant can represent the same value.
 - Keep one canonical route-stub call shape in application code.
   Prefer keyword arguments for route parameters and use `body=` only when
   passing one explicit payload. Treat positional forms as compatibility-only,

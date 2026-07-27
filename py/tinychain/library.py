@@ -13,7 +13,7 @@ from . import opref as runtime_opref
 from .opref import OpRef
 from .ref import Ref
 from . import _autograph
-from .state import ContextResult, DeleteOpDef, DeleteOpRef, GetOpDef, GetOpRef, IdRef, OpDef, OpRef as StateOpRef, PostOpDef, PostOpRef, PutOpDef, PutOpRef, Scalar, TCRef, autobox, context, current_context, form_of, map_of as scalar_map_of, scalar_for_hint, scoped_context, tuple_of as scalar_tuple_of
+from .state import Collection, ContextResult, DeleteOpDef, DeleteOpRef, GetOpDef, GetOpRef, IdRef, OpDef, OpRef as StateOpRef, PostOpDef, PostOpRef, PutOpDef, PutOpRef, Scalar, TCRef, autobox, context, current_context, form_of, map_of as scalar_map_of, scalar_for_hint, scoped_context, tuple_of as scalar_tuple_of
 from .state.value import Bool, Map, Number, String, Tuple, Value
 from .uri import URI, _segment, uri as _uri, validate_resource_name
 
@@ -67,12 +67,7 @@ def _runtime_type_hint(type_hint: object, default: type = Value) -> type:
         return _greatest_common_superclass(*resolved)
 
     if isinstance(type_hint, type):
-        try:
-            from .state.collection import Collection
-        except ImportError:
-            Collection = None
-
-        if Collection is not None and issubclass(type_hint, Collection):
+        if issubclass(type_hint, Collection):
             return type_hint
         if issubclass(type_hint, Ref):
             return type_hint
@@ -300,14 +295,9 @@ class Route:
         if isinstance(rtype, type) and issubclass(rtype, Ref):
             return rtype
         resolved = _runtime_type_hint(rtype, default=Value)
-        try:
-            from .state.collection import Collection
-        except ImportError:
-            Collection = None
 
         if (
-            Collection is not None
-            and isinstance(resolved, type)
+            isinstance(resolved, type)
             and issubclass(resolved, Collection)
             and resolved is not Collection
         ):
@@ -682,11 +672,6 @@ def _compile_route(route: Route, library: type[Library]) -> object:
         return _compile_opdef_route(route, compile_subject, params)
 
     result = route.form(compile_subject)
-    try:
-        from .state.collection import Collection
-    except ImportError:
-        Collection = ()
-
     if isinstance(result, (OpDef, Scalar, Collection)):
         return _compile_opdef_route(route, compile_subject, params)
 

@@ -149,15 +149,15 @@ def _collect_ref_ids_from_form(node: object, out: set[str], subject_ids: set[str
         _collect_ref_ids_from_form(node.args, out, subject_ids)
         return
 
+    if isinstance(node, IdRef):
+        out.add(node.name)
+        return
+
     if isinstance(node, TCRef):
         ref_form = form_of(node)
         if ref_form is node:
             return
         _collect_ref_ids_from_form(ref_form, out, subject_ids)
-        return
-
-    if isinstance(node, IdRef):
-        out.add(node.name)
         return
 
     runtime_op = OpRef.from_runtime(node)

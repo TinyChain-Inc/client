@@ -230,10 +230,7 @@ def _encode_dispatch_body(body: Any) -> "object":
     if body is None or _is_state_handle(body):
         return body
 
-    try:
-        from . import _local
-    except ImportError:
-        return _encode_body(body)
+    from . import _local
 
     if isinstance(body, (bytes, bytearray)):
         try:
@@ -254,10 +251,7 @@ def _kernel_dispatch(kernel: object, method: str, path: str, headers, body) -> o
 
 
 def _default_local_kernel() -> object | None:
-    try:
-        from . import _local
-    except ImportError:
-        return None
+    from . import _local
 
     try:
         local_ctor = getattr(_local.kernel_handle(), "local", None)

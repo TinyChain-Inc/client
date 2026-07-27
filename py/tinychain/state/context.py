@@ -4,7 +4,7 @@ import contextvars
 from dataclasses import dataclass
 from typing import Iterable
 
-from .scalar import Scalar, TCRef, autobox
+from .scalar import IdRef, Scalar, autobox
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,15 +38,15 @@ class Context:
 
         cls = type(boxed) if isinstance(boxed, Scalar) else Scalar
         try:
-            bound = cls(ref=TCRef.id(name), ctx=self)
+            bound = cls(ref=IdRef(name), ctx=self)
         except TypeError:
             try:
-                bound = cls(ref=TCRef.id(name))
+                bound = cls(ref=IdRef(name))
                 if isinstance(bound, Scalar):
                     object.__setattr__(bound, "_ctx", self)
             except TypeError:
                 # Fall back to an untyped scalar if a subclass constructor diverges.
-                bound = Scalar(ref=TCRef.id(name), ctx=self)
+                bound = Scalar(ref=IdRef(name), ctx=self)
 
         self._bound[name] = bound
         self._bound[original] = bound
@@ -118,6 +118,12 @@ def context() -> Context:
 
 def current_context() -> Context | None:
     return _current_context.get()
+
+
+def resolve_context(ctx: Context | None = None) -> Context | None:
+    if ctx is not None:
+        return ctx
+    return current_context()
 
 
 def scoped_context() -> _ContextScope:

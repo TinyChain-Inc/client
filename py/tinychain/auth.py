@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import base64
+import importlib
+import importlib.util
+import sys
 import time
 from dataclasses import dataclass
 from typing import Sequence
@@ -35,14 +38,17 @@ def context():
 
 
 def _rjwt():
-    try:
-        import rjwt
-    except ImportError as err:
+    existing = sys.modules.get("rjwt")
+    if existing is not None:
+        return existing
+
+    if importlib.util.find_spec("rjwt") is None:
         raise RuntimeError(
             "rjwt is required to mint TinyChain bearer tokens. Install the PyO3 package with "
             "`maturin develop --manifest-path deps/rjwt/rjwt-py/Cargo.toml`."
-        ) from err
+        )
 
+    rjwt = importlib.import_module("rjwt")
     return rjwt
 
 
@@ -77,11 +83,7 @@ def mint_rjwt_token(
     ttl_secs: int = 3600,
     secret_key_b64: str | None = None,
     alg: str = "falcon512",
-    repo_root: object | None = None,
-    binary: object | None = None,
 ) -> SignedBearerToken:
-    if repo_root is not None or binary is not None:
-        raise ValueError("`repo_root` and `binary` are obsolete; token minting uses rjwt directly")
     if not libs:
         raise ValueError("minted token requires at least one `libs` claim")
     if not host.strip():

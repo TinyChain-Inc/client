@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import json
 
-from .uri import path
+from .state.base import State
+from .state.value import Number as ValueNumber
+from .uri import path, uri
 
 
-_COLLECTION_TENSOR = path("state", "collection", "tensor")
-_DTYPE_F32 = path("state", "scalar", "value", "number", "float", "32")
-_DTYPE_F64 = path("state", "scalar", "value", "number", "float", "64")
-_DTYPE_U64 = path("state", "scalar", "value", "number", "uint", "64")
+_COLLECTION_TENSOR = path(uri(State, "collection", "tensor"))
+_DTYPE_F32 = path(ValueNumber, "float", "32")
+_DTYPE_F64 = path(ValueNumber, "float", "64")
+_DTYPE_U64 = path(ValueNumber, "uint", "64")
 
 
 def _decode_tensor(payload: object) -> object:
@@ -26,24 +28,26 @@ def _decode_tensor(payload: object) -> object:
         return payload
     decoded_values = [decode_payload(value) for value in values] if isinstance(values, list) else values
 
-    try:
-        from . import _local
-        from .collection.tensor import Tensor
+    from . import _local
+    from .collection.tensor import Tensor
 
+    try:
         local = _local.backend()
         native_tensor = getattr(local, "Tensor", None)
     except ImportError:
         native_tensor = None
-        Tensor = None  # type: ignore[assignment]
+        tensor_type = None
+    else:
+        tensor_type = Tensor
 
-    if native_tensor is not None and Tensor is not None:
+    if native_tensor is not None and tensor_type is not None:
         try:
             if dtype == _DTYPE_F32:
-                return Tensor(native=native_tensor.dense_f32(shape, [float(value) for value in decoded_values]))
+                return tensor_type(native=native_tensor.dense_f32(shape, [float(value) for value in decoded_values]))
             if dtype == _DTYPE_F64:
-                return Tensor(native=native_tensor.dense_f64(shape, [float(value) for value in decoded_values]))
+                return tensor_type(native=native_tensor.dense_f64(shape, [float(value) for value in decoded_values]))
             if dtype == _DTYPE_U64:
-                return Tensor(native=native_tensor.dense_u64(shape, [int(value) for value in decoded_values]))
+                return tensor_type(native=native_tensor.dense_u64(shape, [int(value) for value in decoded_values]))
         except (AttributeError, TypeError, ValueError):
             pass
 
@@ -89,7 +93,9 @@ def decode_payload(payload: object) -> object:
     if isinstance(unwrapped, dict):
         if len(unwrapped) == 1:
             (key, _value), = unwrapped.items()
-            if isinstance(key, str) and key.startswith(path("state", "scalar", "op")):
+            from .state.scalar import OPDEF_ROOT_PATH
+
+            if isinstance(key, str) and key.startswith(OPDEF_ROOT_PATH):
                 try:
                     return OpDef.from_json(unwrapped)
                 except (TypeError, ValueError):

@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Iterator, Mapping, Sequence, cast
 
 from ...uri import URI, path, uri
 from ..base import State
+from ..collection import Collection
 from .opdef import (
     DeleteOpDef,
     GetOpDef,
@@ -14,7 +15,6 @@ from .opdef import (
 )
 from .ops import Delete, Get, Op, Post, Put
 from .refs import (
-    OPREF_DELETE_TAG,
     Cond,
     DeleteOpRef,
     ForEach,
@@ -46,15 +46,21 @@ def _value_runtime():
 
     return Value, value_bool, value_link, value_map, value_number, value_string, value_tuple, value_form_of
 
-OPDEF_GET: str = path("state", "scalar", "op", "get")
-OPDEF_PUT: str = path("state", "scalar", "op", "put")
-OPDEF_POST: str = path("state", "scalar", "op", "post")
-OPDEF_DELETE: str = path("state", "scalar", "op", "delete")
-SCALAR_REFLECT_CLASS: str = path("state", "scalar", "reflect", "class")
-SCALAR_REFLECT_REF_PARTS: str = path("state", "scalar", "reflect", "ref_parts")
-OPDEF_REFLECT_FORM: str = path("state", "scalar", "op", "reflect", "form")
-OPDEF_REFLECT_LAST_ID: str = path("state", "scalar", "op", "reflect", "last_id")
-OPDEF_REFLECT_SCALARS: str = path("state", "scalar", "op", "reflect", "scalars")
+SCALAR_ROOT_URI: URI = uri(State, "scalar")
+SCALAR_OP_ROOT_URI: URI = uri(SCALAR_ROOT_URI, "op")
+SCALAR_REFLECT_ROOT_URI: URI = uri(SCALAR_ROOT_URI, "reflect")
+SCALAR_OP_REFLECT_ROOT_URI: URI = uri(SCALAR_OP_ROOT_URI, "reflect")
+
+OPDEF_ROOT_PATH: str = path(SCALAR_OP_ROOT_URI)
+OPDEF_GET_PATH: str = path(SCALAR_OP_ROOT_URI, "get")
+OPDEF_PUT_PATH: str = path(SCALAR_OP_ROOT_URI, "put")
+OPDEF_POST_PATH: str = path(SCALAR_OP_ROOT_URI, "post")
+OPDEF_DELETE_PATH: str = path(SCALAR_OP_ROOT_URI, "delete")
+SCALAR_REFLECT_CLASS_PATH: str = path(SCALAR_REFLECT_ROOT_URI, "class")
+SCALAR_REFLECT_REF_PARTS_PATH: str = path(SCALAR_REFLECT_ROOT_URI, "ref_parts")
+OPDEF_REFLECT_FORM_PATH: str = path(SCALAR_OP_REFLECT_ROOT_URI, "form")
+OPDEF_REFLECT_LAST_ID_PATH: str = path(SCALAR_OP_REFLECT_ROOT_URI, "last_id")
+OPDEF_REFLECT_SCALARS_PATH: str = path(SCALAR_OP_REFLECT_ROOT_URI, "scalars")
 
 
 def _sorted_items(obj: Mapping[str, Any]) -> list[tuple[str, Any]]:
@@ -72,6 +78,8 @@ def _json_of(form: object) -> object:
         return form.to_json()
     if isinstance(form, Value):
         return form.to_json()
+    if isinstance(form, IdRef):
+        return {form.key(): []}
     if isinstance(form, Scalar):
         return _json_of(form_of(form))
     if isinstance(form, TCRef):
@@ -79,8 +87,6 @@ def _json_of(form: object) -> object:
         if ref_form is form:
             return form.to_json()
         return _json_of(ref_form)
-    if isinstance(form, IdRef):
-        return {form.key(): []}
     if isinstance(form, Mapping):
         return {k: _json_of(v) for k, v in _sorted_items(form)}
     if isinstance(form, Sequence) and not isinstance(form, (str, bytes, bytearray)):
@@ -115,13 +121,8 @@ def autobox(
     runtime_op = OpRef.from_runtime(obj)
     if runtime_op is not None:
         return _typed_from_op_ref(runtime_op)
-    try:
-        from ..collection import Collection
-
-        if isinstance(obj, Collection):
-            return Scalar(form_of(obj))
-    except ImportError:
-        pass
+    if isinstance(obj, Collection):
+        return Scalar(form_of(obj))
     if isinstance(obj, URI):
         return Scalar(value_link(obj))
     if isinstance(obj, TCRef):
@@ -135,7 +136,7 @@ def autobox(
     if isinstance(obj, ForEach):
         return Scalar(ref=obj)
     if isinstance(obj, IdRef):
-        return Scalar(ref=TCRef(obj))
+        return Scalar(ref=obj)
     if isinstance(obj, OpDef):
         return Scalar(obj)
     if isinstance(obj, OpRef):
@@ -160,7 +161,7 @@ def _is_string_scalar(obj: object) -> bool:
     )
 
 
-def _coerce_form(form: Sequence[tuple[str, object]]) -> list[tuple[str, "Scalar"]]:
+def _normalize_opdef_form(form: Sequence[tuple[str, object]]) -> list[tuple[str, "Scalar"]]:
     out: list[tuple[str, Scalar]] = []
     for name, value in form:
         if not isinstance(name, str):
@@ -174,29 +175,18 @@ def _context_from_values(*values: object) -> "Context | None":
         if isinstance(value, Scalar) and value._ctx is not None:
             return value._ctx
 
-        try:
-            from ..collection import Collection
-
-            if isinstance(value, Collection):
-                value_ctx = getattr(value, "_ctx", None)
-                if value_ctx is not None:
-                    return value_ctx
-        except ImportError:
-            pass
+        if isinstance(value, Collection):
+            value_ctx = getattr(value, "_ctx", None)
+            if value_ctx is not None:
+                return value_ctx
 
     return None
 
 
 def _resolve_context(ctx: "Context | None" = None) -> "Context | None":
-    if ctx is not None:
-        return ctx
+    from ..context import resolve_context
 
-    try:
-        from ..context import current_context
-    except ImportError:
-        return None
-
-    return current_context()
+    return resolve_context(ctx)
 
 
 def _literal_number(form: object) -> int | float | bool | None:
@@ -224,7 +214,7 @@ def id(name: str) -> "Scalar":
             pass
 
     # Unbound ids are represented as a generic symbolic ref.
-    return Symbol(ref=TCRef.id(name), ctx=active_ctx)
+    return Symbol(ref=IdRef(name), ctx=active_ctx)
 
 
 def map_of(items: Mapping[str, "Scalar | Value | object"]) -> "Scalar":
@@ -238,7 +228,7 @@ def tuple_of(items: Sequence["Scalar | Value | object"]) -> "Scalar":
 
 
 def scalar_for_hint(name: str, hint: object) -> "Scalar":
-    base = TCRef.id(name)
+    base = IdRef(name)
     cls = _scalar_class_for_hint(hint)
     return cls(ref=base)
 
@@ -247,21 +237,8 @@ def _scalar_class_for_hint(hint: object) -> type["Scalar"]:
     Value, value_bool, _, value_map, value_number, value_string, value_tuple, _ = _value_runtime()
 
     if isinstance(hint, type):
-        try:
-            from ..collection import Collection
-        except ImportError:
-            Collection = None
-
-        if Collection is not None and issubclass(hint, Collection):
+        if issubclass(hint, Collection):
             return hint
-
-        try:
-            from ...collection.tensor import Tensor
-        except ImportError:
-            Tensor = None
-
-        if Tensor is not None and issubclass(hint, Tensor):
-            return Tensor
         if issubclass(hint, value_number):
             return Number
         if issubclass(hint, value_bool):
@@ -458,10 +435,10 @@ def _typed_from_op_ref(op_ref: OpRef) -> Scalar:
     ref = op_ref
 
     exact_dispatch: dict[str, type[Scalar]] = {
-        SCALAR_REFLECT_REF_PARTS: Tuple,
-        OPDEF_REFLECT_FORM: Tuple,
-        OPDEF_REFLECT_SCALARS: Tuple,
-        OPDEF_REFLECT_LAST_ID: String,
+        SCALAR_REFLECT_REF_PARTS_PATH: Tuple,
+        OPDEF_REFLECT_FORM_PATH: Tuple,
+        OPDEF_REFLECT_SCALARS_PATH: Tuple,
+        OPDEF_REFLECT_LAST_ID_PATH: String,
     }
     wrapper = exact_dispatch.get(subject)
     if wrapper is not None:
@@ -563,13 +540,8 @@ def form_of(value: "Scalar | object") -> object:
         return value._form
     if isinstance(value, Scalar):
         return value._form
-    try:
-        from ..collection import Collection
-
-        if isinstance(value, Collection):
-            return value._form
-    except ImportError:
-        pass
+    if isinstance(value, Collection):
+        return value._form
     return value
 
 
@@ -594,19 +566,19 @@ class Scalar(State):
         return rtype._post_ref(subject, {payload_key: payload_value}, ctx=self._ctx)
 
     def class_(self) -> "Scalar":
-        return self._reflect(SCALAR_REFLECT_CLASS, "scalar", self, rtype=Scalar)
+        return self._reflect(SCALAR_REFLECT_CLASS_PATH, "scalar", self, rtype=Scalar)
 
     def ref_parts(self) -> "Tuple":
-        return cast(Tuple, self._reflect(SCALAR_REFLECT_REF_PARTS, "scalar", self, rtype=Tuple))
+        return cast(Tuple, self._reflect(SCALAR_REFLECT_REF_PARTS_PATH, "scalar", self, rtype=Tuple))
 
     def reflect_form(self) -> "Tuple":
-        return cast(Tuple, self._reflect(OPDEF_REFLECT_FORM, "op", self, rtype=Tuple))
+        return cast(Tuple, self._reflect(OPDEF_REFLECT_FORM_PATH, "op", self, rtype=Tuple))
 
     def reflect_last_id(self) -> "String":
-        return cast(String, self._reflect(OPDEF_REFLECT_LAST_ID, "op", self, rtype=String))
+        return cast(String, self._reflect(OPDEF_REFLECT_LAST_ID_PATH, "op", self, rtype=String))
 
     def reflect_scalars(self) -> "Tuple":
-        return cast(Tuple, self._reflect(OPDEF_REFLECT_SCALARS, "op", self, rtype=Tuple))
+        return cast(Tuple, self._reflect(OPDEF_REFLECT_SCALARS_PATH, "op", self, rtype=Tuple))
 
     @staticmethod
     def from_json(obj: Any) -> "Scalar":
@@ -625,7 +597,7 @@ class Scalar(State):
 
             if len(obj) == 1:
                 (key, _), = obj.items()
-                if isinstance(key, str) and key.startswith(path("state", "scalar", "op")):
+                if isinstance(key, str) and key.startswith(OPDEF_ROOT_PATH):
                     return Scalar(OpDef.from_json(obj))
 
             # Decode TCRef/OpRef maps before generic Value maps to avoid

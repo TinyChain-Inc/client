@@ -2,17 +2,21 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
-from ...uri import path
+from ..base import State
+from ...uri import URI, path, uri
 
 if TYPE_CHECKING:
     from . import OpDef, Scalar
     from ..value import Value
 
 
-OPREF_DELETE_TAG: str = path("state", "scalar", "ref", "op", "delete")
-TCREF_COND: str = path("state", "scalar", "ref", "cond")
-TCREF_WHILE: str = path("state", "scalar", "ref", "while")
-TCREF_FOR_EACH: str = path("state", "scalar", "ref", "for_each")
+TCREF_ROOT_URI: URI = uri(State, "scalar", "ref")
+OPREF_ROOT_URI: URI = uri(TCREF_ROOT_URI, "op")
+
+TCREF_COND_PATH: str = path(TCREF_ROOT_URI, "cond")
+TCREF_WHILE_PATH: str = path(TCREF_ROOT_URI, "while")
+TCREF_FOR_EACH_PATH: str = path(TCREF_ROOT_URI, "for_each")
+OPREF_DELETE_PATH: str = path(OPREF_ROOT_URI, "delete")
 
 
 def _sorted_items(obj: Mapping[str, Any]) -> list[tuple[str, Any]]:
@@ -24,21 +28,22 @@ def _looks_like_tcref_map(obj: Mapping[str, object]) -> bool:
         return False
 
     (key, _value), = obj.items()
-    return isinstance(key, str) and (key == OPREF_DELETE_TAG or key.startswith("/") or key.startswith("$"))
+    return isinstance(key, str) and (key == OPREF_DELETE_PATH or key.startswith("/") or key.startswith("$"))
 
 
 class TCRef:
     __slots__ = ("_form",)
+    __uri__: URI = TCREF_ROOT_URI
 
-    def __init__(self, form: "TCRef | Scalar | IdRef"):
+    def __init__(self, form: "TCRef | Scalar"):
         from . import Scalar
 
         if isinstance(form, TCRef):
             self._form = form._form
             return
 
-        if not isinstance(form, (Scalar, IdRef)):
-            raise TypeError("TCRef form must be TCRef, Scalar, or IdRef")
+        if not isinstance(form, Scalar):
+            raise TypeError("TCRef form must be TCRef or Scalar")
 
         self._form = form
 
@@ -57,10 +62,6 @@ class TCRef:
         return raw
 
     @staticmethod
-    def id(name: str) -> "TCRef":
-        return TCRef(IdRef(name))
-
-    @staticmethod
     def from_json(obj: Any) -> "TCRef":
         from . import Scalar
 
@@ -74,7 +75,7 @@ class TCRef:
         if not _looks_like_tcref_map(obj):
             raise TypeError("not a TCRef op map")
 
-        if key == TCREF_COND:
+        if key == TCREF_COND_PATH:
             if not isinstance(value, list) or len(value) != 3:
                 raise TypeError("invalid Cond ref encoding")
             raw_cond, raw_then, raw_or_else = value
@@ -85,7 +86,7 @@ class TCRef:
                 Scalar.from_json(raw_or_else),
             )
 
-        if key == TCREF_WHILE:
+        if key == TCREF_WHILE_PATH:
             if not isinstance(value, list) or len(value) != 3:
                 raise TypeError("invalid While ref encoding")
             cond, op, state = value
@@ -94,7 +95,7 @@ class TCRef:
                 Scalar.from_json(op),
                 Scalar.from_json(state),
             )
-        if key == TCREF_FOR_EACH:
+        if key == TCREF_FOR_EACH_PATH:
             if not isinstance(value, list) or len(value) != 3:
                 raise TypeError("invalid ForEach ref encoding")
             items, op, item_name = value
@@ -107,7 +108,7 @@ class TCRef:
             )
 
         if key.startswith("$") and isinstance(value, list) and not value:
-            return TCRef.id(key[1:])
+            return IdRef(key[1:])
 
         return OpRef.from_json(obj)
 
@@ -120,6 +121,7 @@ class OpRef(TCRef):
     """
 
     __slots__ = ()
+    __uri__: URI = OPREF_ROOT_URI
 
     METHOD: str = ""
 
@@ -183,7 +185,7 @@ class OpRef(TCRef):
             raise TypeError("expected an OpRef map")
 
         (key, value), = obj.items()
-        if key == OPREF_DELETE_TAG:
+        if key == OPREF_DELETE_PATH:
             if not isinstance(value, list) or len(value) != 2:
                 raise TypeError("invalid DELETE opref encoding")
             subject, raw_key = value
@@ -316,13 +318,14 @@ class DeleteOpRef(OpRef):
         return self._key.to_json()
 
     def to_json(self) -> dict[str, object]:
-        return {OPREF_DELETE_TAG: [self.subject, self.args]}
+        return {OPREF_DELETE_PATH: [self.subject, self.args]}
 
 
-class IdRef:
+class IdRef(TCRef):
     __slots__ = ("name",)
 
     def __init__(self, name: str):
+        self._form = self
         self.name = name
 
     def __eq__(self, other: object) -> bool:
@@ -365,7 +368,7 @@ class While(ControlRef):
 
     def to_json(self) -> dict[str, object]:
         return {
-            TCREF_WHILE: [
+            TCREF_WHILE_PATH: [
                 self.cond.to_json(),
                 self.op.to_json(),
                 self.state.to_json(),
@@ -396,7 +399,7 @@ class Cond(ControlRef):
 
     def to_json(self) -> dict[str, object]:
         return {
-            TCREF_COND: [
+            TCREF_COND_PATH: [
                 self.cond.to_json(),
                 self.then.to_json(),
                 self.or_else.to_json(),
@@ -427,7 +430,7 @@ class ForEach(ControlRef):
 
     def to_json(self) -> dict[str, object]:
         return {
-            TCREF_FOR_EACH: [
+            TCREF_FOR_EACH_PATH: [
                 self.items.to_json(),
                 self.op.to_json(),
                 self.item_name,

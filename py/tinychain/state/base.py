@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from ..uri import URI, uri
+
 if TYPE_CHECKING:
     from .context import Context
 
 
 class State:
     __slots__ = ("_form", "_ctx")
+    __uri__: URI = uri("state")
 
     def __init__(self, form: object = None, *, ref: TCRef | None = None, ctx: "Context | None" = None):
         if form is not None and ref is not None:

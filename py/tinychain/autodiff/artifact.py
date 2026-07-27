@@ -138,9 +138,7 @@ class DerivativeArtifactManifest:
             seed_contract=str(data["seed_contract"]),
             visibility=str(data.get("visibility", "public")),
             digest_algorithm=str(data.get("digest_algorithm", "sha256")),
-            artifact_digest=_optional_string(
-                data.get("artifact_digest", data.get("digest"))
-            ),
+            artifact_digest=_optional_string(data.get("artifact_digest")),
             source_library=_optional_string(
                 data.get("source_library", data.get("source_library_id"))
             ),
@@ -670,4 +668,3 @@ def _validate_library_dependency_path(dependency: URI, expected_version: str) ->
             "invalid_manifest",
             "source_library dependency version must match source_library_version",
         )
-

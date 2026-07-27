@@ -4,13 +4,16 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Literal, Mapping, Optional
 
 from .opref import OpRef, post as opref_post
-from .uri import path
+from .state.base import State
+from .state.value import Number as ValueNumber
+from .state.value import Value
+from .uri import path, uri
 
 
 DType = Literal["i64", "u64", "f32", "f64"]
 
-TENSOR_CLASS: str = path("state", "collection", "tensor")
-NUMBER_CLASS: str = path("state", "scalar", "value", "number")
+TENSOR_CLASS: str = path(uri(State, "collection", "tensor"))
+NUMBER_CLASS: str = path(ValueNumber)
 
 NUMERIC_OPS_CLASS_ROOT: str = path("class", "tinychain", "numeric", "0.1.0")
 
@@ -175,7 +178,7 @@ class OpGraph:
     _next_value: int = 0
     _next_node: int = 0
 
-    TYPE_TAG: str = path("state", "scalar", "value", "op_graph")
+    TYPE_TAG: str = path(Value, "op_graph")
 
     def _alloc_value(self, name: str) -> int:
         if name in self._values:

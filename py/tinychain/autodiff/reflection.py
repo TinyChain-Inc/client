@@ -9,10 +9,11 @@ from autodiff — preserving domain neutrality.
 from __future__ import annotations
 
 from ..graph_reflection import ReflectionError, TypeSpec, TypedValueRef
-from ..uri import path
+from ..state.base import State
+from ..uri import path, uri
 from .reverse import DerivativeProgram
 
-TENSOR_TYPESPEC_CLASS_URI = path("state", "collection", "tensor")
+TENSOR_TYPESPEC_CLASS_URI = path(uri(State, "collection", "tensor"))
 
 
 def tensor_typespec_to_type_spec(typespec_dict: dict) -> TypeSpec:

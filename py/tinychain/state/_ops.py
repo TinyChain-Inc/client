@@ -4,16 +4,15 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
 
 from .scalar.refs import (
-    TCREF_COND,
-    TCREF_FOR_EACH,
-    TCREF_WHILE,
     Cond,
     ForEach,
     IdRef,
     OpRef,
     TCRef,
+    TCREF_COND_PATH,
+    TCREF_FOR_EACH_PATH,
+    TCREF_WHILE_PATH,
     While,
-    coerce_subject as coerce_op_subject,
 )
 
 if TYPE_CHECKING:
@@ -42,15 +41,9 @@ def _owner_ctx(owner: object, ctx: "Context | None" = None) -> "Context | None":
 
 def _active_subject_ctx(owner: object, ctx: "Context | None" = None) -> "Context | None":
     active_ctx = _owner_ctx(owner, ctx)
-    if active_ctx is not None:
-        return active_ctx
+    from .context import resolve_context
 
-    try:
-        from .context import current_context
-    except ImportError:
-        return None
-
-    return current_context()
+    return resolve_context(active_ctx)
 
 
 def _stage_subject(owner: object, active_ctx: "Context | None") -> str | None:
@@ -75,12 +68,12 @@ def _stage_subject(owner: object, active_ctx: "Context | None") -> str | None:
 
 def _subject_from_candidate(candidate: object, active_ctx: "Context | None", owner: object) -> str | None:
     if isinstance(candidate, OpRef):
-        subject = coerce_op_subject(candidate.subject)
+        subject = candidate.subject
     else:
         runtime_candidate = OpRef.from_runtime(candidate)
         if runtime_candidate is None:
             return None
-        subject = coerce_op_subject(runtime_candidate.subject)
+        subject = runtime_candidate.subject
 
     staged = _stage_subject(owner, active_ctx)
     return staged if staged is not None else subject
@@ -110,11 +103,11 @@ def _state_subject(owner: object, form: object, *, ctx: "Context | None" = None)
             return subject
 
         if isinstance(ref_form, Cond):
-            return TCREF_COND
+            return TCREF_COND_PATH
         if isinstance(ref_form, While):
-            return TCREF_WHILE
+            return TCREF_WHILE_PATH
         if isinstance(ref_form, ForEach):
-            return TCREF_FOR_EACH
+            return TCREF_FOR_EACH_PATH
 
     if isinstance(form, Mapping) and len(form) == 1:
         (key, _value), = form.items()

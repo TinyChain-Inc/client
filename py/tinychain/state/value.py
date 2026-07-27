@@ -3,6 +3,7 @@ from __future__ import annotations
 import cmath
 from typing import Any, Iterable, Iterator, Mapping, Sequence
 
+from .base import State
 from .scalar import Scalar
 from ..uri import URI, path, uri
 
@@ -10,7 +11,7 @@ from ..uri import URI, path, uri
 class Value(Scalar):
     __slots__ = ("_value",)
 
-    __uri__: URI = uri("state", "scalar", "value")
+    __uri__: URI = uri(State, "scalar", "value")
 
     def __init__(self, value: None | bool | int | float | complex | str | dict[str, "Value"] | list["Value"] = None):
         super().__init__(value)
@@ -235,7 +236,7 @@ class Number(Value):
         return Number(opref)
 
     @staticmethod
-    def _coerce_number(value: object) -> "Number":
+    def _number_operand(value: object) -> "Number":
         if isinstance(value, Number):
             return value
         return Number(value)
@@ -256,25 +257,25 @@ class Number(Value):
         return self.add(other)
 
     def __radd__(self, other: object) -> "Number":
-        return Number._coerce_number(other).add(self)
+        return Number._number_operand(other).add(self)
 
     def __sub__(self, other: object) -> "Number":
         return self.sub(other)
 
     def __rsub__(self, other: object) -> "Number":
-        return Number._coerce_number(other).sub(self)
+        return Number._number_operand(other).sub(self)
 
     def __mul__(self, other: object) -> "Number":
         return self.mul(other)
 
     def __rmul__(self, other: object) -> "Number":
-        return Number._coerce_number(other).mul(self)
+        return Number._number_operand(other).mul(self)
 
     def __truediv__(self, other: object) -> "Number":
         return self.div(other)
 
     def __rtruediv__(self, other: object) -> "Number":
-        return Number._coerce_number(other).div(self)
+        return Number._number_operand(other).div(self)
 
 
 class Integer(Number):
@@ -333,7 +334,7 @@ class Complex(Number):
         object.__setattr__(self, "op", None)
 
     @staticmethod
-    def _coerce_complex(value: object) -> "Complex":
+    def _complex_operand(value: object) -> "Complex":
         if isinstance(value, Complex):
             return value
 
@@ -346,7 +347,7 @@ class Complex(Number):
         from .scalar import PostOpRef, autobox
 
         if self.op is None:
-            rhs = Complex._coerce_complex(other)
+            rhs = Complex._complex_operand(other)
             if rhs.op is None:
                 left_form = form_of(self)
                 right_form = form_of(rhs)
@@ -374,25 +375,25 @@ class Complex(Number):
         return self.add(other)
 
     def __radd__(self, other: object) -> "Complex":
-        return Complex._coerce_complex(other).add(self)
+        return Complex._complex_operand(other).add(self)
 
     def __sub__(self, other: object) -> "Complex":
         return self.sub(other)
 
     def __rsub__(self, other: object) -> "Complex":
-        return Complex._coerce_complex(other).sub(self)
+        return Complex._complex_operand(other).sub(self)
 
     def __mul__(self, other: object) -> "Complex":
         return self.mul(other)
 
     def __rmul__(self, other: object) -> "Complex":
-        return Complex._coerce_complex(other).mul(self)
+        return Complex._complex_operand(other).mul(self)
 
     def __truediv__(self, other: object) -> "Complex":
         return self.div(other)
 
     def __rtruediv__(self, other: object) -> "Complex":
-        return Complex._coerce_complex(other).div(self)
+        return Complex._complex_operand(other).div(self)
 
     def conjugate(self) -> "Complex":
         from .scalar import PostOpRef
