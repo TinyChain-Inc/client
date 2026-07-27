@@ -16,12 +16,6 @@ class Value(Scalar):
         super().__init__(value)
         self._value = value
 
-    def __eq__(self, other: object) -> bool:
-        return isinstance(other, Value) and type(self) is type(other) and self._value == other._value
-
-    def __hash__(self) -> int:
-        return hash((type(self), self._value))
-
     def to_json(self) -> object:
         raise TypeError(f"{type(self).__name__}.to_json must be implemented by a concrete Value subclass")
 

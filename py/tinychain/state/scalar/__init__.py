@@ -129,11 +129,11 @@ def autobox(
     if isinstance(obj, Cond):
         return _typed_from_cond(obj)
     if isinstance(obj, While):
-        ref = TCRef(obj)
+        ref = obj
         state = autobox(obj.state)
         return _typed_from_ref_like(ref, state)
     if isinstance(obj, ForEach):
-        return Scalar(ref=TCRef(obj))
+        return Scalar(ref=obj)
     if isinstance(obj, IdRef):
         return Scalar(ref=TCRef(obj))
     if isinstance(obj, OpDef):
@@ -422,7 +422,7 @@ def _typed_from_ref_like(ref: TCRef, exemplar: Scalar) -> Scalar:
 def _typed_from_cond(cond_ref: Cond) -> Scalar:
     then_value = autobox(cond_ref.then)
     else_value = autobox(cond_ref.or_else)
-    ref = TCRef(cond_ref)
+    ref = cond_ref
     active_ctx = getattr(cond_ref, "_ctx", None) or _context_from_values(cond_ref.cond, cond_ref.then, cond_ref.or_else)
 
     if type(then_value) is type(else_value):
@@ -488,13 +488,14 @@ def while_loop(
     state: "Scalar | Value | object",
 ) -> "Scalar":
     active_ctx = _context_from_values(cond, op, state)
+    while_ref = While(
+        autobox(cond),
+        autobox(op),
+        autobox(state),
+    )
+    while_ref._ctx = active_ctx
     result = autobox(
-        While(
-            autobox(cond),
-            autobox(op),
-            autobox(state),
-            ctx=active_ctx,
-        )
+        while_ref
     )
     result._ctx = active_ctx
     return result
@@ -513,13 +514,14 @@ def cond(
     if cond_ref is None:
         raise TypeError("cond condition must be a ref")
     active_ctx = _context_from_values(condition, then, or_else)
+    cond_node = Cond(
+        cond_ref,
+        autobox(then),
+        autobox(or_else),
+    )
+    cond_node._ctx = active_ctx
     result = autobox(
-        Cond(
-            cond_ref,
-            autobox(then),
-            autobox(or_else),
-            ctx=active_ctx,
-        )
+        cond_node
     )
     result._ctx = active_ctx
     return result
@@ -545,7 +547,9 @@ def for_each(
     op: "OpDef",
 ) -> "Scalar":
     active_ctx = _context_from_values(items, op)
-    result = autobox(ForEach(autobox(items), autobox(op), item_name, ctx=active_ctx))
+    foreach_ref = ForEach(autobox(items), autobox(op), item_name)
+    foreach_ref._ctx = active_ctx
+    result = autobox(foreach_ref)
     result._ctx = active_ctx
     return result
 
@@ -724,20 +728,10 @@ class Comparable(Scalar):
     def __le__(self, other: object) -> "Bool":
         return self.le(other)
 
-    def __eq__(self, other: object) -> Any:  # type: ignore[override]
-        form = form_of(self)
-        if self._ctx is not None or isinstance(form, (TCRef, OpRef)) or OpRef.from_runtime(form) is not None:
-            return self.eq(other)
+    def __eq__(self, other: object) -> "Bool":  # type: ignore[override]
+        return self.eq(other)
 
-        if isinstance(other, Scalar):
-            return form_of(self) == form_of(other)
-
-        return False
-
-    def __ne__(self, other: object) -> Any:  # type: ignore[override]
-        result = self.__eq__(other)
-        if isinstance(result, bool):
-            return not result
+    def __ne__(self, other: object) -> "Bool":  # type: ignore[override]
         return self.ne(other)
 
 
@@ -902,6 +896,11 @@ class Number(Numeric):
         return self.le(other)
 
 class Bool(Comparable):
+    def __bool__(self) -> bool:
+        raise TypeError(
+            "TinyChain Bool has no Python truth value; use tc.state.cond or boolean ops"
+        )
+
     def logical_and(self, other: "Scalar | Value | object") -> "Bool":
         return cast(Bool, _post_binary_call(self, "and", other, rtype=Bool))
 

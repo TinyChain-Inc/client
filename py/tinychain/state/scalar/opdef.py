@@ -23,10 +23,10 @@ class OpDef:
         raise NotImplementedError()
 
     def __eq__(self, other: object) -> bool:
-        return type(self) is type(other) and self._cmp_key() == other._cmp_key()
+        return type(self) is type(other) and self.to_json() == other.to_json()
 
     def __hash__(self) -> int:
-        return hash((type(self), self._cmp_key()))
+        return hash((type(self), repr(self.to_json())))
 
     def last_id(self) -> str | None:
         if not self.form:

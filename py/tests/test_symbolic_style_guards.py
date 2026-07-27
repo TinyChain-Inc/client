@@ -11,6 +11,15 @@ _ALLOWLIST_SEGMENTS: dict[str, set[str]] = {
     "state/scalar/refs.py": {"TCRef(IdRef(name))"},
 }
 
+_CANONICAL_PATH_PREFIXES: tuple[str, ...] = (
+    "/state",
+    "/service",
+    "/lib",
+    "/class",
+    "/host",
+    "/healthz",
+)
+
 
 def _call_name(node: ast.AST) -> str | None:
     if isinstance(node, ast.Name):
@@ -53,6 +62,26 @@ def _collect_subclasses_by_base() -> dict[str, set[str]]:
         subclasses_by_base[base] = visited
 
     return subclasses_by_base
+
+
+def _build_parent_map(tree: ast.AST) -> dict[ast.AST, ast.AST]:
+    parent_by_child: dict[ast.AST, ast.AST] = {}
+    for parent in ast.walk(tree):
+        for child in ast.iter_child_nodes(parent):
+            parent_by_child[child] = parent
+    return parent_by_child
+
+
+def _is_docstring_literal(node: ast.Constant, parent_by_child: dict[ast.AST, ast.AST]) -> bool:
+    parent = parent_by_child.get(node)
+    if not isinstance(parent, ast.Expr) or parent.value is not node:
+        return False
+
+    owner = parent_by_child.get(parent)
+    if not isinstance(owner, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+        return False
+
+    return bool(owner.body) and owner.body[0] is parent
 
 
 def test_symbolic_instantiation_style_guards() -> None:
@@ -99,3 +128,26 @@ def test_symbolic_instantiation_style_guards() -> None:
                 violations.append(f"{relative_path}:{line}: {segment}")
 
     assert not violations, "forbidden symbolic construction forms found:\n" + "\n".join(violations)
+
+
+def test_runtime_paths_use_uri_helpers() -> None:
+    violations: list[str] = []
+
+    for path in sorted(_SRC_ROOT.rglob("*.py")):
+        relative_path = path.relative_to(_SRC_ROOT).as_posix()
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        parent_by_child = _build_parent_map(tree)
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+                continue
+            if not node.value.startswith(_CANONICAL_PATH_PREFIXES):
+                continue
+            if _is_docstring_literal(node, parent_by_child):
+                continue
+
+            line = getattr(node, "lineno", 0)
+            violations.append(f"{relative_path}:{line}: {node.value!r}")
+
+    assert not violations, "forbidden canonical path literals found:\n" + "\n".join(violations)

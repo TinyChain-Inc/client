@@ -119,8 +119,12 @@ staying thin and well-documented for new users.
   `_post_ref`). Do not hand-write `TCRef(GetOpRef(...))`,
   `TCRef(PostOpRef(...))`, etc. in wrapper modules such as
   `collection/tensor/core.py`.
-  Keep URI values structured until the serialization/transport boundary; avoid
+- Keep URI values structured until the serialization/transport boundary; avoid
   extracting `.path` in symbolic wrappers.
+- In runtime/client modules, construct canonical TinyChain resource paths only
+  through URI helpers (`tc.uri`, `tinychain.uri.path`, etc.). Do not hardcode
+  literal `/state/...`, `/service/...`, `/lib/...`, `/class/...`, `/host/...`,
+  or `/healthz...` strings outside tests/doc prose.
 - Keep one canonical route-stub call shape in application code.
   Prefer keyword arguments for route parameters and use `body=` only when
   passing one explicit payload. Treat positional forms as compatibility-only,

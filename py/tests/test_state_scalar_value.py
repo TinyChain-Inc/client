@@ -4,20 +4,20 @@ import pytest
 
 def test_value_roundtrip_typed_maps():
     v = tc.Number(7)
-    assert tc.state.Value.from_json(v.to_json()) == v
+    assert tc.state.Value.from_json(v.to_json()).to_json() == v.to_json()
 
     s = tc.String("x")
-    assert tc.state.Value.from_json(s.to_json()) == s
+    assert tc.state.Value.from_json(s.to_json()).to_json() == s.to_json()
 
     n = tc.state.Null()
-    assert tc.state.Value.from_json(n.to_json()) == n
+    assert tc.state.Value.from_json(n.to_json()).to_json() == n.to_json()
     assert isinstance(n, tc.state.Null)
     assert isinstance(tc.state.Value.from_json(None), tc.state.Null)
 
 
 def test_value_bool_decodes_as_number():
     b = tc.Number(True)
-    assert tc.state.Value.from_json(b.to_json()) == b
+    assert tc.state.Value.from_json(b.to_json()).to_json() == b.to_json()
     assert isinstance(tc.state.Value.from_json(True), tc.Number)
     assert isinstance(tc.state.Value.from_json(1), tc.Number)
 
@@ -32,7 +32,7 @@ def test_value_map_and_tuple_roundtrip():
     )
 
     decoded = tc.state.Value.from_json(value.to_json())
-    assert decoded == value
+    assert decoded.to_json() == value.to_json()
 
 
 def test_value_subtype_constructors_and_from_json_types():
@@ -64,7 +64,7 @@ def test_scalar_roundtrip_nested_map_and_tuple():
         "shape": ["N", "D"],
     })
     decoded = tc.state.Scalar.from_json(scalar.to_json())
-    assert decoded == scalar
+    assert decoded.to_json() == scalar.to_json()
 
 
 def test_scalar_opref_encoding_get_put_post_delete():
@@ -155,7 +155,7 @@ def test_scalar_tcref_id_roundtrip():
     assert encoded == {"$foo": []}
 
     decoded = tc.state.Scalar.from_json(encoded)
-    assert decoded == scalar
+    assert tc.state.form_of(decoded) == tc.state.form_of(scalar)
 
 
 def test_number_literal_arithmetic_methods():

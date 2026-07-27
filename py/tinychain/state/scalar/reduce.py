@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Mapping, Sequence
 
-from .refs import IdRef, OpRef, TCRef, coerce_subject as coerce_op_subject
+from .refs import IdRef, OpRef, TCRef
 
 if TYPE_CHECKING:
     from ..context import Context
@@ -145,7 +145,7 @@ def _collect_ref_ids_from_form(node: object, out: set[str], subject_ids: set[str
         return
 
     if isinstance(node, OpRef):
-        _record_subject_token(coerce_op_subject(node.subject), out, subject_ids)
+        _record_subject_token(node.subject, out, subject_ids)
         _collect_ref_ids_from_form(node.args, out, subject_ids)
         return
 

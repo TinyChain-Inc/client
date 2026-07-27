@@ -16,17 +16,6 @@ class State:
         self._form = ref if ref is not None else form
         self._ctx = ctx
 
-    def __eq__(self, other: object) -> bool:
-        from .scalar import form_of
-
-        if not isinstance(other, State):
-            return False
-
-        return form_of(self) == form_of(other)
-
-    def __ne__(self, other: object) -> bool:
-        return not self.__eq__(other)
-
     def __hash__(self) -> int:
         from ._ops import _freeze_shape
         from .scalar import form_of
@@ -34,9 +23,9 @@ class State:
         return hash(_freeze_shape(form_of(self)))
 
     def to_json(self) -> object:
-        from .scalar import Scalar
+        from .scalar import _json_of, form_of
 
-        return Scalar(self._form).to_json()
+        return _json_of(form_of(self))
 
     @classmethod
     def _from_opref(cls, opref, *, ctx: "Context | None" = None):

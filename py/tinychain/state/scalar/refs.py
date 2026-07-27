@@ -19,16 +19,6 @@ def _sorted_items(obj: Mapping[str, Any]) -> list[tuple[str, Any]]:
     return sorted(obj.items(), key=lambda kv: kv[0])
 
 
-def _freeze_shape(value: object) -> object:
-    if value is None or isinstance(value, (bool, int, float, complex, str, bytes)):
-        return value
-    if isinstance(value, Mapping):
-        return tuple((key, _freeze_shape(val)) for key, val in _sorted_items(value))
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        return tuple(_freeze_shape(item) for item in value)
-    return value
-
-
 def _looks_like_tcref_map(obj: Mapping[str, object]) -> bool:
     if len(obj) != 1:
         return False
@@ -37,63 +27,18 @@ def _looks_like_tcref_map(obj: Mapping[str, object]) -> bool:
     return isinstance(key, str) and (key == OPREF_DELETE_TAG or key.startswith("/") or key.startswith("$"))
 
 
-def coerce_subject(subject: object) -> str:
-    if isinstance(subject, str):
-        return subject
-
-    while hasattr(subject, "_form"):
-        next_subject = getattr(subject, "_form")
-        if next_subject is subject:
-            break
-        subject = next_subject
-
-    if isinstance(subject, IdRef):
-        return subject.key()
-
-    if isinstance(subject, OpRef):
-        return coerce_subject(subject.subject)
-
-    if isinstance(subject, TCRef):
-        inner = subject._form
-        if inner is subject:
-            raise TypeError(f"expected op subject to be str, got {type(subject).__name__}")
-        return coerce_subject(inner)
-
-    try:
-        from . import Scalar, form_of
-
-        if isinstance(subject, Scalar):
-            return coerce_subject(form_of(subject))
-    except (ImportError, AttributeError):
-        pass
-
-    if hasattr(subject, "to_json"):
-        try:
-            as_json = subject.to_json()
-            if isinstance(as_json, str):
-                return as_json
-        except (TypeError, ValueError, AttributeError):
-            pass
-
-    raise TypeError(f"expected op subject to be str, got {type(subject).__name__}")
-
-
-# Backward-compatible alias for existing internal call sites.
-_coerce_subject = coerce_subject
-
-
 class TCRef:
     __slots__ = ("_form",)
 
-    def __init__(self, form: "TCRef | Scalar | IdRef | Cond | While | ForEach"):
+    def __init__(self, form: "TCRef | Scalar | IdRef"):
         from . import Scalar
 
         if isinstance(form, TCRef):
             self._form = form._form
             return
 
-        if not isinstance(form, (Scalar, IdRef, Cond, While, ForEach)):
-            raise TypeError("TCRef form must be TCRef, Scalar, IdRef, Cond, While, or ForEach")
+        if not isinstance(form, (Scalar, IdRef)):
+            raise TypeError("TCRef form must be TCRef, Scalar, or IdRef")
 
         self._form = form
 
@@ -134,24 +79,20 @@ class TCRef:
                 raise TypeError("invalid Cond ref encoding")
             raw_cond, raw_then, raw_or_else = value
             cond = TCRef.from_json(raw_cond)
-            return TCRef(
-                Cond(
-                    cond,
-                    Scalar.from_json(raw_then),
-                    Scalar.from_json(raw_or_else),
-                )
+            return Cond(
+                cond,
+                Scalar.from_json(raw_then),
+                Scalar.from_json(raw_or_else),
             )
 
         if key == TCREF_WHILE:
             if not isinstance(value, list) or len(value) != 3:
                 raise TypeError("invalid While ref encoding")
             cond, op, state = value
-            return TCRef(
-                While(
-                    Scalar.from_json(cond),
-                    Scalar.from_json(op),
-                    Scalar.from_json(state),
-                )
+            return While(
+                Scalar.from_json(cond),
+                Scalar.from_json(op),
+                Scalar.from_json(state),
             )
         if key == TCREF_FOR_EACH:
             if not isinstance(value, list) or len(value) != 3:
@@ -159,12 +100,10 @@ class TCRef:
             items, op, item_name = value
             if not isinstance(item_name, str):
                 raise TypeError("expected ForEach item_name to be a string")
-            return TCRef(
-                ForEach(
-                    Scalar.from_json(items),
-                    Scalar.from_json(op),
-                    item_name,
-                )
+            return ForEach(
+                Scalar.from_json(items),
+                Scalar.from_json(op),
+                item_name,
             )
 
         if key.startswith("$") and isinstance(value, list) and not value:
@@ -199,14 +138,11 @@ class OpRef(TCRef):
     def args(self) -> object:
         raise NotImplementedError()
 
-    def _cmp_key(self) -> object:
-        raise NotImplementedError()
-
     def __eq__(self, other: object) -> bool:
-        return type(self) is type(other) and self._cmp_key() == other._cmp_key()
+        return type(self) is type(other) and self.subject == other.subject and self.args == other.args
 
     def __hash__(self) -> int:
-        return hash((type(self), _freeze_shape(self._cmp_key())))
+        return hash((type(self), repr(self.to_json())))
 
     def to_json(self) -> dict[str, object]:
         raise NotImplementedError()
@@ -283,7 +219,9 @@ class GetOpRef(OpRef):
         from . import autobox
 
         super().__init__()
-        self._subject = coerce_subject(subject)
+        if not isinstance(subject, str):
+            raise TypeError(f"expected op subject to be str, got {type(subject).__name__}")
+        self._subject = subject
         self._key = autobox(key)
 
     @property
@@ -293,11 +231,6 @@ class GetOpRef(OpRef):
     @property
     def args(self) -> object:
         return [self._key.to_json()]
-
-    def _cmp_key(self) -> object:
-        from . import form_of
-
-        return self._subject, form_of(self._key)
 
     def to_json(self) -> dict[str, object]:
         return {self.subject: self.args}
@@ -312,7 +245,9 @@ class PutOpRef(OpRef):
         from . import autobox
 
         super().__init__()
-        self._subject = coerce_subject(subject)
+        if not isinstance(subject, str):
+            raise TypeError(f"expected op subject to be str, got {type(subject).__name__}")
+        self._subject = subject
         self._key = autobox(key)
         self._value = autobox(value)
 
@@ -323,11 +258,6 @@ class PutOpRef(OpRef):
     @property
     def args(self) -> object:
         return [self._key.to_json(), self._value.to_json()]
-
-    def _cmp_key(self) -> object:
-        from . import form_of
-
-        return self._subject, form_of(self._key), form_of(self._value)
 
     def to_json(self) -> dict[str, object]:
         return {self.subject: self.args}
@@ -346,7 +276,9 @@ class PostOpRef(OpRef):
         for key, value in _sorted_items(params):
             encoded[key] = autobox(value)
 
-        self._subject = coerce_subject(subject)
+        if not isinstance(subject, str):
+            raise TypeError(f"expected op subject to be str, got {type(subject).__name__}")
+        self._subject = subject
         self._params = encoded
 
     @property
@@ -356,11 +288,6 @@ class PostOpRef(OpRef):
     @property
     def args(self) -> object:
         return {key: value.to_json() for key, value in _sorted_items(self._params)}
-
-    def _cmp_key(self) -> object:
-        from . import form_of
-
-        return self._subject, tuple((key, form_of(value)) for key, value in _sorted_items(self._params))
 
     def to_json(self) -> dict[str, object]:
         return {self.subject: self.args}
@@ -375,7 +302,9 @@ class DeleteOpRef(OpRef):
         from . import autobox
 
         super().__init__()
-        self._subject = coerce_subject(subject)
+        if not isinstance(subject, str):
+            raise TypeError(f"expected op subject to be str, got {type(subject).__name__}")
+        self._subject = subject
         self._key = autobox(key)
 
     @property
@@ -385,11 +314,6 @@ class DeleteOpRef(OpRef):
     @property
     def args(self) -> object:
         return self._key.to_json()
-
-    def _cmp_key(self) -> object:
-        from . import form_of
-
-        return self._subject, form_of(self._key)
 
     def to_json(self) -> dict[str, object]:
         return {OPREF_DELETE_TAG: [self.subject, self.args]}
@@ -411,14 +335,22 @@ class IdRef:
         return f"${self.name}"
 
 
-class While:
+class ControlRef(TCRef):
+    __slots__ = ()
+
+    def __init__(self):
+        self._form = self
+
+
+class While(ControlRef):
     __slots__ = ("cond", "op", "state", "_ctx")
 
-    def __init__(self, cond: "Scalar", op: "Scalar", state: "Scalar", *, ctx: object | None = None):
+    def __init__(self, cond: "Scalar", op: "Scalar", state: "Scalar"):
+        super().__init__()
         self.cond = cond
         self.op = op
         self.state = state
-        self._ctx = ctx
+        self._ctx = None
 
     def __eq__(self, other: object) -> bool:
         return (
@@ -441,14 +373,15 @@ class While:
         }
 
 
-class Cond:
+class Cond(ControlRef):
     __slots__ = ("cond", "then", "or_else", "_ctx")
 
-    def __init__(self, cond: "TCRef", then: "Scalar", or_else: "Scalar", *, ctx: object | None = None):
+    def __init__(self, cond: "TCRef", then: "Scalar", or_else: "Scalar"):
+        super().__init__()
         self.cond = cond
         self.then = then
         self.or_else = or_else
-        self._ctx = ctx
+        self._ctx = None
 
     def __eq__(self, other: object) -> bool:
         return (
@@ -471,14 +404,15 @@ class Cond:
         }
 
 
-class ForEach:
+class ForEach(ControlRef):
     __slots__ = ("items", "op", "item_name", "_ctx")
 
-    def __init__(self, items: "Scalar", op: "Scalar", item_name: str, *, ctx: object | None = None):
+    def __init__(self, items: "Scalar", op: "Scalar", item_name: str):
+        super().__init__()
         self.items = items
         self.op = op
         self.item_name = item_name
-        self._ctx = ctx
+        self._ctx = None
 
     def __eq__(self, other: object) -> bool:
         return (

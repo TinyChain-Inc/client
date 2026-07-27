@@ -262,7 +262,7 @@ def test_library_routes_use_decorator_time_source_capture(monkeypatch):
     assert "opdef" in route
 
 
-def test_library_routes_allow_local_opref_subjects():
+def test_library_routes_reject_non_string_opref_subjects():
     class A(tc.Library):
         publisher = "example-devco"
         resource_name = "a"
@@ -270,13 +270,13 @@ def test_library_routes_allow_local_opref_subjects():
 
         @tc.post
         def bad(self):
-            subject = "$foo"
+            subject = tc.state.id("foo")._subject()
             opref = tc.state.GetOpRef(subject)
             return tc.state.Scalar(ref=tc.state.TCRef(opref))
 
     a = A()
-    ir = compile_ir(a)
-    assert "routes" in ir
+    with pytest.raises(TypeError, match="expected op subject to be str"):
+        compile_ir(a)
 
 
 def test_route_decorators_do_not_accept_name_override():

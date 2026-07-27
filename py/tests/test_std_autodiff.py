@@ -89,8 +89,8 @@ def test_autodiff_operator_is_abstract_and_dualoperator_has_typed_fields():
     right = tc.state.id("r")
     op = tc.std.DualOperator(left=left, right=right)
 
-    assert op.left == left
-    assert op.right == right
+    assert op.left.to_json() == left.to_json()
+    assert op.right.to_json() == right.to_json()
 
 
 def test_dualoperator_accepts_tensor_operands():
@@ -98,8 +98,8 @@ def test_dualoperator_accepts_tensor_operands():
     right = tc.Tensor(ref=tc.state.id("t2"))
 
     op = tc.std.DualOperator(left=left, right=right)
-    assert op.left == left
-    assert op.right == right
+    assert op.left.to_json() == left.to_json()
+    assert op.right.to_json() == right.to_json()
 
 
 def test_autodiff_operator_docstring_covers_typed_subclass_usage():
