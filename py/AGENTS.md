@@ -128,6 +128,11 @@ staying thin and well-documented for new users.
   returns a typed symbolic scalar ref.
 - Keep URI values structured until the serialization/transport boundary; avoid
   extracting `.path` in symbolic wrappers.
+- For runtime URI composition, use `uri(TypeOrInstance, ...)` and `URI(...)`
+  directly. `uri(...)` is the generic type/instance accessor and path builder;
+  `URI(...)` is the explicit constructor. Do not define local URI-constructor
+  helpers (for example `*_uri(...)`) or module URI constant tables (`*_URI`)
+  in runtime modules.
 - In runtime/client modules, construct canonical TinyChain resource paths only
   through URI helpers (`tc.uri`, `tinychain.uri.path`, etc.). Do not hardcode
   literal `/state/...`, `/service/...`, `/lib/...`, `/class/...`, `/host/...`,

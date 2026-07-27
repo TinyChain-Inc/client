@@ -282,12 +282,15 @@ def test_coerce_naming_is_banned_in_symbolic_runtime() -> None:
     assert not violations, "forbidden coerce naming found:\n" + "\n".join(violations)
 
 
-def test_state_scalar_path_naming_bans_uri_constant_tables_and_tag_path_helpers() -> None:
+def test_runtime_uri_composition_bans_local_uri_constructors_and_constant_tables() -> None:
     violations: list[str] = []
     target_files = {
         "state/scalar/__init__.py",
         "state/scalar/refs.py",
         "state/scalar/opdef.py",
+        "autodiff/reflection.py",
+        "autodiff/routes.py",
+        "codec.py",
     }
 
     for path in sorted(_SRC_ROOT.rglob("*.py")):
@@ -314,7 +317,7 @@ def test_state_scalar_path_naming_bans_uri_constant_tables_and_tag_path_helpers(
 
         for node in ast.walk(tree):
             if isinstance(node, ast.FunctionDef):
-                if node.name.endswith("_tag") or node.name.endswith("_path"):
+                if node.name.endswith("_tag") or node.name.endswith("_path") or node.name.endswith("_uri"):
                     line = getattr(node, "lineno", 0)
                     violations.append(f"{relative_path}:{line}: def {node.name}(...)")
             if isinstance(node, ast.Assign):
@@ -323,7 +326,7 @@ def test_state_scalar_path_naming_bans_uri_constant_tables_and_tag_path_helpers(
                         line = getattr(node, "lineno", 0)
                         violations.append(f"{relative_path}:{line}: {target.id}")
 
-    assert not violations, "forbidden state/scalar path naming patterns found:\n" + "\n".join(violations)
+    assert not violations, "forbidden runtime URI constructor/table patterns found:\n" + "\n".join(violations)
 
 
 def _is_isinstance_call(test: ast.AST) -> bool:

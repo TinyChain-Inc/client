@@ -9,7 +9,6 @@ from ..graph_reflection import TypeSpec
 from ..library import Library, _class_identity
 from ..uri import uri
 from ..serialize import serialize
-from .constants import TENSOR_TYPESPEC_CLASS_URI
 from .protocol import AutodiffError
 from .seed import FLOAT_DTYPES, SeedValidator
 ROUTE_DERIVATIVE_SOURCE_ARTIFACT = "artifact"
@@ -519,7 +518,7 @@ def _validate_tensor_type_spec(
     identity: RouteDerivativeIdentity,
     type_spec: TypeSpec,
 ) -> None:
-    if type_spec.class_uri != path(TENSOR_TYPESPEC_CLASS_URI):
+    if type_spec.class_uri != path(uri(State, "collection", "tensor")):
         raise AutodiffError(
             "non_differentiable_route",
             f"route {identity.route_uri} derivative signatures must use tensor TypeSpec values",

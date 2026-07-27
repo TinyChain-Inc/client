@@ -139,8 +139,13 @@ def uri(subject: object, *path: str) -> URI | "Scalar":
     if isinstance(subject, URI):
         base = subject
     elif hasattr(subject, "__uri__"):
-        base_value = subject.__uri__
-        base = base_value if isinstance(base_value, URI) else URI.parse(str(base_value))
+        base_value = getattr(subject, "__uri__")
+        if isinstance(base_value, URI):
+            base = base_value
+        elif isinstance(base_value, str):
+            base = URI.parse(base_value)
+        else:
+            raise TypeError(f"expected __uri__ to be URI or str, got {type(base_value).__name__}")
     elif hasattr(subject, "class_") and callable(getattr(subject, "class_")):
         if path:
             raise TypeError("cannot append path segments to a Scalar URI")
@@ -153,7 +158,7 @@ def uri(subject: object, *path: str) -> URI | "Scalar":
             base = URI.parse(subject)
         else:
             segments = [subject, *_path_segments(path)]
-            return URI(_join_path(segments))
+            return URI(path=_join_path(segments))
     else:
         raise TypeError(f"unsupported URI subject: {type(subject).__name__}")
 

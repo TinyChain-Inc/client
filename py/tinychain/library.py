@@ -105,6 +105,8 @@ def _route_path(subject: object, route_name: str) -> str:
             ]
         )
     )
+    if not isinstance(route_uri, URI):
+        raise TypeError("expected URI route path")
 
     authority = getattr(subject, "authority", None)
     authority_uri: URI | None = None

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Iterator, Mapping, Sequence, cast
 
 from ...uri import URI, path, uri
@@ -19,42 +18,12 @@ if TYPE_CHECKING:
     from ..context import Context
 
 
-@lru_cache(maxsize=1)
-def _value_runtime():
-    from ..value import Bool as value_bool
-    from ..value import Link as value_link
-    from ..value import Map as value_map
-    from ..value import Number as value_number
-    from ..value import String as value_string
-    from ..value import Tuple as value_tuple
-    from ..value import Value
-    from ..value import form_of as value_form_of
-
-    return Value, value_bool, value_link, value_map, value_number, value_string, value_tuple, value_form_of
-
-
-def _scalar_uri(*segments: str) -> URI:
-    return uri(State, "scalar", *segments)
-
-
-def _scalar_op_uri(*segments: str) -> URI:
-    return uri(_scalar_uri(), "op", *segments)
-
-
-def _scalar_reflect_uri(*segments: str) -> URI:
-    return uri(_scalar_uri(), "reflect", *segments)
-
-
-def _opdef_reflect_uri(*segments: str) -> URI:
-    return uri(_scalar_op_uri(), "reflect", *segments)
-
-
 def _sorted_items(obj: Mapping[str, Any]) -> list[tuple[str, Any]]:
     return sorted(obj.items(), key=lambda kv: kv[0])
 
 
 def _json_of(form: object) -> object:
-    Value, _, _, _, _, _, _, _ = _value_runtime()
+    from ..value import Value
 
     runtime_op = OpRef.from_runtime(form)
     if runtime_op is not None:
@@ -86,7 +55,8 @@ def _json_of(form: object) -> object:
 def autobox(
     obj: "Scalar | TCRef | OpRef | IdRef | OpDef | Value | Cond | While | ForEach | object",
 ) -> "Scalar":
-    Value, _, value_link, _, _, _, _, _ = _value_runtime()
+    from ..value import Link as value_link
+    from ..value import Value
 
     if isinstance(obj, Value):
         from ...opref import OpRef as RuntimeOpRef
@@ -137,7 +107,7 @@ def autobox(
 
 
 def _is_string_scalar(obj: object) -> bool:
-    _, _, _, _, _, value_string, _, _ = _value_runtime()
+    from ..value import String as value_string
 
     scalar_form = form_of(obj) if isinstance(obj, Scalar) else None
     return (
@@ -179,7 +149,8 @@ def _literal_number(form: object) -> int | float | bool | None:
     if isinstance(form, (int, float, bool)):
         return form
 
-    _, value_bool, _, _, value_number, _, _, _ = _value_runtime()
+    from ..value import Bool as value_bool
+    from ..value import Number as value_number
     if isinstance(form, (value_number, value_bool)):
         try:
             json_value = form.to_json()
@@ -220,7 +191,12 @@ def scalar_for_hint(name: str, hint: object) -> "Scalar":
 
 
 def _scalar_class_for_hint(hint: object) -> type["Scalar"]:
-    Value, value_bool, _, value_map, value_number, value_string, value_tuple, _ = _value_runtime()
+    from ..value import Bool as value_bool
+    from ..value import Map as value_map
+    from ..value import Number as value_number
+    from ..value import String as value_string
+    from ..value import Tuple as value_tuple
+    from ..value import Value
 
     if isinstance(hint, type):
         if issubclass(hint, Collection):
@@ -263,7 +239,11 @@ def _scalar_like(
     tuple: Sequence["Scalar"] | None = None,
     ctx: "Context | None" = None,
 ) -> "Scalar":
-    _, value_bool, _, value_map, value_number, value_string, value_tuple, _ = _value_runtime()
+    from ..value import Bool as value_bool
+    from ..value import Map as value_map
+    from ..value import Number as value_number
+    from ..value import String as value_string
+    from ..value import Tuple as value_tuple
 
     scalar_type: type[Scalar] = Scalar
     if isinstance(value_obj, value_number):
@@ -421,10 +401,10 @@ def _typed_from_op_ref(op_ref: OpRef) -> Scalar:
     ref = op_ref
 
     exact_dispatch: dict[str, type[Scalar]] = {
-        path(_scalar_reflect_uri("ref_parts")): Tuple,
-        path(_opdef_reflect_uri("form")): Tuple,
-        path(_opdef_reflect_uri("scalars")): Tuple,
-        path(_opdef_reflect_uri("last_id")): String,
+        path(uri(State, "scalar", "reflect", "ref_parts")): Tuple,
+        path(uri(State, "scalar", "op", "reflect", "form")): Tuple,
+        path(uri(State, "scalar", "op", "reflect", "scalars")): Tuple,
+        path(uri(State, "scalar", "op", "reflect", "last_id")): String,
     }
     wrapper = exact_dispatch.get(subject)
     if wrapper is not None:
@@ -518,7 +498,8 @@ def for_each(
 
 
 def form_of(value: "Scalar | object") -> object:
-    Value, _, _, _, _, _, _, value_form_of = _value_runtime()
+    from ..value import Value
+    from ..value import form_of as value_form_of
 
     if isinstance(value, Value):
         return value_form_of(value)
@@ -542,7 +523,7 @@ class Scalar(State):
     - scalar op defs (typed `/state/scalar/op/*` maps)
     """
 
-    __uri__: URI = _scalar_uri()
+    __uri__: URI = uri(State, "scalar")
 
     def __init__(self, form: object = None, *, ref: TCRef | None = None, ctx: "Context | None" = None):
         super().__init__(form, ref=ref, ctx=ctx)
@@ -554,23 +535,23 @@ class Scalar(State):
         return rtype._post_ref(subject, {payload_key: payload_value}, ctx=self._ctx)
 
     def class_(self) -> "Scalar":
-        return self._reflect(path(_scalar_reflect_uri("class")), "scalar", self, rtype=Scalar)
+        return self._reflect(path(uri(State, "scalar", "reflect", "class")), "scalar", self, rtype=Scalar)
 
     def ref_parts(self) -> "Tuple":
-        return cast(Tuple, self._reflect(path(_scalar_reflect_uri("ref_parts")), "scalar", self, rtype=Tuple))
+        return cast(Tuple, self._reflect(path(uri(State, "scalar", "reflect", "ref_parts")), "scalar", self, rtype=Tuple))
 
     def reflect_form(self) -> "Tuple":
-        return cast(Tuple, self._reflect(path(_opdef_reflect_uri("form")), "op", self, rtype=Tuple))
+        return cast(Tuple, self._reflect(path(uri(State, "scalar", "op", "reflect", "form")), "op", self, rtype=Tuple))
 
     def reflect_last_id(self) -> "String":
-        return cast(String, self._reflect(path(_opdef_reflect_uri("last_id")), "op", self, rtype=String))
+        return cast(String, self._reflect(path(uri(State, "scalar", "op", "reflect", "last_id")), "op", self, rtype=String))
 
     def reflect_scalars(self) -> "Tuple":
-        return cast(Tuple, self._reflect(path(_opdef_reflect_uri("scalars")), "op", self, rtype=Tuple))
+        return cast(Tuple, self._reflect(path(uri(State, "scalar", "op", "reflect", "scalars")), "op", self, rtype=Tuple))
 
     @staticmethod
     def from_json(obj: Any) -> "Scalar":
-        Value, _, _, _, _, _, _, _ = _value_runtime()
+        from ..value import Value
 
         if obj is None or isinstance(obj, (bool, int, float, str)):
             value = Value.from_json(obj)
@@ -585,7 +566,7 @@ class Scalar(State):
 
             if len(obj) == 1:
                 (key, _), = obj.items()
-                if isinstance(key, str) and key.startswith(path(_scalar_op_uri())):
+                if isinstance(key, str) and key.startswith(path(uri(State, "scalar", "op"))):
                     return Scalar(OpDef.from_json(obj))
 
             # Decode TCRef/OpRef maps before generic Value maps to avoid

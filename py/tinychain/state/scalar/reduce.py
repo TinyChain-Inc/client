@@ -57,9 +57,10 @@ def infer_reduce_item_name(
 
 
 def _reduce_state_keys(value: "Scalar | object") -> set[str]:
-    from . import Scalar, _value_runtime, form_of
-
-    Value, _, _, value_map, _, _, _, value_form_of = _value_runtime()
+    from . import Scalar, form_of
+    from ..value import Map as value_map
+    from ..value import Value
+    from ..value import form_of as value_form_of
 
     if isinstance(value, Scalar):
         value_form = form_of(value)
