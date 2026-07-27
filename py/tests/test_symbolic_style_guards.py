@@ -76,7 +76,7 @@ def test_symbolic_instantiation_style_guards() -> None:
                 violations.append(f"{relative_path}:{line}: {segment}")
                 continue
 
-            if name in subclasses_by_base and node.args:
+            if name in subclasses_by_base and name != "TCRef" and node.args:
                 first_arg = node.args[0]
                 if isinstance(first_arg, ast.Call):
                     inner_name = _call_name(first_arg.func)

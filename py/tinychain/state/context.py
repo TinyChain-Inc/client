@@ -35,10 +35,10 @@ class Context:
 
         cls = type(boxed) if isinstance(boxed, Scalar) else Scalar
         try:
-            bound = cls(ref=TCRef(IdRef(name)))
+            bound = cls(ref=TCRef.id(name))
         except TypeError:
             # Fall back to an untyped scalar if a subclass constructor diverges.
-            bound = Scalar(ref=TCRef(IdRef(name)))
+            bound = Scalar(ref=TCRef.id(name))
 
         self._bound[name] = bound
         self._bound[original] = bound

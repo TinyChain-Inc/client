@@ -500,3 +500,8 @@ class ForEach:
             ]
         }
 
+
+def tcref_form_of(value: "TCRef | object") -> object:
+    if isinstance(value, TCRef):
+        return value._form
+    return value

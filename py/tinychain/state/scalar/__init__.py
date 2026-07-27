@@ -63,16 +63,19 @@ def _sorted_items(obj: Mapping[str, Any]) -> list[tuple[str, Any]]:
 def _json_of(form: object) -> object:
     Value, _, _, _, _, _, _, _ = _value_runtime()
 
+    if isinstance(form, (OpRef, OpDef, Cond, While, ForEach)):
+        return form.to_json()
     if isinstance(form, Value):
         return form.to_json()
     if isinstance(form, Scalar):
         return _json_of(form_of(form))
     if isinstance(form, TCRef):
-        return _json_of(tcref_form_of(form))
+        ref_form = tcref_form_of(form)
+        if ref_form is form:
+            return form.to_json()
+        return _json_of(ref_form)
     if isinstance(form, IdRef):
         return {form.key(): []}
-    if isinstance(form, (OpRef, OpDef, Cond, While, ForEach)):
-        return form.to_json()
     if isinstance(form, Mapping):
         return {k: _json_of(v) for k, v in _sorted_items(form)}
     if isinstance(form, Sequence) and not isinstance(form, (str, bytes, bytearray)):
@@ -180,7 +183,7 @@ def id(name: str) -> "Scalar":
                 pass
 
     # Unbound ids are represented as a generic symbolic ref.
-    return Symbol(ref=TCRef(IdRef(name)))
+    return Symbol(ref=TCRef.id(name))
 
 
 def map_of(items: Mapping[str, "Scalar | Value | object"]) -> "Scalar":
@@ -192,7 +195,7 @@ def tuple_of(items: Sequence["Scalar | Value | object"]) -> "Scalar":
 
 
 def scalar_for_hint(name: str, hint: object) -> "Scalar":
-    base = TCRef(IdRef(name))
+    base = TCRef.id(name)
     cls = _scalar_class_for_hint(hint)
     return cls(ref=base)
 
