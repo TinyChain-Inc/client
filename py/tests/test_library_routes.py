@@ -137,6 +137,47 @@ def test_library_routes_preserve_all_dict_return_keys():
     assert [name for name, _ in opdef] == ["min", "max"]
 
 
+def test_library_routes_ref_typed_mapping_return_is_result_value():
+    class A(tc.Library):
+        publisher = "example-devco"
+        version = "0.1.0"
+
+        @tc.post
+        def stats(self, x: tc.Number) -> tc.Ref:
+            stats_map = {"max": x}
+            return stats_map
+
+    ir = compile_ir(A)
+    route = next(route for route in ir["routes"] if route["path"] == "/stats")
+    opdef = route["opdef"][OPDEF_POST]
+
+    names = [name for name, _ in opdef]
+    assert "result" in names
+    assert "max" not in names
+
+
+def test_library_route_symbolic_post_body_skips_eager_execute(monkeypatch):
+    class A(tc.Library):
+        publisher = "example-devco"
+        version = "0.1.0"
+
+        @tc.post
+        def echo(self, x: tc.Number) -> tc.Number:
+            return x
+
+    def fail_execute(_):
+        raise AssertionError("route call unexpectedly executed")
+
+    monkeypatch.setattr("tinychain.execute", fail_execute)
+
+    with tc.state.scoped_context():
+        symbolic = tc.state.id("x")
+    with tc.backend(mode="eager"):
+        result = A().echo(symbolic)
+
+    assert isinstance(result, tc.Number)
+
+
 def test_grad_is_call_site_transform_stub_not_route_decorator():
     class A(tc.Library):
         publisher = "example-devco"

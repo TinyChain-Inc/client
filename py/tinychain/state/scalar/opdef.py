@@ -19,11 +19,14 @@ class OpDef:
     def form(self) -> list[tuple[str, "Scalar"]]:
         raise NotImplementedError()
 
+    def _cmp_key(self) -> object:
+        raise NotImplementedError()
+
     def __eq__(self, other: object) -> bool:
-        return isinstance(other, OpDef) and self.to_json() == other.to_json()
+        return type(self) is type(other) and self._cmp_key() == other._cmp_key()
 
     def __hash__(self) -> int:
-        return hash(repr(self.to_json()))
+        return hash((type(self), self._cmp_key()))
 
     def last_id(self) -> str | None:
         if not self.form:
@@ -36,23 +39,25 @@ class OpDef:
         for _, scalar in self.form:
             yield from _iter_scalar_nodes(scalar)
 
-    def reflect_form(self) -> "Scalar":
-        from . import OPDEF_REFLECT_FORM, PostOpRef, Scalar, TCRef
+    def _reflect(self, subject: str) -> "Scalar":
+        from . import PostOpRef, Scalar
 
-        opref = PostOpRef(OPDEF_REFLECT_FORM, {"op": self})
-        return Scalar(ref=TCRef(opref))
+        return Scalar(ref=PostOpRef(subject, {"op": self}))
+
+    def reflect_form(self) -> "Scalar":
+        from . import OPDEF_REFLECT_FORM
+
+        return self._reflect(OPDEF_REFLECT_FORM)
 
     def reflect_last_id(self) -> "Scalar":
-        from . import OPDEF_REFLECT_LAST_ID, PostOpRef, Scalar, TCRef
+        from . import OPDEF_REFLECT_LAST_ID
 
-        opref = PostOpRef(OPDEF_REFLECT_LAST_ID, {"op": self})
-        return Scalar(ref=TCRef(opref))
+        return self._reflect(OPDEF_REFLECT_LAST_ID)
 
     def reflect_scalars(self) -> "Scalar":
-        from . import OPDEF_REFLECT_SCALARS, PostOpRef, Scalar, TCRef
+        from . import OPDEF_REFLECT_SCALARS
 
-        opref = PostOpRef(OPDEF_REFLECT_SCALARS, {"op": self})
-        return Scalar(ref=TCRef(opref))
+        return self._reflect(OPDEF_REFLECT_SCALARS)
 
     def class_(self) -> "Scalar":
         from . import Scalar
@@ -121,6 +126,11 @@ class GetOpDef(OpDef):
     def form(self) -> list[tuple[str, "Scalar"]]:
         return self._form
 
+    def _cmp_key(self) -> object:
+        from . import form_of
+
+        return self.key, tuple((name, form_of(scalar)) for name, scalar in self._form)
+
     def to_json(self) -> dict[str, object]:
         from . import OPDEF_GET, _encode_form
 
@@ -146,6 +156,11 @@ class PutOpDef(OpDef):
     def form(self) -> list[tuple[str, "Scalar"]]:
         return self._form
 
+    def _cmp_key(self) -> object:
+        from . import form_of
+
+        return self.key, self.value, tuple((name, form_of(scalar)) for name, scalar in self._form)
+
     def to_json(self) -> dict[str, object]:
         from . import OPDEF_PUT, _encode_form
 
@@ -165,6 +180,11 @@ class PostOpDef(OpDef):
     @property
     def form(self) -> list[tuple[str, "Scalar"]]:
         return self._form
+
+    def _cmp_key(self) -> object:
+        from . import form_of
+
+        return tuple((name, form_of(scalar)) for name, scalar in self._form)
 
     def to_json(self) -> dict[str, object]:
         from . import OPDEF_POST, _encode_form
@@ -189,6 +209,11 @@ class DeleteOpDef(OpDef):
     @property
     def form(self) -> list[tuple[str, "Scalar"]]:
         return self._form
+
+    def _cmp_key(self) -> object:
+        from . import form_of
+
+        return self.key, tuple((name, form_of(scalar)) for name, scalar in self._form)
 
     def to_json(self) -> dict[str, object]:
         from . import OPDEF_DELETE, _encode_form
