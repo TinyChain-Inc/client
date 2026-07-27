@@ -569,7 +569,7 @@ def test_build_derivative_artifact_library_returns_normal_library_subclass() -> 
     assert artifact_library.version == "1.2.3"
     assert artifact_library.class_id().path == "/lib/tester/example_derivative/1.2.3"
     assert artifact_library().dependencies == (
-        tc.uri("lib", "source_pub", "source_library", "0.1.0"),
+        tc.URI(path=tc.URI.of("lib", "source_pub", "source_library", "0.1.0")),
     )
 
 

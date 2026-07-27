@@ -34,7 +34,8 @@ class Get(Op):
         return hash((Get, self.subject))
 
     def __call__(self, key: Value | None = None) -> "Scalar":
-        from . import GetOpRef, Scalar
+        from . import Scalar
+        from .refs import GetOpRef
         from ..value import Null, Value
 
         if key is None:
@@ -58,7 +59,8 @@ class Put(Op):
         return hash((Put, self.subject))
 
     def __call__(self, key: "Scalar", value: "Scalar") -> "Scalar":
-        from . import PutOpRef, Scalar
+        from . import Scalar
+        from .refs import PutOpRef
 
         if not isinstance(key, Scalar):
             raise TypeError("Put expects key to be State (Scalar or Value)")
@@ -81,7 +83,8 @@ class Post(Op):
         return hash((Post, self.subject))
 
     def __call__(self, params: Mapping[str, "Scalar"]) -> "Scalar":
-        from . import PostOpRef, Scalar, _sorted_items
+        from . import Scalar, _sorted_items
+        from .refs import PostOpRef
 
         if not isinstance(params, Mapping):
             raise TypeError("Post expects params to be a map of State values")
@@ -110,7 +113,8 @@ class Delete(Op):
         return hash((Delete, self.subject))
 
     def __call__(self, key: Value | None = None) -> "Scalar":
-        from . import DeleteOpRef, Scalar
+        from . import Scalar
+        from .refs import DeleteOpRef
         from ..value import Null, Value
 
         if key is None:

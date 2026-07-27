@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
 from . import Scalar
-from ...uri import URI, path, uri
+from ...uri import URI
 
 if TYPE_CHECKING:
     from . import OpDef
@@ -20,12 +20,12 @@ def _looks_like_tcref_map(obj: Mapping[str, object]) -> bool:
 
     (key, _value), = obj.items()
     return isinstance(key, str) and (
-        key == path(uri(Scalar, "ref", "op", "delete")) or key.startswith("/") or key.startswith("$")
+        key == URI.of(Scalar, "ref", "op", "delete") or key.startswith("/") or key.startswith("$")
     )
 
 
 class TCRef(Scalar):
-    __uri__: URI = uri(Scalar, "ref")
+    __uri__: URI = URI(path=URI.of(Scalar, "ref"))
 
     def __init__(self, form: "TCRef | Scalar"):
         if form is self:
@@ -69,7 +69,7 @@ class TCRef(Scalar):
         if not _looks_like_tcref_map(obj):
             raise TypeError("not a TCRef op map")
 
-        if key == path(uri(Scalar, "ref", "cond")):
+        if key == URI.of(Scalar, "ref", "cond"):
             if not isinstance(value, list) or len(value) != 3:
                 raise TypeError("invalid Cond ref encoding")
             raw_cond, raw_then, raw_or_else = value
@@ -80,7 +80,7 @@ class TCRef(Scalar):
                 Scalar.from_json(raw_or_else),
             )
 
-        if key == path(uri(Scalar, "ref", "while")):
+        if key == URI.of(Scalar, "ref", "while"):
             if not isinstance(value, list) or len(value) != 3:
                 raise TypeError("invalid While ref encoding")
             cond, op, state = value
@@ -89,7 +89,7 @@ class TCRef(Scalar):
                 Scalar.from_json(op),
                 Scalar.from_json(state),
             )
-        if key == path(uri(Scalar, "ref", "for_each")):
+        if key == URI.of(Scalar, "ref", "for_each"):
             if not isinstance(value, list) or len(value) != 3:
                 raise TypeError("invalid ForEach ref encoding")
             items, op, item_name = value
@@ -114,7 +114,7 @@ class OpRef(TCRef):
     This is distinct from the runtime `tinychain.OpRef` request stub (HTTP method/path/body).
     """
 
-    __uri__: URI = uri(TCRef, "op")
+    __uri__: URI = URI(path=URI.of(TCRef, "op"))
 
     METHOD: str = ""
 
@@ -178,7 +178,7 @@ class OpRef(TCRef):
             raise TypeError("expected an OpRef map")
 
         (key, value), = obj.items()
-        if key == path(uri(TCRef, "op", "delete")):
+        if key == URI.of(TCRef, "op", "delete"):
             if not isinstance(value, list) or len(value) != 2:
                 raise TypeError("invalid DELETE opref encoding")
             subject, raw_key = value
@@ -303,7 +303,7 @@ class DeleteOpRef(OpRef):
         return self._key.to_json()
 
     def to_json(self) -> dict[str, object]:
-        return {path(uri(TCRef, "op", "delete")): [self.subject, self.args]}
+        return {URI.of(TCRef, "op", "delete"): [self.subject, self.args]}
 
 
 class IdRef(TCRef):
@@ -347,7 +347,7 @@ class While(ControlRef):
 
     def to_json(self) -> dict[str, object]:
         return {
-            path(uri(Scalar, "ref", "while")): [
+            URI.of(Scalar, "ref", "while"): [
                 self.cond.to_json(),
                 self.op.to_json(),
                 self.state.to_json(),
@@ -376,7 +376,7 @@ class Cond(ControlRef):
 
     def to_json(self) -> dict[str, object]:
         return {
-            path(uri(Scalar, "ref", "cond")): [
+            URI.of(Scalar, "ref", "cond"): [
                 self.cond.to_json(),
                 self.then.to_json(),
                 self.or_else.to_json(),
@@ -405,7 +405,7 @@ class ForEach(ControlRef):
 
     def to_json(self) -> dict[str, object]:
         return {
-            path(uri(Scalar, "ref", "for_each")): [
+            URI.of(Scalar, "ref", "for_each"): [
                 self.items.to_json(),
                 self.op.to_json(),
                 self.item_name,

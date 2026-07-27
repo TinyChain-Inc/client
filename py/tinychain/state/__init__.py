@@ -1,27 +1,7 @@
 from typing import TypeAlias
 
 from .scalar import (
-    Op,
-    Cond,
-    Delete,
-    DeleteOpDef,
-    DeleteOpRef,
-    Get,
-    GetOpDef,
-    GetOpRef,
-    OpRef,
-    IdRef,
-    OpDef,
-    Post,
-    PostOpDef,
-    PostOpRef,
-    Put,
-    PutOpDef,
-    PutOpRef,
     Scalar,
-    TCRef,
-    While,
-    ForEach,
     autobox,
     after,
     cond,
@@ -33,7 +13,11 @@ from .scalar import (
     for_each,
     form_of,
 )
+from .scalar.opdef import DeleteOpDef, GetOpDef, OpDef, PostOpDef, PutOpDef
+from .scalar.ops import Delete, Get, Op, Post, Put
+from .scalar.refs import Cond, DeleteOpRef, ForEach, GetOpRef, IdRef, OpRef, PostOpRef, PutOpRef, TCRef, While
 from .context import Context, ContextResult, context, scoped_context, current_context
+from ._ops import subject_of
 from . import collection
 from .collection import Collection
 from ..collection.tensor import Tensor as _Tensor
@@ -89,6 +73,7 @@ __all__ = [
     "context",
     "scoped_context",
     "current_context",
+    "subject_of",
     "collection",
     "id",
     "map_of",

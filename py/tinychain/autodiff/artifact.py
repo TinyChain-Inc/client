@@ -8,7 +8,7 @@ from typing import ClassVar
 
 from ..library import Library, Route, get
 from ..serialize import serialize
-from ..uri import URI, _python_name_to_resource, uri
+from ..uri import URI, _python_name_to_resource
 from .compile import compile_derivative_program
 from .protocol import DerivativeMetadata
 
@@ -58,7 +58,7 @@ class ArtifactPublicIdentity:
 
     def to_uri(self) -> URI:
         try:
-            resolved = uri("lib", self.publisher, self.name, self.version)
+            resolved = URI(path=URI.of("lib", self.publisher, self.name, self.version))
         except ValueError as exc:
             raise ArtifactError("invalid_manifest", str(exc)) from exc
         if not isinstance(resolved, URI):
@@ -340,7 +340,7 @@ def source_library_dependency_uri(
         )
     publisher, name = parts
     try:
-        dependency = uri("lib", publisher, name, source_library_version)
+        dependency = URI(path=URI.of("lib", publisher, name, source_library_version))
     except ValueError as exc:
         raise ArtifactError("invalid_manifest", str(exc)) from exc
     if not isinstance(dependency, URI):

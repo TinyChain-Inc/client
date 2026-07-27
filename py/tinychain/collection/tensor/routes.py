@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 from ...state.base import State
-from ...uri import uri
+from ...uri import URI
 
-
-TENSOR_CLASS_URI = uri(State, "collection", "tensor")
+TENSOR_CLASS_URI = URI(path=URI.of(State, "collection", "tensor"))
 
 
 def tensor_route(segment: str) -> str:
-    return str(uri(TENSOR_CLASS_URI, segment))
+    return str(URI(path=URI.of(TENSOR_CLASS_URI, segment)))
 
 
 __all__ = ["TENSOR_CLASS_URI", "tensor_route"]

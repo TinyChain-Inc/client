@@ -4,7 +4,7 @@ from collections.abc import Callable
 from numbers import Number as NumberABC
 from typing import Literal
 
-from ...uri import URI, path
+from ...uri import URI
 from ...state.scalar import (
     Bool,
     Comparable,
@@ -448,12 +448,12 @@ class Tensor(Comparable):
 
             normalized = dtype.strip().lower()
             dtype = {
-                "f32": path(Number, "float", "32"),
-                "float32": path(Number, "float", "32"),
-                "f64": path(Number, "float", "64"),
-                "float64": path(Number, "float", "64"),
-                "u64": path(Number, "uint", "64"),
-                "uint64": path(Number, "uint", "64"),
+                "f32": URI.of(Number, "float", "32"),
+                "float32": URI.of(Number, "float", "32"),
+                "f64": URI.of(Number, "float", "64"),
+                "float64": URI.of(Number, "float", "64"),
+                "u64": URI.of(Number, "uint", "64"),
+                "uint64": URI.of(Number, "uint", "64"),
             }.get(normalized, dtype)
 
         return {

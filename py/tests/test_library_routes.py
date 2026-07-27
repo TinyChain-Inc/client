@@ -27,12 +27,12 @@ def test_library_routes_return_typed_refs():
         hello = a.hello()
         assert isinstance(hello, tc.String)
         assert hello.op.method == "GET"
-        assert hello.op.path == tc.uri(a, "hello").path
+        assert hello.op.path == tc.URI.of(a, "hello")
 
         raw = a.raw()
         assert isinstance(raw, tc.OpRef)
         assert raw.method == "GET"
-        assert raw.path == tc.uri(a, "raw").path
+        assert raw.path == tc.URI.of(a, "raw")
 
 
 def test_route_type_hints_resolve_to_runtime_value_types():
@@ -130,7 +130,7 @@ def test_library_routes_preserve_all_dict_return_keys():
 
     ir = compile_ir(A)
     route = next(route for route in ir["routes"] if route["path"] == "/stats")
-    opdef = route["opdef"][tc.uri("state", "scalar", "op", "post").path]
+    opdef = route["opdef"][tc.URI.of("state", "scalar", "op", "post")]
 
     assert [name for name, _ in opdef] == ["min", "max"]
 
@@ -147,7 +147,7 @@ def test_library_routes_ref_typed_mapping_return_is_result_value():
 
     ir = compile_ir(A)
     route = next(route for route in ir["routes"] if route["path"] == "/stats")
-    opdef = route["opdef"][tc.uri("state", "scalar", "op", "post").path]
+    opdef = route["opdef"][tc.URI.of("state", "scalar", "op", "post")]
 
     names = [name for name, _ in opdef]
     assert "result" in names
@@ -219,7 +219,7 @@ def test_grad_cannot_be_used_as_route_metadata_decorator():
 
     definition = library_definition(A)
     route = definition[A.class_id().path]["identity"]
-    assert tc.uri("state", "scalar", "op", "post").path in route
+    assert tc.URI.of("state", "scalar", "op", "post") in route
 
 
 def test_grad_tensor_target_fails_until_route_tracing_is_implemented():
@@ -268,7 +268,7 @@ def test_library_routes_reject_non_string_opref_subjects():
 
         @tc.post
         def bad(self):
-            subject = tc.state.id("foo")._subject()
+            subject = tc.state.subject_of(tc.state.id("foo"))
             opref = tc.state.GetOpRef(subject)
             return tc.state.Scalar(ref=tc.state.TCRef(opref))
 
@@ -438,7 +438,7 @@ def test_library_instances_do_not_accept_dependency_overrides():
         publisher = "example-devco"
         resource_name = "a"
         version = "0.1.0"
-        dependencies = (tc.uri("lib", "example-devco", "b", "0.1.0"),)
+        dependencies = (tc.URI(path=tc.URI.of("lib", "example-devco", "b", "0.1.0")),)
 
     with pytest.raises(TypeError, match="dependencies"):
         A(dependencies=())

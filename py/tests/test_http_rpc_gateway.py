@@ -24,8 +24,8 @@ def test_pyo3_kernel_resolves_opref_over_http_gateway(tmp_path):
             pytest.skip("sandbox does not permit launching local Rust host example")
         raise
     try:
-        b_root = tc.uri("lib", "example-devco", "example", "0.1.0").path
-        b_hello = tc.uri("lib", "example-devco", "example", "0.1.0", "example-devco", "example", "0.1.0", "hello").path
+        b_root = tc.URI.of("lib", "example-devco", "example", "0.1.0")
+        b_hello = tc.URI.of("lib", "example-devco", "example", "0.1.0", "example-devco", "example", "0.1.0", "hello")
 
         class Local(tc.Library):
             publisher = "example-devco"
@@ -48,7 +48,7 @@ def test_pyo3_kernel_resolves_opref_over_http_gateway(tmp_path):
             )
 
         with pytest.raises(ValueError):
-            kernel.resolve_get(tc.uri("service").path)
+            kernel.resolve_get(tc.URI.of("service"))
     finally:
         proc.kill()
 

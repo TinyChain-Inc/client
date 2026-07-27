@@ -68,12 +68,20 @@ class Host:
 
     def url(self, target: object, route: str | None = None, **query: object) -> str:
         _reject_transaction_query(query)
-        path = self.link(uri(target, *([route] if route else []))).absolute()
-        _reject_transaction_control(path)
+        target_uri = self.link(target)
+        if route:
+            target_uri = URI(
+                path=URI.of(target_uri, route),
+                scheme=target_uri.scheme,
+                host=target_uri.host,
+                port=target_uri.port,
+            )
+        target = target_uri.absolute()
+        _reject_transaction_control(target)
         if not query:
-            return path
+            return target
         encoded = urlencode(_url_query(query), doseq=True)
-        return f"{path}?{encoded}"
+        return f"{target}?{encoded}"
 
     def request(
         self,

@@ -77,6 +77,40 @@ class URI:
     def __str__(self) -> str:
         return self.absolute()
 
+    @classmethod
+    def of(cls, subject: object, *parts: str) -> str:
+        if isinstance(subject, str):
+            if subject.startswith("/"):
+                base = cls.parse(subject)
+                return base.child(*parts).path if parts else base.path
+            if subject.startswith("$") or "://" in subject:
+                base = cls.parse(subject)
+                return base.child(*parts).path if parts else base.path
+
+            segments = [_segment("path", subject), *_path_segments(parts)]
+            return cls(path=_join_path(segments)).path
+
+        resolved = uri(subject)
+        if isinstance(resolved, URI):
+            return resolved.child(*parts).path if parts else resolved.path
+
+        if parts:
+            raise TypeError("cannot append path segments to a Scalar URI")
+
+        raw: object = resolved
+        if hasattr(raw, "to_json"):
+            raw = raw.to_json()
+        return cls.parse(str(raw)).path
+
+    def child(self, *parts: str) -> "URI":
+        if not parts:
+            return self
+
+        segments = _path_segments(parts)
+        base_path = self.path.rstrip("/")
+        new_path = _join_path([base_path.lstrip("/")] + segments) if base_path else _join_path(segments)
+        return URI(path=new_path, scheme=self.scheme, host=self.host, port=self.port)
+
 
 def _segment(label: str, value: str) -> str:
     if not isinstance(value, str) or not value:
@@ -135,62 +169,31 @@ def _join_path(segments: Iterable[str]) -> str:
     return f"/{joined}" if joined else "/"
 
 
-def uri(subject: object, *path: str) -> URI | "Scalar":
+def uri(subject: object) -> URI | "Scalar":
     if isinstance(subject, URI):
-        base = subject
-    elif hasattr(subject, "__uri__"):
+        return subject
+
+    if hasattr(subject, "__uri__"):
         base_value = getattr(subject, "__uri__")
         if isinstance(base_value, URI):
-            base = base_value
-        elif isinstance(base_value, str):
-            base = URI.parse(base_value)
-        else:
-            raise TypeError(f"expected __uri__ to be URI or str, got {type(base_value).__name__}")
-    elif hasattr(subject, "class_") and callable(getattr(subject, "class_")):
-        if path:
-            raise TypeError("cannot append path segments to a Scalar URI")
+            return base_value
+        if isinstance(base_value, str):
+            return URI.parse(base_value)
+        raise TypeError(f"expected __uri__ to be URI or str, got {type(base_value).__name__}")
+
+    if hasattr(subject, "class_") and callable(getattr(subject, "class_")):
         return subject.class_()
-    elif hasattr(subject, "id") and callable(getattr(subject, "id")):
+
+    if hasattr(subject, "id") and callable(getattr(subject, "id")):
         base_value = subject.id()
-        base = base_value if isinstance(base_value, URI) else URI.parse(str(base_value))
-    elif isinstance(subject, str):
+        return base_value if isinstance(base_value, URI) else URI.parse(str(base_value))
+
+    if isinstance(subject, str):
         if subject.startswith("/") or subject.startswith("$") or "://" in subject:
-            base = URI.parse(subject)
-        else:
-            segments = [subject, *_path_segments(path)]
-            return URI(path=_join_path(segments))
-    else:
-        raise TypeError(f"unsupported URI subject: {type(subject).__name__}")
+            return URI.parse(subject)
+        raise TypeError("uri(...) is an accessor; construct via URI(path=URI.of(...))")
 
-    if not path:
-        return base
-
-    segments = _path_segments(path)
-    if not segments:
-        return base
-
-    base_path = base.path.rstrip("/")
-    new_path = _join_path([base_path.lstrip("/")] + segments) if base_path else _join_path(segments)
-
-    return URI(path=new_path, scheme=base.scheme, host=base.host, port=base.port)
-
-
-def path(subject: object, *parts: str) -> str:
-    resolved = uri(subject, *parts)
-    if isinstance(resolved, URI):
-        return resolved.path
-
-    # Scalar URIs should only appear when asking for a class URI without extra segments.
-    if parts:
-        raise TypeError("cannot derive a path from a Scalar URI with path segments")
-
-    scalar_uri = resolved
-    if hasattr(scalar_uri, "to_json"):
-        raw = scalar_uri.to_json()
-        if isinstance(raw, str):
-            return raw
-
-    return str(scalar_uri)
+    raise TypeError(f"unsupported URI subject: {type(subject).__name__}")
 
 
 def authority(value: str | URI) -> str:

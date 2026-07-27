@@ -5,13 +5,13 @@ from typing import Any, Iterable, Iterator, Mapping, Sequence
 
 from .base import State
 from .scalar import Scalar
-from ..uri import URI, path, uri
+from ..uri import URI
 
 
 class Value(Scalar):
     __slots__ = ("_value",)
 
-    __uri__: URI = uri(State, "scalar", "value")
+    __uri__: URI = URI(path=URI.of(State, "scalar", "value"))
 
     def __init__(self, value: None | bool | int | float | complex | str | dict[str, "Value"] | list["Value"] = None):
         super().__init__(value)
@@ -62,11 +62,11 @@ def _iter_value_subclasses(base: type[Value]) -> Iterator[type[Value]]:
 
 
 def _value_class_for_uri(uri_path: str) -> type[Value] | None:
-    if uri_path == path(Value):
+    if uri_path == URI.of(Value):
         return Value
 
     for value_type in _iter_value_subclasses(Value):
-        if path(value_type) == uri_path:
+        if URI.of(value_type) == uri_path:
             return value_type
 
     return None
@@ -92,7 +92,7 @@ def form_of(value: "Value | object") -> object:
 class Null(Value):
     __slots__ = ()
 
-    __uri__: URI = uri(Value, "none")
+    __uri__: URI = URI(path=URI.of(Value, "none"))
 
     def __init__(self):
         super().__init__(None)
@@ -108,7 +108,7 @@ class Null(Value):
 class Link(Value):
     __slots__ = ()
 
-    __uri__: URI = uri(Value, "link")
+    __uri__: URI = URI(path=URI.of(Value, "link"))
 
     def __init__(self, value: URI | str):
         if not isinstance(value, (URI, str)):
@@ -117,7 +117,7 @@ class Link(Value):
         super().__init__(str(value))
 
     def to_json(self) -> object:
-        return {path(Link): str(form_of(self))}
+        return {URI.of(Link): str(form_of(self))}
 
     @classmethod
     def _from_json(cls, obj: Any) -> "Link":
@@ -129,7 +129,7 @@ class Link(Value):
 class String(Value):
     __slots__ = ("op",)
 
-    __uri__: URI = uri(Value, "string")
+    __uri__: URI = URI(path=URI.of(Value, "string"))
 
     def __init__(self, value: str | object):
         from ..opref import OpRef as RuntimeOpRef
@@ -189,10 +189,16 @@ def _is_literal_render_value(value: object) -> bool:
     return isinstance(value, (str, bool, int, float, URI))
 
 
+def _subject_of_scalar(value: "Value") -> str:
+    from ._ops import subject_of
+
+    return subject_of(value._scalar())
+
+
 class Number(Value):
     __slots__ = ("op",)
 
-    __uri__: URI = uri(Value, "number")
+    __uri__: URI = URI(path=URI.of(Value, "number"))
 
     def __init__(self, value: bool | int | float | object):
         op = _as_opref(value)
@@ -231,7 +237,7 @@ class Number(Value):
         if self.op is None and isinstance(other, (int, float)) and not isinstance(other, bool):
             return Number(literal_op(form_of(self), other))
 
-        subject = self._scalar()._subject()
+        subject = _subject_of_scalar(self)
         opref = PostOpRef(f"{subject}/{op_name}", {"r": autobox(other)})
         return Number(opref)
 
@@ -281,7 +287,7 @@ class Number(Value):
 class Integer(Number):
     __slots__ = ()
 
-    __uri__: URI = uri(Number, "integer")
+    __uri__: URI = URI(path=URI.of(Number, "integer"))
 
     def __init__(self, value: int | object):
         op = _as_opref(value)
@@ -300,7 +306,7 @@ class Integer(Number):
 class Float(Number):
     __slots__ = ()
 
-    __uri__: URI = uri(Number, "float")
+    __uri__: URI = URI(path=URI.of(Number, "float"))
 
     def __init__(self, value: int | float | object):
         op = _as_opref(value)
@@ -319,7 +325,7 @@ class Float(Number):
 class Complex(Number):
     __slots__ = ()
 
-    __uri__: URI = uri(Number, "complex")
+    __uri__: URI = URI(path=URI.of(Number, "complex"))
 
     def __init__(self, value: complex | object):
         op = _as_opref(value)
@@ -355,7 +361,7 @@ class Complex(Number):
                 assert isinstance(right_form, complex)
                 return Complex(literal_op(left_form, right_form))
 
-        subject = self._scalar()._subject()
+        subject = _subject_of_scalar(self)
         opref = PostOpRef(f"{subject}/{op_name}", {"r": autobox(other)})
         return Complex(opref)
 
@@ -403,7 +409,7 @@ class Complex(Number):
             assert isinstance(value_form, complex)
             return Complex(value_form.conjugate())
 
-        subject = self._scalar()._subject()
+        subject = _subject_of_scalar(self)
         return Complex(PostOpRef(f"{subject}/conjugate", {}))
 
     def exp(self) -> "Complex":
@@ -414,7 +420,7 @@ class Complex(Number):
             assert isinstance(value_form, complex)
             return Complex(cmath.exp(value_form))
 
-        subject = self._scalar()._subject()
+        subject = _subject_of_scalar(self)
         return Complex(PostOpRef(f"{subject}/exp", {}))
 
     def log(self) -> "Complex":
@@ -425,20 +431,20 @@ class Complex(Number):
             assert isinstance(value_form, complex)
             return Complex(cmath.log(value_form))
 
-        subject = self._scalar()._subject()
+        subject = _subject_of_scalar(self)
         return Complex(PostOpRef(f"{subject}/log", {}))
 
 
 class I64(Integer):
     __slots__ = ()
 
-    __uri__: URI = uri(Integer, "i64")
+    __uri__: URI = URI(path=URI.of(Integer, "i64"))
 
 
 class U64(Integer):
     __slots__ = ()
 
-    __uri__: URI = uri(Integer, "u64")
+    __uri__: URI = URI(path=URI.of(Integer, "u64"))
 
     def __init__(self, value: int | object):
         super().__init__(value)
@@ -453,25 +459,25 @@ class U64(Integer):
 class F32(Float):
     __slots__ = ()
 
-    __uri__: URI = uri(Float, "32")
+    __uri__: URI = URI(path=URI.of(Float, "32"))
 
 
 class F64(Float):
     __slots__ = ()
 
-    __uri__: URI = uri(Float, "64")
+    __uri__: URI = URI(path=URI.of(Float, "64"))
 
 
 class C64(Complex):
     __slots__ = ()
 
-    __uri__: URI = uri(Complex, "64")
+    __uri__: URI = URI(path=URI.of(Complex, "64"))
 
 
 class C128(Complex):
     __slots__ = ()
 
-    __uri__: URI = uri(Complex, "128")
+    __uri__: URI = URI(path=URI.of(Complex, "128"))
 
 
 # Backward-compatible alias: bool literals are represented as Number values.
@@ -481,7 +487,7 @@ Bool = Number
 class Map(Value):
     __slots__ = ("op",)
 
-    __uri__: URI = uri(Value, "map")
+    __uri__: URI = URI(path=URI.of(Value, "map"))
 
     def __init__(self, value: Mapping[str, object] | object):
         op = _as_opref(value)
@@ -545,7 +551,7 @@ class Map(Value):
 class Tuple(Value):
     __slots__ = ("op",)
 
-    __uri__: URI = uri(Value, "tuple")
+    __uri__: URI = URI(path=URI.of(Value, "tuple"))
 
     def __init__(self, value: Sequence[object] | object):
         op = _as_opref(value)

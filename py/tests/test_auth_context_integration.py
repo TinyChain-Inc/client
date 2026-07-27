@@ -67,8 +67,8 @@ def test_framework_auth_context_available_in_local_and_wasm_routes(tmp_path: pat
         b = Example(authority=tc.URI.parse(authority))
         a = A()
         a.remote_example = b
-        a_root = tc.uri(a).path
-        b_root = tc.uri(b).path
+        a_root = tc.URI.of(a)
+        b_root = tc.URI.of(b)
         host_link = tc.origin(authority)
 
         install_token = tc.auth.mint_rjwt_token(

@@ -55,7 +55,7 @@ def test_host_carries_default_auth_and_builds_route_url(monkeypatch):
         == "https://testnet.example/lib/example-devco/greeter/0.1.0/hello?key=%7B%22name%22%3A%22Ada+Lovelace%22%7D"
     )
 
-    host.request("GET", tc.uri(greeter, "hello"))
+    host.request("GET", tc.URI(path=tc.URI.of(greeter, "hello")))
     assert calls == [
         (
             "GET",

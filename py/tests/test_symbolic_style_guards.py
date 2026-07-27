@@ -35,7 +35,7 @@ _TYPE_LADDER_ALLOWED_FUNCTIONS: frozenset[str] = frozenset(
 
 def _is_state_root_uri_call(node: ast.Call) -> bool:
     name = _call_name(node.func)
-    if name != "uri" or len(node.args) != 1:
+    if name not in {"uri", "path"} or len(node.args) != 1:
         return False
     arg = node.args[0]
     return isinstance(arg, ast.Constant) and isinstance(arg.value, str) and arg.value == "state"

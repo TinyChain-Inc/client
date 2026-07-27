@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
 
-from ..uri import path, uri
+from ..uri import URI, uri
 from .scalar.refs import (
     Cond,
     ForEach,
@@ -101,11 +101,11 @@ def _state_subject(owner: object, form: object, *, ctx: "Context | None" = None)
             return subject
 
         if isinstance(ref_form, Cond):
-            return path(uri(TCRef, "cond"))
+            return URI.of(TCRef, "cond")
         if isinstance(ref_form, While):
-            return path(uri(TCRef, "while"))
+            return URI.of(TCRef, "while")
         if isinstance(ref_form, ForEach):
-            return path(uri(TCRef, "for_each"))
+            return URI.of(TCRef, "for_each")
 
     if isinstance(form, Mapping) and len(form) == 1:
         (key, _value), = form.items()
@@ -127,6 +127,12 @@ def _state_subject(owner: object, form: object, *, ctx: "Context | None" = None)
 def _state_subject_ref(owner: object, form: object, method: str | None = None, *, ctx: "Context | None" = None) -> str:
     subject = _state_subject(owner, form, ctx=ctx)
     return f"{subject}/{method}" if method else subject
+
+
+def subject_of(owner: object, *, ctx: "Context | None" = None) -> str:
+    from .scalar import form_of
+
+    return _state_subject(owner, form_of(owner), ctx=ctx)
 
 
 def _state_get(
