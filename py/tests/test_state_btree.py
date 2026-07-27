@@ -28,28 +28,27 @@ def test_btree_to_json_bridges_runtime_delete_opref_via_shared_ref_layer():
     }
 
 
-def test_btree_accepts_explicit_context_without_ambient_scope():
-    ctx = tc.state.Context()
-    btree = tc.state.collection.BTree([
-        ("key", "/state/scalar/value/string"),
-    ], ctx=ctx)
+def test_btree_constructor_uses_ambient_scope_for_symbolic_subject_binding():
+    with tc.state.scoped_context() as cxt:
+        btree = tc.state.collection.BTree([
+            ("key", "/state/scalar/value/string"),
+        ])
 
-    # Explicit ctx forces symbolic construction even outside scoped_context.
-    assert btree.to_json() == {
-        "/state/collection/btree": [
-            [["key", "/state/scalar/value/string"]],
-            [],
-        ]
-    }
+        assert btree.to_json() == {
+            "/state/collection/btree": [
+                [["key", "/state/scalar/value/string"]],
+                [],
+            ]
+        }
 
-    contains = btree.contains(["a"], ctx=ctx)
-    contains_json = contains.to_json()
-    assert len(contains_json) == 1
-    (subject, key_payload), = contains_json.items()
-    assert subject.endswith("/contains")
-    assert subject.startswith("$_")
-    assert key_payload == [["a"]]
-    assert len(list(ctx.form())) == 1
+        contains = btree.contains(["a"])
+        contains_json = contains.to_json()
+        assert len(contains_json) == 1
+        (subject, key_payload), = contains_json.items()
+        assert subject.endswith("/contains")
+        assert subject.startswith("$_")
+        assert key_payload == [["a"]]
+        assert len(list(cxt.form())) == 1
 
 
 def test_btree_slice_emits_symbolic_post_opref():
@@ -193,4 +192,3 @@ def test_btree_imperative_constructor_requires_local_backend(monkeypatch: pytest
         tc.state.collection.BTree([
             ("key", "/state/scalar/value/string"),
         ])
-

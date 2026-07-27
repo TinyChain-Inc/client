@@ -175,7 +175,7 @@ def test_state_collection_btree_constructor_is_symbolic_in_deferred_mode():
         }
 
         with tc.state.scoped_context() as cxt:
-            contains = btree.contains(["a"], ctx=cxt)
+            contains = btree.contains(["a"])
             contains_json = contains.to_json()
             assert len(contains_json) == 1
             (subject, key_payload), = contains_json.items()
@@ -258,4 +258,3 @@ def test_local_btree_rejects_insert_row_arity_mismatch():
 
     with pytest.raises(ValueError, match="row arity 1 does not match schema arity 2"):
         btree.insert(["a"])
-

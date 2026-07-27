@@ -165,8 +165,8 @@ def test_library_route_symbolic_post_body_skips_eager_execute(monkeypatch):
 
     monkeypatch.setattr("tinychain.execute", fail_execute)
 
-    cxt = tc.state.Context()
-    symbolic = tc.state.id("x", ctx=cxt)
+    with tc.state.scoped_context():
+        symbolic = tc.state.id("x")
     with tc.backend(mode="eager"):
         result = A().echo(symbolic)
 

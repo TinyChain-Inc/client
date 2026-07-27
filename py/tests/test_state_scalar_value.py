@@ -223,7 +223,7 @@ def test_value_from_json_delegates_by_uri_to_concrete_subclass():
 
 def test_number_deferred_arithmetic_builds_oprefs():
     with tc.state.scoped_context() as cxt:
-        x = tc.state.id("x", ctx=cxt)
+        x = tc.state.id("x")
         deferred_form = tc.state.form_of(x.add(1))
         assert isinstance(deferred_form, tc.state.TCRef)
         deferred_ref_form = tc.state.form_of(deferred_form)
