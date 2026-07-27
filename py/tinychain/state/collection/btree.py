@@ -240,7 +240,7 @@ def _native_schema(payload: object) -> list[list[object]]:
     if not isinstance(payload, dict) or BTREE_PATH not in payload:
         raise TypeError("native BTree payload must be map-shaped")
 
-    raw = payload[BTREE_PATH]
+    raw = _native_btree_payload(payload[BTREE_PATH])
     if not isinstance(raw, list) or len(raw) != 2:
         raise TypeError("native BTree payload must be [schema, rows]")
 
@@ -254,7 +254,7 @@ def _native_rows(payload: object) -> list[list[object]]:
     if not isinstance(payload, dict) or BTREE_PATH not in payload:
         raise TypeError("native BTree payload must be map-shaped")
 
-    raw = payload[BTREE_PATH]
+    raw = _native_btree_payload(payload[BTREE_PATH])
     if not isinstance(raw, list) or len(raw) != 2:
         raise TypeError("native BTree payload must be [schema, rows]")
 
@@ -274,6 +274,20 @@ def _native_row(row: object, arity: int) -> list[object]:
         raise ValueError(f"BTree row arity {len(values)} does not match schema arity {arity}")
 
     return values
+
+
+def _native_btree_payload(raw: object) -> object:
+    # tinychain_local currently returns {uri: [[schema, rows]]}; normalize that
+    # to the canonical {uri: [schema, rows]} form expected by the wrapper.
+    if (
+        isinstance(raw, list)
+        and len(raw) == 1
+        and isinstance(raw[0], list)
+        and len(raw[0]) == 2
+    ):
+        return raw[0]
+
+    return raw
 
 
 def _slice_bounds(bounds: object) -> tuple[object, object, bool]:
