@@ -57,6 +57,7 @@ class Autodiff(tc.Library):
     """
 
     publisher = "std"
+    resource_name = "autodiff"
     version = "0.1.0"
 
     def trace(self, op: tc.state.OpDef) -> tc.state.OpDef:

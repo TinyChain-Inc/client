@@ -45,8 +45,13 @@ utilities accept structured publisher/version metadata and optional subpaths, th
 optional subpaths) and emit canonical URIs. Never hard-code strings like
 `"/service/foo/bar/1.0"`—even in tests or documentation. The builder enforces:
 
-- **Publisher + version required.** Missing publisher IDs or semantic versions are a
-  programmer error; the helper raises early so manifests stay deterministic.
+- **Publisher, resource_name, and version required.** `publisher`, `resource_name`,
+  and `version` are canonical static class metadata; `resource_name` is the library
+  name path component in `/lib/{publisher}/{resource_name}/{version}`. Python class
+  names never define public resource identity, so every concrete library must declare
+  `resource_name` explicitly. Missing publisher IDs, resource names, or semantic
+  versions are a programmer error; the helper raises early so manifests stay
+  deterministic.
 - **Path normalization.** Mixed separators, repeated slashes, or `.`/`..` segments are
   rejected before requests are issued.
 - **Prefix safety.** The builder prepends `/service`, `/lib`, `/class`, etc., so callers
@@ -122,6 +127,7 @@ import tinychain as tc
 
 class Greeter(tc.Library):
     publisher = "demo"
+    resource_name = "greeter"
     version = "0.1.0"
 
     @tc.get
@@ -153,6 +159,7 @@ keeps deferred plans useful in IDEs and generated documentation.
 ```python
 class Greeter(tc.Library):
     publisher = "demo"
+    resource_name = "greeter"
     version = "0.1.0"
 
     @tc.get
@@ -188,6 +195,7 @@ canonical TinyChain op references:
 ```python
 class Math(tc.Library):
     publisher = "demo"
+    resource_name = "math"
     version = "0.1.0"
 
     @tc.post
@@ -208,6 +216,7 @@ Tensor wrappers or deferred flags; execution mode still comes from
 ```python
 class Math(tc.Library):
     publisher = "demo"
+    resource_name = "math"
     version = "0.1.0"
 
     @tc.post
@@ -361,6 +370,7 @@ tensor_type = TypeSpec(
 
 class Math(tc.Library):
     publisher = "demo"
+    resource_name = "math"
     version = "0.1.0"
     derivative_routes = {
         "matmul": RouteDerivativeMetadata(
@@ -432,8 +442,11 @@ Create a manifest with `artifact_manifest_from_program(...)` or by calling
 `DerivativeArtifactManifest.from_program(...)`. Required manifest fields are:
 
 - `artifact_name`, `artifact_version`, and `artifact_publisher`: the public
-  library identity for the packaged derivative. The public route path follows
-  the same class-derived `Library` naming rules as ordinary TinyChain libraries.
+  library identity for the packaged derivative. The generated artifact `Library`
+  declares an explicit `resource_name` derived from `artifact_name`, following the
+  same explicit `resource_name` contract as ordinary TinyChain libraries; the
+  generated Python class name is an implementation detail and never defines public
+  identity.
 - `source_graph_id`, `transform_version`, `tensor_op_contract_version`,
   `wrt_signature`, and `seed_contract`: copied from the source
   `DerivativeProgram.metadata` and validated against that program before
@@ -467,8 +480,8 @@ with that digest set without mutating the input manifest.
 
 Use `build_derivative_artifact_library(...)` to package a derivative artifact as
 a normal TinyChain `Library` subclass. The generated class has class-level
-`publisher`, `version`, and `dependencies`, does not define `__init__`, does not
-define an explicit `name`, and exposes one static GET route at `/artifact` whose
+`publisher`, `resource_name`, `version`, and `dependencies`, does not define
+`__init__`, and exposes one static GET route at `/artifact` whose
 value is the artifact payload. The class works with the usual `compile_ir(...)`,
 `library_definition(...)`, and `tc.install(...)` paths; application code should
 not construct alternate artifact install envelopes.
@@ -690,6 +703,7 @@ import tinychain as tc
 
 class Greeter(tc.Library):
     publisher = "demo"
+    resource_name = "greeter"
     version = "0.1.0"
 
     @tc.get
@@ -730,6 +744,7 @@ import pathlib
 
 class Echo(tc.Library):
     publisher = "example-devco"
+    resource_name = "echo"
     version = "0.1.0"
 
     @tc.get
@@ -780,13 +795,17 @@ constructed plan outside the normal route-call flow.
 
 ### Canonical identity vs authority
 
-`Library` declarations use class-level manifest metadata plus class-derived
-names. Declare publisher and version on the class; do not pass a decorator or
-constructor `name` override. Route names come from method names.
+`Library` declarations use class-level manifest metadata as the only source of
+library identity. Declare `publisher`, `resource_name`, and `version` on the
+class — all three are mandatory. `resource_name` is the canonical library name
+path component and is never derived from the Python class name. Do not declare a
+raw class-level `name`, and do not pass a decorator or constructor metadata
+override. Route names still come from method names.
 
 ```python
 class Echo(tc.Library):
     publisher = "example-devco"
+    resource_name = "echo"
     version = "0.1.0"
 
     @tc.get
@@ -834,6 +853,7 @@ import tinychain as tc
 
 class Math(tc.Library):
     publisher = "example-devco"
+    resource_name = "math"
     version = "0.1.0"
 
     @tc.get

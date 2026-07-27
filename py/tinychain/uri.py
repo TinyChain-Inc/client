@@ -88,40 +88,27 @@ def _segment(label: str, value: str) -> str:
     return value
 
 
-@dataclass(frozen=True, slots=True)
-class CanonicalResourceName:
-    """A validated external resource name for a Library with a legacy URI."""
-
-    value: str
-
-    def __post_init__(self) -> None:
-        value = _segment("canonical resource name", self.value)
-        if re.fullmatch(r"[a-z0-9]+(?:[-_][a-z0-9]+)*", value) is None:
-            raise ValueError(
-                "canonical resource name must contain only lowercase letters, "
-                "digits, and single '-' or '_' separators"
-            )
-
-    def __str__(self) -> str:
-        return self.value
+# Canonical grammar for ``Library.resource_name``: lowercase ASCII alphanumeric
+# components joined by single ``-`` or ``_`` separators (e.g. ``ilc``,
+# ``ilc-client``, ``ordinary_client``, ``v2``, ``library2-client``).
+_RESOURCE_NAME_RE = re.compile(r"[a-z0-9]+(?:[-_][a-z0-9]+)*")
 
 
-def _class_resource_name(cls: type) -> str:
-    explicit = cls.__dict__.get("name")
-    if explicit is not None:
-        raise TypeError(
-            "Library name overrides are not supported; derive the resource name from the class name"
+def validate_resource_name(value: object) -> str:
+    """Validate and return a canonical ``Library.resource_name``.
+
+    ``resource_name`` is the sole source of truth for the library name path
+    component. This is the single validation path for that field.
+    """
+    if not isinstance(value, str) or not value:
+        raise ValueError("resource_name must be a non-empty string")
+    if _RESOURCE_NAME_RE.fullmatch(value) is None:
+        raise ValueError(
+            "resource_name must match [a-z0-9]+(?:[-_][a-z0-9]+)* "
+            "(lowercase alphanumerics with single '-' or '_' separators): "
+            f"{value!r}"
         )
-
-    canonical = cls.__dict__.get("canonical_resource_name")
-    if canonical is not None:
-        if not isinstance(canonical, CanonicalResourceName):
-            raise TypeError(
-                "Library canonical_resource_name must be a CanonicalResourceName"
-            )
-        return canonical.value
-
-    return _python_name_to_resource(cls.__name__)
+    return value
 
 
 def _python_name_to_resource(name: str) -> str:

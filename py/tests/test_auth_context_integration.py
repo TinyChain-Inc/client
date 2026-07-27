@@ -14,6 +14,7 @@ ACTOR_ID = "example-admin"
 
 class Example(tc.Library):
     publisher = "example-devco"
+    resource_name = "example"
     version = "0.1.0"
     dependencies = ()
 
@@ -24,6 +25,7 @@ class Example(tc.Library):
 
 class A(tc.Library):
     publisher = "example-devco"
+    resource_name = "a"
     version = "0.1.0"
     dependencies = (Example.class_id(),)
 

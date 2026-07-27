@@ -28,6 +28,7 @@ from tinychain.graph_reflection import TypeSpec
 
 class RouteIdentityLibrary(tc.Library):
     publisher = "example-devco"
+    resource_name = "route_identity_library"
     version = "0.1.0"
 
     @tc.get
@@ -129,6 +130,7 @@ def test_extract_route_identity_does_not_call_route_compile_install_or_dispatch(
 
     class SideEffectLibrary(tc.Library):
         publisher = "example-devco"
+        resource_name = "side_effect_library"
         version = "0.1.0"
 
         @tc.post
@@ -183,6 +185,7 @@ def test_lookup_route_derivative_metadata_by_route_name() -> None:
     metadata = _route_metadata()
 
     class NameMetadataLibrary(RouteIdentityLibrary):
+        resource_name = "name_metadata_library"
         derivative_routes = {"create": metadata}
 
     assert lookup_route_derivative_metadata(NameMetadataLibrary().create) == metadata
@@ -192,6 +195,7 @@ def test_lookup_route_derivative_metadata_by_route_path_from_mapping() -> None:
     metadata = _route_metadata()
 
     class PathMetadataLibrary(RouteIdentityLibrary):
+        resource_name = "path_metadata_library"
         derivative_routes = {"/create": metadata.to_dict()}
 
     assert lookup_route_derivative_metadata(PathMetadataLibrary().create) == metadata
@@ -199,6 +203,7 @@ def test_lookup_route_derivative_metadata_by_route_path_from_mapping() -> None:
 
 def test_lookup_route_derivative_metadata_missing_route_is_distinguishable() -> None:
     class MissingMetadataLibrary(RouteIdentityLibrary):
+        resource_name = "missing_metadata_library"
         derivative_routes = {"fetch": _route_metadata()}
 
     with pytest.raises(AutodiffError) as exc_info:
@@ -212,6 +217,7 @@ def test_lookup_route_derivative_metadata_missing_route_is_distinguishable() -> 
 
 def test_lookup_route_derivative_metadata_rejects_ambiguous_duplicate_keys() -> None:
     class AmbiguousMetadataLibrary(RouteIdentityLibrary):
+        resource_name = "ambiguous_metadata_library"
         derivative_routes = {
             "create": _route_metadata(seed_contract="cotangent:output"),
             "/create": _route_metadata(seed_contract="cotangent:alternate"),
@@ -226,6 +232,7 @@ def test_lookup_route_derivative_metadata_rejects_ambiguous_duplicate_keys() -> 
 
 def test_lookup_route_derivative_metadata_rejects_malformed_metadata_separately() -> None:
     class MalformedMetadataLibrary(RouteIdentityLibrary):
+        resource_name = "malformed_metadata_library"
         derivative_routes = {"create": {"source_kind": ROUTE_DERIVATIVE_SOURCE_ARTIFACT}}
 
     with pytest.raises(AutodiffError) as exc_info:
@@ -286,6 +293,7 @@ def _route_tensor_metadata(
 
 def test_discover_route_derivative_returns_plan_for_valid_metadata_mapping() -> None:
     class ValidMetadataLibrary(RouteIdentityLibrary):
+        resource_name = "valid_metadata_library"
         pass
 
     metadata = _route_tensor_metadata(
@@ -316,6 +324,7 @@ def test_discover_route_derivative_returns_plan_for_valid_metadata_mapping() -> 
 @pytest.mark.parametrize("shape", [[2], [2, 2], []])
 def test_discover_route_derivative_accepts_integer_shape_metadata(shape: list[int]) -> None:
     class ValidShapeLibrary(RouteIdentityLibrary):
+        resource_name = "valid_shape_library"
         pass
 
     metadata = _route_tensor_metadata(
@@ -354,6 +363,7 @@ def test_tc_grad_route_target_without_metadata_raises_route_specific_error() -> 
 
 def test_tc_grad_route_target_returns_plan_for_valid_artifact_metadata() -> None:
     class TcGradMetadataLibrary(RouteIdentityLibrary):
+        resource_name = "tc_grad_metadata_library"
         pass
 
     metadata = _route_tensor_metadata(
@@ -392,6 +402,7 @@ def test_remote_authority_route_discovery_preserves_local_metadata_behavior(
     monkeypatch.setattr(tc, "execute", forbidden_behavior)
 
     class RemoteAuthorityMetadataLibrary(RouteIdentityLibrary):
+        resource_name = "remote_authority_metadata_library"
         authority = tc.URI.parse("https://api.example.test")
 
     metadata = _route_tensor_metadata(
@@ -431,6 +442,7 @@ def test_remote_installed_route_discovery_uses_instance_metadata_mapping(
     monkeypatch.setattr(tc, "execute", forbidden_behavior)
 
     class RemoteInstalledMetadataLibrary(RouteIdentityLibrary):
+        resource_name = "remote_installed_metadata_library"
         authority = tc.URI.parse("https://api.example.test")
 
     library = RemoteInstalledMetadataLibrary()
@@ -453,6 +465,7 @@ def test_remote_installed_route_discovery_uses_instance_metadata_mapping(
 
 def test_remote_installed_route_missing_instance_metadata_is_route_specific() -> None:
     class RemoteMissingMetadataLibrary(RouteIdentityLibrary):
+        resource_name = "remote_missing_metadata_library"
         authority = tc.URI.parse("https://api.example.test")
 
     with pytest.raises(AutodiffError) as exc_info:
@@ -468,6 +481,7 @@ def test_remote_installed_route_missing_instance_metadata_is_route_specific() ->
 
 def test_remote_installed_route_rejects_malformed_instance_metadata_mapping() -> None:
     class RemoteMalformedMetadataLibrary(RouteIdentityLibrary):
+        resource_name = "remote_malformed_metadata_library"
         authority = tc.URI.parse("https://api.example.test")
 
     library = RemoteMalformedMetadataLibrary()
@@ -482,6 +496,7 @@ def test_remote_installed_route_rejects_malformed_instance_metadata_mapping() ->
 
 def test_discover_route_derivative_rejects_side_effecting_metadata() -> None:
     class SideEffectMetadataLibrary(RouteIdentityLibrary):
+        resource_name = "side_effect_metadata_library"
         derivative_routes = {"create": _route_tensor_metadata(is_pure=False)}
 
     with pytest.raises(AutodiffError) as exc_info:
@@ -495,6 +510,7 @@ def test_discover_route_derivative_rejects_unknown_purity_metadata() -> None:
     metadata["is_pure"] = None
 
     class UnknownPurityMetadataLibrary(RouteIdentityLibrary):
+        resource_name = "unknown_purity_metadata_library"
         derivative_routes = {"create": metadata}
 
     with pytest.raises(AutodiffError) as exc_info:
@@ -505,6 +521,7 @@ def test_discover_route_derivative_rejects_unknown_purity_metadata() -> None:
 
 def test_discover_route_derivative_rejects_invalid_wrt() -> None:
     class WrtMetadataLibrary(RouteIdentityLibrary):
+        resource_name = "wrt_metadata_library"
         derivative_routes = {"create": _route_tensor_metadata(supported_wrt=("value",))}
 
     with pytest.raises(AutodiffError) as exc_info:
@@ -516,6 +533,7 @@ def test_discover_route_derivative_rejects_invalid_wrt() -> None:
 
 def test_discover_route_derivative_rejects_missing_dtype_metadata() -> None:
     class MissingDtypeLibrary(RouteIdentityLibrary):
+        resource_name = "missing_dtype_library"
         derivative_routes = {
             "create": _route_tensor_metadata(input_signature=(_tensor_type_spec(dtype=None, shape=[2]),))
         }
@@ -528,6 +546,7 @@ def test_discover_route_derivative_rejects_missing_dtype_metadata() -> None:
 
 def test_discover_route_derivative_rejects_missing_shape_metadata() -> None:
     class MissingShapeLibrary(RouteIdentityLibrary):
+        resource_name = "missing_shape_library"
         derivative_routes = {
             "create": _route_tensor_metadata(output_signature=(_tensor_type_spec(shape=None),))
         }
@@ -544,6 +563,7 @@ def test_discover_route_derivative_rejects_missing_shape_metadata() -> None:
 )
 def test_discover_route_derivative_rejects_malformed_shape_metadata(shape: object) -> None:
     class MalformedShapeLibrary(RouteIdentityLibrary):
+        resource_name = "malformed_shape_library"
         derivative_routes = {
             "create": _route_tensor_metadata(
                 output_signature=(_tensor_type_spec(shape=shape),)
@@ -559,6 +579,7 @@ def test_discover_route_derivative_rejects_malformed_shape_metadata(shape: objec
 
 def test_discover_route_derivative_rejects_non_floating_dtype() -> None:
     class IntegerTensorLibrary(RouteIdentityLibrary):
+        resource_name = "integer_tensor_library"
         derivative_routes = {
             "create": _route_tensor_metadata(input_signature=(_tensor_type_spec(dtype="i64", shape=[2]),))
         }
@@ -571,6 +592,7 @@ def test_discover_route_derivative_rejects_non_floating_dtype() -> None:
 
 def test_discover_route_derivative_rejects_wrong_artifact_source_library() -> None:
     class WrongSourceLibrary(RouteIdentityLibrary):
+        resource_name = "wrong_source_library"
         derivative_routes = {
             "create": _route_tensor_metadata(artifact_source_library="other/create")
         }
@@ -584,6 +606,7 @@ def test_discover_route_derivative_rejects_wrong_artifact_source_library() -> No
 
 def test_discover_route_derivative_rejects_wrong_artifact_source_version() -> None:
     class WrongSourceVersion(RouteIdentityLibrary):
+        resource_name = "wrong_source_version"
         derivative_routes = {
             "create": _route_tensor_metadata(
                 artifact_source_library="example-devco/wrong_source_version",
@@ -600,6 +623,7 @@ def test_discover_route_derivative_rejects_wrong_artifact_source_version() -> No
 
 def test_discover_route_derivative_rejects_wrong_artifact_source_route() -> None:
     class WrongSourceRoute(RouteIdentityLibrary):
+        resource_name = "wrong_source_route"
         derivative_routes = {
             "create": _route_tensor_metadata(
                 artifact_source_library="example-devco/wrong_source_route",
@@ -619,6 +643,7 @@ def test_discover_route_derivative_rejects_missing_artifact_digest() -> None:
     metadata["artifact_digest"] = None
 
     class MissingArtifactDigest(RouteIdentityLibrary):
+        resource_name = "missing_artifact_digest"
         derivative_routes = {"create": metadata}
 
     with pytest.raises(AutodiffError) as exc_info:
@@ -630,6 +655,7 @@ def test_discover_route_derivative_rejects_missing_artifact_digest() -> None:
 
 def test_discover_route_derivative_rejects_missing_derivative_behavior() -> None:
     class UnsupportedMetadataLibrary(RouteIdentityLibrary):
+        resource_name = "unsupported_metadata_library"
         derivative_routes = {
             "create": _route_tensor_metadata(
                 source_kind=ROUTE_DERIVATIVE_SOURCE_UNSUPPORTED,

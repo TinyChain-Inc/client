@@ -57,6 +57,7 @@ def test_wasm_install_accepts_single_token_object(tmp_path, monkeypatch):
 
     class Example(tc.Library):
         publisher = "example-devco"
+        resource_name = "example"
         version = "0.1.0"
 
     response = tc.install(Example, wasm=wasm_path, data_dir=tmp_path, token=token)

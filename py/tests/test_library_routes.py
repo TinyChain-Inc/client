@@ -12,6 +12,7 @@ from tinychain.state.scalar import OPDEF_POST
 def test_library_routes_return_typed_refs():
     class A(tc.Library):
         publisher = "example-devco"
+        resource_name = "a"
         version = "0.1.0"
 
         @tc.get
@@ -39,6 +40,7 @@ def test_library_routes_return_typed_refs():
 def test_route_type_hints_resolve_to_runtime_value_types():
     class A(tc.Library):
         publisher = "example-devco"
+        resource_name = "a"
         version = "0.1.0"
 
         @tc.get
@@ -74,6 +76,7 @@ def test_route_type_hints_resolve_to_runtime_value_types():
 def test_library_routes_return_typed_value_refs():
     class A(tc.Library):
         publisher = "example-devco"
+        resource_name = "a"
         version = "0.1.0"
 
         @tc.get
@@ -103,6 +106,7 @@ def test_library_routes_return_typed_value_refs():
 def test_library_routes_compile_opdef_routes():
     class A(tc.Library):
         publisher = "example-devco"
+        resource_name = "a"
         version = "0.1.0"
 
         @tc.post
@@ -119,6 +123,7 @@ def test_library_routes_compile_opdef_routes():
 def test_library_routes_preserve_all_dict_return_keys():
     class A(tc.Library):
         publisher = "example-devco"
+        resource_name = "a"
         version = "0.1.0"
 
         @tc.post
@@ -135,6 +140,7 @@ def test_library_routes_preserve_all_dict_return_keys():
 def test_grad_is_call_site_transform_stub_not_route_decorator():
     class A(tc.Library):
         publisher = "example-devco"
+        resource_name = "a"
         version = "0.1.0"
 
         @tc.post
@@ -153,6 +159,7 @@ def test_grad_is_call_site_transform_stub_not_route_decorator():
 def test_grad_cannot_be_used_as_route_metadata_decorator():
     class A(tc.Library):
         publisher = "example-devco"
+        resource_name = "a"
         version = "0.1.0"
 
         @tc.post
@@ -163,6 +170,7 @@ def test_grad_cannot_be_used_as_route_metadata_decorator():
 
         class B(tc.Library):
             publisher = "example-devco"
+            resource_name = "b"
             version = "0.1.0"
 
             @tc.post
@@ -196,6 +204,7 @@ def test_grad_tensor_target_fails_until_route_tracing_is_implemented():
 def test_library_routes_use_decorator_time_source_capture(monkeypatch):
     class A(tc.Library):
         publisher = "example-devco"
+        resource_name = "a"
         version = "0.1.0"
 
         @tc.post
@@ -215,6 +224,7 @@ def test_library_routes_use_decorator_time_source_capture(monkeypatch):
 def test_library_routes_allow_local_opref_subjects():
     class A(tc.Library):
         publisher = "example-devco"
+        resource_name = "a"
         version = "0.1.0"
 
         @tc.post
@@ -233,6 +243,7 @@ def test_route_decorators_do_not_accept_name_override():
 
         class A(tc.Library):
             publisher = "example-devco"
+            resource_name = "a"
             version = "0.1.0"
 
             @tc.get(name="hello")
@@ -240,65 +251,107 @@ def test_route_decorators_do_not_accept_name_override():
                 ...
 
 
-def test_library_subclasses_do_not_accept_name_override():
-    class A(tc.Library):
+def test_explicit_resource_name_produces_canonical_id():
+    class ExampleClient(tc.Library):
+        publisher = "example-devco"
+        resource_name = "example-client"
+        version = "1.2.3"
+
+    assert ExampleClient.class_id().path == "/lib/example-devco/example-client/1.2.3"
+    assert ExampleClient().id().path == "/lib/example-devco/example-client/1.2.3"
+
+
+def test_class_name_does_not_influence_resource_identity():
+    class OrdinaryClient(tc.Library):
+        publisher = "example-devco"
+        resource_name = "custom-resource"
+        version = "0.1.0"
+
+    assert OrdinaryClient.class_id().path == "/lib/example-devco/custom-resource/0.1.0"
+    assert OrdinaryClient().id().path == "/lib/example-devco/custom-resource/0.1.0"
+
+
+def test_missing_resource_name_fails_construction_and_class_id():
+    class MissingResourceName(tc.Library):
+        publisher = "example-devco"
+        version = "0.1.0"
+
+    with pytest.raises(TypeError, match="resource_name"):
+        MissingResourceName.class_id()
+
+    with pytest.raises(TypeError, match="resource_name"):
+        MissingResourceName()
+
+
+def test_raw_name_is_not_library_identity():
+    class OnlyName(tc.Library):
         publisher = "example-devco"
         name = "custom"
         version = "0.1.0"
 
-    with pytest.raises(TypeError, match="name overrides are not supported"):
-        A()
+    with pytest.raises(TypeError, match="resource_name"):
+        OnlyName.class_id()
+
+    with pytest.raises(TypeError, match="resource_name"):
+        OnlyName()
 
 
-def test_library_accepts_typed_canonical_external_resource_name():
-    class LegacyClient(tc.Library):
+@pytest.mark.parametrize("raw_name", ["custom", None, 123, object()])
+def test_raw_name_is_rejected_regardless_of_value_or_type(raw_name):
+    Library = type(
+        "NameAndResourceName",
+        (tc.Library,),
+        {
+            "publisher": "example-devco",
+            "name": raw_name,
+            "resource_name": "valid-resource",
+            "version": "0.1.0",
+        },
+    )
+
+    with pytest.raises(TypeError, match="'name' field is not supported"):
+        Library.class_id()
+
+    with pytest.raises(TypeError, match="'name' field is not supported"):
+        Library()
+
+
+def test_inherited_raw_name_cannot_bypass_validation():
+    class Base(tc.Library):
         publisher = "example-devco"
-        canonical_resource_name = tc.CanonicalResourceName("legacy-client")
+        name = 123
+        resource_name = "base-resource"
         version = "0.1.0"
 
-    assert LegacyClient().id().path == "/lib/example-devco/legacy-client/0.1.0"
+    class Child(Base):
+        resource_name = "child-resource"
+
+    with pytest.raises(TypeError, match="'name' field is not supported"):
+        Child.class_id()
 
 
-def test_library_derives_resource_name_when_no_canonical_name_is_declared():
-    class OrdinaryClient(tc.Library):
+def test_route_method_named_name_remains_valid():
+    class RouteName(tc.Library):
         publisher = "example-devco"
+        resource_name = "route-name"
         version = "0.1.0"
 
-    assert OrdinaryClient().id().path == "/lib/example-devco/ordinary_client/0.1.0"
+        @tc.get
+        def name(self) -> tc.String:
+            ...
+
+    assert RouteName.class_id().path == "/lib/example-devco/route-name/0.1.0"
+    assert RouteName().id().path == "/lib/example-devco/route-name/0.1.0"
+
+    ir_paths = [route["path"] for route in compile_ir(RouteName)["routes"]]
+    assert "/name" in ir_paths
 
 
-def test_library_rejects_untyped_canonical_resource_name():
-    class LegacyClient(tc.Library):
-        publisher = "example-devco"
-        canonical_resource_name = "legacy-client"
-        version = "0.1.0"
-
-    with pytest.raises(TypeError, match="must be a CanonicalResourceName"):
-        LegacyClient()
-
-
-@pytest.mark.parametrize(
-    "value",
-    (
-        "",
-        "legacy/client",
-        ".",
-        "..",
-        "LegacyClient",
-        "legacy client",
-        "legacy--client",
-        None,
-    ),
-)
-def test_canonical_resource_name_rejects_invalid_values(value: object):
-    with pytest.raises(ValueError, match="canonical resource name"):
-        tc.CanonicalResourceName(value)
-
-
-@pytest.mark.parametrize("field", ("publisher", "name", "version"))
+@pytest.mark.parametrize("field", ("publisher", "resource_name", "name", "version"))
 def test_library_instances_reject_constructor_metadata_overrides(field):
     class A(tc.Library):
         publisher = "example-devco"
+        resource_name = "a"
         version = "0.1.0"
 
     with pytest.raises(
@@ -307,11 +360,149 @@ def test_library_instances_reject_constructor_metadata_overrides(field):
         A(**{field: "override"})
 
 
+def test_remote_install_definition_uses_resource_name(monkeypatch):
+    from tinychain.library import install
+
+    class RemoteLib(tc.Library):
+        publisher = "applied-physics"
+        resource_name = "remote-lib"
+        version = "0.1.0"
+
+        @tc.get
+        def ping(self) -> tc.String:
+            ...
+
+    captured = {}
+
+    class FakeHost:
+        def __init__(self, *_args, **_kwargs):
+            ...
+
+        def request(self, method, path, *, body):
+            captured["method"] = method
+            captured["path"] = path
+            captured["body"] = body
+            return "ok"
+
+    monkeypatch.setattr("tinychain.host.Host", FakeHost)
+
+    result = install(RemoteLib, remote="https://api.example.test", token="t")
+
+    assert result == "ok"
+    assert list(captured["body"].keys()) == [
+        "/lib/applied-physics/remote-lib/0.1.0"
+    ]
+
+
 def test_library_instances_do_not_accept_dependency_overrides():
     class A(tc.Library):
         publisher = "example-devco"
+        resource_name = "a"
         version = "0.1.0"
         dependencies = (tc.uri("lib", "example-devco", "b", "0.1.0"),)
 
     with pytest.raises(TypeError, match="dependencies"):
         A(dependencies=())
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["ilc", "ilc-client", "ordinary_client", "v2", "library2-client", "a", "a1b2"],
+)
+def test_resource_name_grammar_accepts_canonical_values(value: str):
+    from tinychain.uri import validate_resource_name
+
+    assert validate_resource_name(value) == value
+
+    Library = type(
+        "GrammarLibrary",
+        (tc.Library,),
+        {"publisher": "example-devco", "resource_name": value, "version": "0.1.0"},
+    )
+    assert Library.class_id().path == f"/lib/example-devco/{value}/0.1.0"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("", ValueError),
+        (None, ValueError),
+        (123, ValueError),
+        ("Bad Name", ValueError),
+        ("UPPER", ValueError),
+        ("bad/name", ValueError),
+        ("-leading", ValueError),
+        ("trailing-", ValueError),
+        ("_leading", ValueError),
+        ("trailing_", ValueError),
+        ("double--dash", ValueError),
+        ("double__underscore", ValueError),
+        (".", ValueError),
+        ("..", ValueError),
+    ],
+)
+def test_resource_name_grammar_rejects_invalid_values(value: object, expected):
+    from tinychain.uri import validate_resource_name
+
+    with pytest.raises(expected, match="resource_name"):
+        validate_resource_name(value)
+
+
+@pytest.mark.parametrize("field", ("publisher", "resource_name", "version"))
+def test_identity_fields_are_read_only_on_instances(field):
+    class ReadOnly(tc.Library):
+        publisher = "applied-physics"
+        resource_name = "read-only"
+        version = "0.1.0"
+
+    instance = ReadOnly()
+
+    # Reads resolve to the class-level canonical metadata.
+    assert instance.publisher == "applied-physics"
+    assert instance.resource_name == "read-only"
+    assert instance.version == "0.1.0"
+
+    # Assigning identity metadata on an instance is rejected rather than
+    # silently creating a misleading shadow value.
+    with pytest.raises(AttributeError, match="read-only on instances"):
+        setattr(instance, field, "drifted")
+
+    # A non-identity instance attribute (deployment state) remains assignable.
+    instance.authority = None
+
+
+def test_identity_consumers_are_class_authoritative():
+    from tinychain.autodiff.routes import extract_route_identity
+    from tinychain.library import _class_schema, _library_schema
+
+    class Canonical(tc.Library):
+        publisher = "applied-physics"
+        resource_name = "canonical"
+        version = "0.1.0"
+
+        @tc.get
+        def ping(self) -> tc.String:
+            ...
+
+    expected = "/lib/applied-physics/canonical/0.1.0"
+    instance = Canonical()
+
+    assert instance.id().path == expected
+    assert instance.link().path == expected
+    assert Canonical.class_id().path == expected
+    assert _class_schema(Canonical)["id"] == expected
+    assert _library_schema(instance)["id"] == expected
+    assert list(library_definition(instance).keys()) == [expected]
+
+    ir_paths = [route["path"] for route in compile_ir(instance)["routes"]]
+    assert "/ping" in ir_paths
+
+    with tc.backend(mode="deferred"):
+        op = instance.ping()
+        assert op.op.path == expected + "/ping"
+
+    identity = extract_route_identity(instance.ping)
+    assert identity.library_name == "canonical"
+    assert identity.library_path == expected
+    assert identity.library_uri == expected
+    assert identity.route_uri == expected + "/path/ping"

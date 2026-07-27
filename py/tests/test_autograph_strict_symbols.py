@@ -8,6 +8,7 @@ from tinychain.library import compile_ir
 def test_autograph_rejects_non_tinychain_global_call() -> None:
     class A(tc.Library):
         publisher = "example-devco"
+        resource_name = "a"
         version = "0.1.0"
 
         @tc.post
@@ -23,6 +24,7 @@ def test_autograph_rejects_tensorflow_style_global_symbol() -> None:
 
     class A(tc.Library):
         publisher = "example-devco"
+        resource_name = "a"
         version = "0.1.0"
 
         @tc.post
@@ -38,6 +40,7 @@ def test_autograph_rejects_jax_style_global_symbol() -> None:
 
     class A(tc.Library):
         publisher = "example-devco"
+        resource_name = "a"
         version = "0.1.0"
 
         @tc.post
@@ -51,6 +54,7 @@ def test_autograph_rejects_jax_style_global_symbol() -> None:
 def test_autograph_allows_tinychain_expression_graphs() -> None:
     class A(tc.Library):
         publisher = "example-devco"
+        resource_name = "a"
         version = "0.1.0"
 
         @tc.post

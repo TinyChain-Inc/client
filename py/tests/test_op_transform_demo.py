@@ -10,6 +10,7 @@ from .support import install_token, require_cargo
 
 class A(tc.Library):
     publisher = "example-devco"
+    resource_name = "a"
     version = "0.1.0"
 
     @tc.post
@@ -29,6 +30,7 @@ class A(tc.Library):
 
 class C(tc.Library):
     publisher = "example-devco"
+    resource_name = "c"
     version = "0.1.0"
 
     @tc.post

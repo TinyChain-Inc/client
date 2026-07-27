@@ -33,6 +33,7 @@ def test_with_library_infers_route_from_declared_dependency_authority(tmp_path, 
 
     class A(tc.Library):
         publisher = "example-devco"
+        resource_name = "a"
         version = "0.1.0"
         dependencies = (dep,)
 
@@ -61,6 +62,7 @@ def test_with_library_rejects_dependency_override_argument(tmp_path, monkeypatch
 
     class A(tc.Library):
         publisher = "example-devco"
+        resource_name = "a"
         version = "0.1.0"
         dependencies = (tc.uri("lib", "example-devco", "b", "0.1.0"),)
 
@@ -89,6 +91,7 @@ def test_with_library_uses_multi_route_constructor_when_available(tmp_path, monk
 
     class A(tc.Library):
         publisher = "example-devco"
+        resource_name = "a"
         version = "0.1.0"
         dependencies = (dep_b, dep_c)
 
@@ -123,6 +126,7 @@ def test_with_library_keeps_each_declared_dependency_route(tmp_path, monkeypatch
 
     class A(tc.Library):
         publisher = "example-devco"
+        resource_name = "a"
         version = "0.1.0"
         dependencies = (dep_b, dep_c)
 
@@ -149,11 +153,13 @@ def test_with_library_infers_authority_from_runtime_dependency_binding(tmp_path,
 
     class B(tc.Library):
         publisher = "example-devco"
+        resource_name = "b"
         version = "0.1.0"
         authority = tc.URI.parse("http://deps.example.test:8702")
 
     class Local(tc.Library):
         publisher = "example-devco"
+        resource_name = "local"
         version = "0.1.0"
         dependencies = (tc.uri("lib", "example-devco", "b", "0.1.0"),)
         dep = B()
@@ -175,6 +181,7 @@ def test_with_library_missing_authority_is_clear(tmp_path, monkeypatch):
 
     class A(tc.Library):
         publisher = "example-devco"
+        resource_name = "a"
         version = "0.1.0"
         dependencies = (tc.uri("lib", "example-devco", "b", "0.1.0"),)
 
@@ -195,6 +202,7 @@ def test_with_library_rejects_ambiguous_runtime_binding_authority(tmp_path, monk
         (tc.Library,),
         {
             "publisher": "example-devco",
+            "resource_name": "b",
             "version": "0.1.0",
             "authority": tc.URI.parse("http://left.example.test:8702"),
         },
@@ -204,6 +212,7 @@ def test_with_library_rejects_ambiguous_runtime_binding_authority(tmp_path, monk
         (tc.Library,),
         {
             "publisher": "example-devco",
+            "resource_name": "b",
             "version": "0.1.0",
             "authority": tc.URI.parse("http://right.example.test:8703"),
         },
@@ -211,6 +220,7 @@ def test_with_library_rejects_ambiguous_runtime_binding_authority(tmp_path, monk
 
     class Local(tc.Library):
         publisher = "example-devco"
+        resource_name = "local"
         version = "0.1.0"
         dependencies = (tc.uri("lib", "example-devco", "b", "0.1.0"),)
         left = LeftB()
@@ -243,6 +253,7 @@ def test_with_library_ignores_env_auth(tmp_path, monkeypatch):
 
     class A(tc.Library):
         publisher = "example-devco"
+        resource_name = "a"
         version = "0.1.0"
         dependencies = (dep,)
 
@@ -272,6 +283,7 @@ def test_with_library_accepts_single_token_object(tmp_path, monkeypatch):
 
     class A(tc.Library):
         publisher = "example-devco"
+        resource_name = "a"
         version = "0.1.0"
         dependencies = (dep,)
 

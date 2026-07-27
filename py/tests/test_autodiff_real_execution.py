@@ -53,10 +53,11 @@ def _program() -> DerivativeProgram:
 def test_derivative_execution_library_compiles_as_normal_library() -> None:
     library_cls = build_derivative_execution_library(
         publisher="autodiff-devco",
+        resource_name="add_derivative_execution",
         class_name="AddDerivativeExecution",
         version="0.1.0",
         program=_program(),
-        artifact_class_name="AddDerivativeArtifact",
+        artifact_resource_name="add_derivative_artifact",
     )
 
     definition = library_definition(library_cls)
@@ -78,10 +79,11 @@ def test_derivative_execution_library_rejects_artifact_identity_collision() -> N
     with pytest.raises(ArtifactError, match="must not collide"):
         build_derivative_execution_library(
             publisher="autodiff-devco",
+            resource_name="add_derivative_artifact",
             class_name="AddDerivativeArtifact",
             version="0.1.0",
             program=_program(),
-            artifact_class_name="AddDerivativeArtifact",
+            artifact_resource_name="add_derivative_artifact",
         )
 
 
@@ -104,6 +106,7 @@ def test_derivative_execution_library_rejects_non_identifier_params() -> None:
     with pytest.raises(ArtifactError, match="valid Python identifiers"):
         build_derivative_execution_library(
             publisher="autodiff-devco",
+            resource_name="bad_derivative_execution",
             class_name="BadDerivativeExecution",
             version="0.1.0",
             program=program,
@@ -113,6 +116,7 @@ def test_derivative_execution_library_rejects_non_identifier_params() -> None:
 def test_real_dispatcher_missing_value_uses_autodiff_error() -> None:
     library_cls = build_derivative_execution_library(
         publisher="autodiff-devco",
+        resource_name="missing_input_derivative_execution",
         class_name="MissingInputDerivativeExecution",
         version="0.1.0",
         program=_program(),
@@ -136,10 +140,11 @@ def test_real_dispatcher_executes_installed_route_against_local_backend(tmp_path
     program = _program()
     library_cls = build_derivative_execution_library(
         publisher="autodiff-devco",
+        resource_name="add_derivative_real_execution",
         class_name="AddDerivativeRealExecution",
         version="0.1.0",
         program=program,
-        artifact_class_name="AddDerivativeArtifact",
+        artifact_resource_name="add_derivative_artifact",
     )
     token = install_token(library_cls.class_id().path)
     kernel = tc.kernel.with_library(library_cls(), data_dir=tmp_path, token=token)

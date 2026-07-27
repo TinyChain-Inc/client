@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
 from ..graph_reflection import TypeSpec
-from ..library import Library
+from ..library import Library, _class_identity
 from ..uri import uri
 from ..serialize import serialize
 from .protocol import AutodiffError
@@ -273,13 +273,15 @@ def extract_route_identity(target: object) -> RouteDerivativeIdentity:
             "malformed TinyChain route target: missing HTTP method",
         )
 
-    _validate_library_identity_fields(route_instance)
+    # Identity is class-authoritative; resolve it from the class, never from
+    # (possibly mutated) instance attributes.
+    publisher, resource_name, version = _validate_library_identity_fields(route_instance)
 
     library_path = route_instance.id().path
     return RouteDerivativeIdentity(
-        publisher=route_instance.publisher,
-        library_name=route_instance.name,
-        library_version=route_instance.version,
+        publisher=publisher,
+        library_name=resource_name,
+        library_version=version,
         library_path=library_path,
         library_uri=route_instance.link().absolute(),
         route_name=route_name,
@@ -596,13 +598,18 @@ def _missing_route_metadata(identity: RouteDerivativeIdentity) -> AutodiffError:
     )
 
 
-def _validate_library_identity_fields(route_instance: Library) -> None:
-    for field_name in ("publisher", "name", "version"):
-        value: Any = getattr(route_instance, field_name, None)
-        if not isinstance(value, str) or not value:
-            raise TypeError(
-                "bound TinyChain route target has malformed Library identity metadata"
-            )
+def _validate_library_identity_fields(route_instance: Library) -> tuple[str, str, str]:
+    """Return the class-authoritative ``(publisher, resource_name, version)``.
+
+    Identity is resolved from ``type(route_instance)`` so instance-level
+    mutation cannot affect derivative route metadata.
+    """
+    try:
+        return _class_identity(type(route_instance))
+    except (TypeError, ValueError) as exc:
+        raise TypeError(
+            "bound TinyChain route target has malformed Library identity metadata"
+        ) from exc
 
 
 def _require_allowed(label: str, value: object, allowed: tuple[str, ...]) -> None:

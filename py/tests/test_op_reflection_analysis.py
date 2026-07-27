@@ -14,6 +14,7 @@ def test_op_reflection_analysis(tmp_path: pathlib.Path) -> None:
     def _run():
         class A(tc.Library):
             publisher = "example-devco"
+            resource_name = "a"
             version = "0.1.0"
 
             @tc.get
@@ -22,6 +23,7 @@ def test_op_reflection_analysis(tmp_path: pathlib.Path) -> None:
 
         class B(tc.Library):
             publisher = "example-devco"
+            resource_name = "b"
             version = "0.1.0"
 
             _a: A = A()
@@ -39,6 +41,7 @@ def test_op_reflection_analysis(tmp_path: pathlib.Path) -> None:
 
         class C(tc.Library):
             publisher = "example-devco"
+            resource_name = "c"
             version = "0.1.0"
 
             @tc.post

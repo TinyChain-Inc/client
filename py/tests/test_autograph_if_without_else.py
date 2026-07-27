@@ -8,6 +8,7 @@ from tinychain.library import compile_ir
 def test_if_without_else_allows_rebinding_existing_name() -> None:
     class A(tc.Library):
         publisher = "example-devco"
+        resource_name = "a"
         version = "0.1.0"
 
         @tc.post
@@ -25,6 +26,7 @@ def test_if_without_else_allows_rebinding_existing_name() -> None:
 def test_if_without_else_rejects_new_branch_local() -> None:
     class A(tc.Library):
         publisher = "example-devco"
+        resource_name = "a"
         version = "0.1.0"
 
         @tc.post
@@ -40,6 +42,7 @@ def test_if_without_else_rejects_new_branch_local() -> None:
 def test_if_return_with_immediate_fallback_return_compiles() -> None:
     class A(tc.Library):
         publisher = "example-devco"
+        resource_name = "a"
         version = "0.1.0"
 
         @tc.post

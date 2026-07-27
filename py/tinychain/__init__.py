@@ -10,7 +10,7 @@ from . import opref
 from .ref import Ref
 from .collection.tensor import Tensor, concatenate, einsum, split, tile
 from .state.value import Bool, C64, C128, Complex, F32, F64, Float, I64, Integer, Link, Map, Null, Number, String, Tuple, U64
-from .uri import CanonicalResourceName, URI, authority, origin, uri
+from .uri import URI, authority, origin, uri
 from . import compute
 from . import collection
 from . import state
@@ -50,7 +50,6 @@ __all__ = [
     "split",
     "tile",
     "URI",
-    "CanonicalResourceName",
     "compute",
     "collection",
     "state",

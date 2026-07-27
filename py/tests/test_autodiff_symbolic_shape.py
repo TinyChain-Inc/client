@@ -143,6 +143,7 @@ def test_execution_library_defers_symbolic_shape_params_to_runtime():
 
     library_cls = build_derivative_execution_library(
         publisher="autodiff-devco",
+        resource_name="symbolic_shape_derivative_execution",
         class_name="SymbolicShapeDerivativeExecution",
         version="0.1.0",
         program=program,
@@ -217,6 +218,7 @@ def test_execution_library_namespaces_shape_params_away_from_value_ids():
 
     library_cls = build_derivative_execution_library(
         publisher="autodiff-devco",
+        resource_name="symbolic_shape_param_collision_execution",
         class_name="SymbolicShapeParamCollisionExecution",
         version="0.1.0",
         program=program,
@@ -271,6 +273,7 @@ def test_execution_library_reuses_duplicate_symbol_shape_params_and_rejects_conf
 
     library_cls = build_derivative_execution_library(
         publisher="autodiff-devco",
+        resource_name="duplicate_symbol_shape_execution",
         class_name="DuplicateSymbolShapeExecution",
         version="0.1.0",
         program=program,

@@ -15,7 +15,7 @@ from .ref import Ref
 from . import _autograph
 from .state import ContextResult, DeleteOpDef, DeleteOpRef, GetOpDef, GetOpRef, IdRef, OpDef, OpRef as StateOpRef, PostOpDef, PostOpRef, PutOpDef, PutOpRef, Scalar, TCRef, autobox, context, current_context, form_of, map_of as scalar_map_of, scalar_for_hint, scoped_context, tcref_form_of, tuple_of as scalar_tuple_of
 from .state.value import Bool, Map, Number, String, Tuple, Value
-from .uri import CanonicalResourceName, URI, _class_resource_name, _segment, uri as _uri
+from .uri import URI, _segment, uri as _uri, validate_resource_name
 
 def _is_method(form: Callable[..., Any]) -> bool:
     names = list(getattr(form, "__code__", None).co_varnames or ())
@@ -85,18 +85,16 @@ def _compile_self_instance(library: type["Library"]) -> "Library":
 
 
 def _route_path(subject: object, route_name: str) -> str:
-    for attr in ("publisher", "name", "version"):
-        if not hasattr(subject, attr):
-            raise TypeError("expected library class with publisher/name/version fields")
-    publisher = getattr(subject, "publisher")
-    name = getattr(subject, "name")
-    version = getattr(subject, "version")
+    # Identity is always resolved from the class, never from (possibly mutated)
+    # instance attributes.
+    cls = subject if isinstance(subject, type) else type(subject)
+    publisher, resource_name, version = _class_identity(cls)
     route_uri = URI(
         "/" + "/".join(
             [
                 "lib",
                 _segment("publisher", publisher),
-                _segment("name", name),
+                _segment("resource_name", resource_name),
                 _segment("version", version),
                 _segment("path", route_name),
             ]
@@ -130,12 +128,46 @@ def _library_class(library: "Library | type[Library]") -> type["Library"]:
     raise TypeError("expected a Library class")
 
 
+def _class_identity(cls: type["Library"]) -> tuple[str, str, str]:
+    """Return the validated canonical ``(publisher, resource_name, version)``.
+
+    ``resource_name`` is the single source of truth for the library name path
+    component ``/lib/{publisher}/{resource_name}/{version}``. It is class-level
+    metadata with the same inheritance semantics as ``publisher`` and
+    ``version``; there is no derivation from the Python class name.
+    """
+    # A raw ``name`` field is never a source of Library identity, regardless of
+    # its value or type, and even when a valid ``resource_name`` is also
+    # declared. Walk the MRO (nearest declaration wins, mirroring attribute
+    # resolution) so inherited raw declarations cannot bypass validation. A
+    # decorated route method named ``name`` is a ``Route`` descriptor, not a raw
+    # identity field, and remains valid.
+    for klass in cls.__mro__:
+        if klass is Library:
+            break
+        if "name" in klass.__dict__:
+            if not isinstance(klass.__dict__["name"], Route):
+                raise TypeError(
+                    "Library identity comes from resource_name; a raw class-level "
+                    "'name' field is not supported"
+                )
+            break
+    publisher = getattr(cls, "publisher", None)
+    resource_name = getattr(cls, "resource_name", None)
+    version = getattr(cls, "version", None)
+    if not publisher or not resource_name or not version:
+        raise TypeError("Library requires class publisher, resource_name, and version")
+    return (
+        _segment("publisher", publisher),
+        validate_resource_name(resource_name),
+        _segment("version", version),
+    )
+
+
 def _validate_library_class(library: type["Library"]) -> None:
     if "__init__" in library.__dict__:
         raise TypeError("Library subclasses must not define __init__")
-    if not getattr(library, "publisher", None) or not getattr(library, "version", None):
-        raise TypeError("Library requires class publisher and version")
-    _class_resource_name(library)
+    _class_identity(library)
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,13 +250,8 @@ class Route:
             raise TypeError("route form must begin with a `self` parameter")
         library_cls = _library_class(instance)
         _validate_library_class(library_cls)
-        if isinstance(instance, Library):
-            if (
-                instance.publisher != getattr(library_cls, "publisher", None)
-                or instance.name != _class_resource_name(library_cls)
-                or instance.version != getattr(library_cls, "version", None)
-            ):
-                raise TypeError("Library instance fields must match class attributes")
+        # Identity is class-authoritative: route compilation always uses a fresh
+        # class-derived instance, so instance-level mutation cannot affect it.
         return _compile_opdef_route(self, _compile_self_instance(library_cls), params)
 
     def __get__(self, instance: object, owner: type | None = None):
@@ -460,46 +487,56 @@ class Library:
     Subclasses use class-level manifest metadata and route decorators.
     """
 
-    canonical_resource_name: CanonicalResourceName
+    publisher: str
+    resource_name: str
+    version: str
+
+    # Canonical identity metadata is class-authoritative and read-only on
+    # instances: assigning it on an instance would create a misleading shadow
+    # value that identity resolution (``_class_identity``) ignores.
+    _IDENTITY_FIELDS = frozenset({"publisher", "resource_name", "version"})
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if name in Library._IDENTITY_FIELDS:
+            raise AttributeError(
+                f"{name!r} is class-level Library identity metadata and is "
+                "read-only on instances; declare it on the class"
+            )
+        object.__setattr__(self, name, value)
 
     def __init__(
         self,
         *,
         publisher: str | None = None,
+        resource_name: str | None = None,
         name: str | None = None,
         version: str | None = None,
         authority: URI | None = None,
     ) -> None:
         cls = type(self)
         if cls is Library:
-            raise TypeError("Library must be subclassed with class publisher and version metadata")
+            raise TypeError(
+                "Library must be subclassed with class publisher, resource_name, and version metadata"
+            )
 
-        if publisher is not None or name is not None or version is not None:
+        if (
+            publisher is not None
+            or resource_name is not None
+            or name is not None
+            or version is not None
+        ):
             raise TypeError(
                 "Library manifest metadata must be declared on the class"
             )
-        publisher = getattr(cls, "publisher", None)
-        name = _class_resource_name(cls)
-        version = getattr(cls, "version", None)
-        if not publisher or not name or not version:
-            raise TypeError("Library requires class publisher and version")
-        self.publisher = publisher
-        self.name = name
-        self.version = version
-        self.dependencies = _class_dependencies(type(self))
+        # Validate class-level identity eagerly, but do not copy it onto the
+        # instance: ``publisher``/``resource_name``/``version`` remain
+        # class-authoritative and are always resolved via ``_class_identity``.
+        _class_identity(cls)
+        self.dependencies = _class_dependencies(cls)
         self.authority = authority or getattr(cls, "authority", None)
 
     def id(self) -> URI:
-        return URI(
-            "/" + "/".join(
-                [
-                    "lib",
-                    _segment("publisher", self.publisher),
-                    _segment("name", self.name),
-                    _segment("version", self.version),
-                ]
-            )
-        )
+        return type(self).class_id()
 
     def link(self) -> URI:
         base = self.id()
@@ -514,21 +551,8 @@ class Library:
 
     @classmethod
     def class_id(cls) -> URI:
-        publisher = getattr(cls, "publisher", None)
-        name = _class_resource_name(cls)
-        version = getattr(cls, "version", None)
-        if not publisher or not name or not version:
-            raise TypeError("Library requires class publisher and version")
-        return URI(
-            "/" + "/".join(
-                [
-                    "lib",
-                    _segment("publisher", publisher),
-                    _segment("name", name),
-                    _segment("version", version),
-                ]
-            )
-        )
+        publisher, resource_name, version = _class_identity(cls)
+        return URI("/" + "/".join(["lib", publisher, resource_name, version]))
 
 def _to_opref(value: object) -> Optional[OpRef[Any]]:
     if hasattr(value, "op"):
@@ -539,18 +563,20 @@ def _to_opref(value: object) -> Optional[OpRef[Any]]:
 
 
 def _class_schema(cls: type["Library"]) -> dict:
+    _, _, version = _class_identity(cls)
     deps = _class_dependencies(cls)
     return {
         "id": cls.class_id().path,
-        "version": getattr(cls, "version", None),
+        "version": version,
         "dependencies": [dep.path for dep in deps],
     }
 
 
 def _library_schema(library: "Library") -> dict:
+    _, _, version = _class_identity(type(library))
     return {
         "id": library.id().path,
-        "version": library.version,
+        "version": version,
         "dependencies": [dep.path for dep in library.dependencies],
     }
 
@@ -842,13 +868,8 @@ def install(
 ) -> object:
     library_cls = _library_class(library)
     _validate_library_class(library_cls)
-    if isinstance(library, Library):
-        if (
-            library.publisher != getattr(library_cls, "publisher", None)
-            or library.name != _class_resource_name(library_cls)
-            or library.version != getattr(library_cls, "version", None)
-        ):
-            raise TypeError("Library instance fields must match class attributes")
+    # Identity is class-authoritative; the install definition is derived from
+    # the class, so instance-level mutation cannot change what is installed.
 
     if wasm is not None:
         if remote is not None:
