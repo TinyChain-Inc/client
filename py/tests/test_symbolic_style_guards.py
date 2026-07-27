@@ -282,11 +282,12 @@ def test_coerce_naming_is_banned_in_symbolic_runtime() -> None:
     assert not violations, "forbidden coerce naming found:\n" + "\n".join(violations)
 
 
-def test_state_scalar_path_naming_uses_constants_not_tag_or_path_helpers() -> None:
+def test_state_scalar_path_naming_bans_uri_constant_tables_and_tag_path_helpers() -> None:
     violations: list[str] = []
     target_files = {
         "state/scalar/__init__.py",
         "state/scalar/refs.py",
+        "state/scalar/opdef.py",
     }
 
     for path in sorted(_SRC_ROOT.rglob("*.py")):
@@ -296,6 +297,21 @@ def test_state_scalar_path_naming_uses_constants_not_tag_or_path_helpers() -> No
 
         source = path.read_text(encoding="utf-8")
         tree = ast.parse(source)
+
+        for stmt in tree.body:
+            targets: list[ast.expr] = []
+            if isinstance(stmt, ast.Assign):
+                targets = list(stmt.targets)
+            elif isinstance(stmt, ast.AnnAssign):
+                targets = [stmt.target]
+
+            for target in targets:
+                if not isinstance(target, ast.Name):
+                    continue
+                if target.id.endswith("_URI") or target.id.endswith("_PATH"):
+                    line = getattr(target, "lineno", 0)
+                    violations.append(f"{relative_path}:{line}: {target.id}")
+
         for node in ast.walk(tree):
             if isinstance(node, ast.FunctionDef):
                 if node.name.endswith("_tag") or node.name.endswith("_path"):

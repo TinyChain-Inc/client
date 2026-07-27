@@ -6,8 +6,6 @@ import pytest
 import tinychain as tc
 from tinychain.autodiff import AutodiffError
 from tinychain.library import compile_ir, library_definition
-from tinychain.state.scalar import OPDEF_POST_URI
-
 
 def test_library_routes_return_typed_refs():
     class A(tc.Library):
@@ -132,7 +130,7 @@ def test_library_routes_preserve_all_dict_return_keys():
 
     ir = compile_ir(A)
     route = next(route for route in ir["routes"] if route["path"] == "/stats")
-    opdef = route["opdef"][OPDEF_POST_URI.path]
+    opdef = route["opdef"][tc.uri("state", "scalar", "op", "post").path]
 
     assert [name for name, _ in opdef] == ["min", "max"]
 
@@ -149,7 +147,7 @@ def test_library_routes_ref_typed_mapping_return_is_result_value():
 
     ir = compile_ir(A)
     route = next(route for route in ir["routes"] if route["path"] == "/stats")
-    opdef = route["opdef"][OPDEF_POST_URI.path]
+    opdef = route["opdef"][tc.uri("state", "scalar", "op", "post").path]
 
     names = [name for name, _ in opdef]
     assert "result" in names
@@ -221,7 +219,7 @@ def test_grad_cannot_be_used_as_route_metadata_decorator():
 
     definition = library_definition(A)
     route = definition[A.class_id().path]["identity"]
-    assert OPDEF_POST_URI.path in route
+    assert tc.uri("state", "scalar", "op", "post").path in route
 
 
 def test_grad_tensor_target_fails_until_route_tracing_is_implemented():

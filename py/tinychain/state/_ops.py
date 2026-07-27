@@ -3,16 +3,13 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
 
-from ..uri import path
+from ..uri import path, uri
 from .scalar.refs import (
     Cond,
     ForEach,
     IdRef,
     OpRef,
     TCRef,
-    TCREF_COND_URI,
-    TCREF_FOR_EACH_URI,
-    TCREF_WHILE_URI,
     While,
 )
 
@@ -104,11 +101,11 @@ def _state_subject(owner: object, form: object, *, ctx: "Context | None" = None)
             return subject
 
         if isinstance(ref_form, Cond):
-            return path(TCREF_COND_URI)
+            return path(uri(TCRef, "cond"))
         if isinstance(ref_form, While):
-            return path(TCREF_WHILE_URI)
+            return path(uri(TCRef, "while"))
         if isinstance(ref_form, ForEach):
-            return path(TCREF_FOR_EACH_URI)
+            return path(uri(TCRef, "for_each"))
 
     if isinstance(form, Mapping) and len(form) == 1:
         (key, _value), = form.items()

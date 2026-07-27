@@ -93,9 +93,9 @@ def decode_payload(payload: object) -> object:
     if isinstance(unwrapped, dict):
         if len(unwrapped) == 1:
             (key, _value), = unwrapped.items()
-            from .state.scalar import SCALAR_OP_ROOT_URI
+            from .state.scalar import _scalar_op_uri
 
-            if isinstance(key, str) and key.startswith(path(SCALAR_OP_ROOT_URI)):
+            if isinstance(key, str) and key.startswith(path(_scalar_op_uri())):
                 try:
                     return OpDef.from_json(unwrapped)
                 except (TypeError, ValueError):

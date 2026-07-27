@@ -32,19 +32,21 @@ def _value_runtime():
 
     return Value, value_bool, value_link, value_map, value_number, value_string, value_tuple, value_form_of
 
-SCALAR_ROOT_URI: URI = uri(State, "scalar")
-SCALAR_OP_ROOT_URI: URI = uri(SCALAR_ROOT_URI, "op")
-SCALAR_REFLECT_ROOT_URI: URI = uri(SCALAR_ROOT_URI, "reflect")
-SCALAR_OP_REFLECT_ROOT_URI: URI = uri(SCALAR_OP_ROOT_URI, "reflect")
-OPDEF_GET_URI: URI = uri(SCALAR_OP_ROOT_URI, "get")
-OPDEF_PUT_URI: URI = uri(SCALAR_OP_ROOT_URI, "put")
-OPDEF_POST_URI: URI = uri(SCALAR_OP_ROOT_URI, "post")
-OPDEF_DELETE_URI: URI = uri(SCALAR_OP_ROOT_URI, "delete")
-SCALAR_REFLECT_CLASS_URI: URI = uri(SCALAR_REFLECT_ROOT_URI, "class")
-SCALAR_REFLECT_REF_PARTS_URI: URI = uri(SCALAR_REFLECT_ROOT_URI, "ref_parts")
-OPDEF_REFLECT_FORM_URI: URI = uri(SCALAR_OP_REFLECT_ROOT_URI, "form")
-OPDEF_REFLECT_LAST_ID_URI: URI = uri(SCALAR_OP_REFLECT_ROOT_URI, "last_id")
-OPDEF_REFLECT_SCALARS_URI: URI = uri(SCALAR_OP_REFLECT_ROOT_URI, "scalars")
+
+def _scalar_uri(*segments: str) -> URI:
+    return uri(State, "scalar", *segments)
+
+
+def _scalar_op_uri(*segments: str) -> URI:
+    return uri(_scalar_uri(), "op", *segments)
+
+
+def _scalar_reflect_uri(*segments: str) -> URI:
+    return uri(_scalar_uri(), "reflect", *segments)
+
+
+def _opdef_reflect_uri(*segments: str) -> URI:
+    return uri(_scalar_op_uri(), "reflect", *segments)
 
 
 def _sorted_items(obj: Mapping[str, Any]) -> list[tuple[str, Any]]:
@@ -419,10 +421,10 @@ def _typed_from_op_ref(op_ref: OpRef) -> Scalar:
     ref = op_ref
 
     exact_dispatch: dict[str, type[Scalar]] = {
-        path(SCALAR_REFLECT_REF_PARTS_URI): Tuple,
-        path(OPDEF_REFLECT_FORM_URI): Tuple,
-        path(OPDEF_REFLECT_SCALARS_URI): Tuple,
-        path(OPDEF_REFLECT_LAST_ID_URI): String,
+        path(_scalar_reflect_uri("ref_parts")): Tuple,
+        path(_opdef_reflect_uri("form")): Tuple,
+        path(_opdef_reflect_uri("scalars")): Tuple,
+        path(_opdef_reflect_uri("last_id")): String,
     }
     wrapper = exact_dispatch.get(subject)
     if wrapper is not None:
@@ -540,6 +542,8 @@ class Scalar(State):
     - scalar op defs (typed `/state/scalar/op/*` maps)
     """
 
+    __uri__: URI = _scalar_uri()
+
     def __init__(self, form: object = None, *, ref: TCRef | None = None, ctx: "Context | None" = None):
         super().__init__(form, ref=ref, ctx=ctx)
 
@@ -550,19 +554,19 @@ class Scalar(State):
         return rtype._post_ref(subject, {payload_key: payload_value}, ctx=self._ctx)
 
     def class_(self) -> "Scalar":
-        return self._reflect(path(SCALAR_REFLECT_CLASS_URI), "scalar", self, rtype=Scalar)
+        return self._reflect(path(_scalar_reflect_uri("class")), "scalar", self, rtype=Scalar)
 
     def ref_parts(self) -> "Tuple":
-        return cast(Tuple, self._reflect(path(SCALAR_REFLECT_REF_PARTS_URI), "scalar", self, rtype=Tuple))
+        return cast(Tuple, self._reflect(path(_scalar_reflect_uri("ref_parts")), "scalar", self, rtype=Tuple))
 
     def reflect_form(self) -> "Tuple":
-        return cast(Tuple, self._reflect(path(OPDEF_REFLECT_FORM_URI), "op", self, rtype=Tuple))
+        return cast(Tuple, self._reflect(path(_opdef_reflect_uri("form")), "op", self, rtype=Tuple))
 
     def reflect_last_id(self) -> "String":
-        return cast(String, self._reflect(path(OPDEF_REFLECT_LAST_ID_URI), "op", self, rtype=String))
+        return cast(String, self._reflect(path(_opdef_reflect_uri("last_id")), "op", self, rtype=String))
 
     def reflect_scalars(self) -> "Tuple":
-        return cast(Tuple, self._reflect(path(OPDEF_REFLECT_SCALARS_URI), "op", self, rtype=Tuple))
+        return cast(Tuple, self._reflect(path(_opdef_reflect_uri("scalars")), "op", self, rtype=Tuple))
 
     @staticmethod
     def from_json(obj: Any) -> "Scalar":
@@ -581,7 +585,7 @@ class Scalar(State):
 
             if len(obj) == 1:
                 (key, _), = obj.items()
-                if isinstance(key, str) and key.startswith(path(SCALAR_OP_ROOT_URI)):
+                if isinstance(key, str) and key.startswith(path(_scalar_op_uri())):
                     return Scalar(OpDef.from_json(obj))
 
             # Decode TCRef/OpRef maps before generic Value maps to avoid
