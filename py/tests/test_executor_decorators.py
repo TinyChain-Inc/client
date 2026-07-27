@@ -73,6 +73,7 @@ def test_stub_route_dispatch(monkeypatch):
 
     class A(tc.Library):
         publisher = "example-devco"
+        resource_name = "a"
         version = "0.1.0"
 
         @tc.get
@@ -103,6 +104,7 @@ def test_stub_route_dispatch_forwards_bearer(monkeypatch):
 
     class B(tc.Library):
         publisher = "example-devco"
+        resource_name = "b"
         version = "0.1.0"
 
         @tc.get
@@ -127,6 +129,7 @@ def test_stub_route_uses_annotated_return_type(monkeypatch):
 
     class C(tc.Library):
         publisher = "example-devco"
+        resource_name = "c"
         version = "0.1.0"
 
         @tc.get
@@ -148,6 +151,7 @@ def test_stub_route_accepts_body_and_dispatches(monkeypatch):
 
     class D(tc.Library):
         publisher = "example-devco"
+        resource_name = "d"
         version = "0.1.0"
 
         @tc.get
@@ -177,6 +181,7 @@ def test_backend_eager_mode_executes_stub_calls_by_default(monkeypatch):
 
     class E(tc.Library):
         publisher = "example-devco"
+        resource_name = "e"
         version = "0.1.0"
 
         @tc.get
@@ -202,6 +207,7 @@ def test_backend_mode_deferred_returns_plan(monkeypatch):
 
     class F(tc.Library):
         publisher = "example-devco"
+        resource_name = "f"
         version = "0.1.0"
 
         @tc.get
@@ -228,6 +234,7 @@ def test_backend_mode_can_be_switched_by_nested_backend_context(monkeypatch):
 
     class G(tc.Library):
         publisher = "example-devco"
+        resource_name = "g"
         version = "0.1.0"
 
         @tc.get
@@ -261,6 +268,7 @@ def test_backend_mode_deferred_remains_deferred_when_nested(monkeypatch):
 
     class H(tc.Library):
         publisher = "example-devco"
+        resource_name = "h"
         version = "0.1.0"
 
         @tc.get
@@ -291,6 +299,7 @@ def test_backend_mode_deferred_preserves_cross_library_dependency_paths(monkeypa
 
     class Local(tc.Library):
         publisher = "example-devco"
+        resource_name = "local"
         version = "0.1.0"
 
         @tc.get
@@ -299,6 +308,7 @@ def test_backend_mode_deferred_preserves_cross_library_dependency_paths(monkeypa
 
     class Remote(tc.Library):
         publisher = "example-devco"
+        resource_name = "remote"
         version = "0.1.0"
         authority = tc.URI.parse("https://api.example.test")
 
@@ -395,6 +405,7 @@ def test_execute_without_backend_runs_authority_qualified_op(monkeypatch):
 def test_stub_route_emits_authority_qualified_path():
     class Remote(tc.Library):
         publisher = "example-devco"
+        resource_name = "remote"
         version = "0.1.0"
         authority = tc.URI.parse("https://api.example.test:443")
 
@@ -415,6 +426,7 @@ def test_execute_without_backend_runs_authority_qualified_stub(monkeypatch):
 
     class Remote(tc.Library):
         publisher = "example-devco"
+        resource_name = "remote"
         version = "0.1.0"
         authority = tc.URI.parse("https://api.example.test")
 

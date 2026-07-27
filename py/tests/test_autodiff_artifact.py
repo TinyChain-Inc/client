@@ -656,5 +656,5 @@ def test_build_derivative_artifact_library_rejects_invalid_public_identity() -> 
         )
 
     assert raised.value.category == "invalid_manifest"
-    assert "must not contain '/'" in raised.value.message
+    assert "resource_name must match" in raised.value.message
 

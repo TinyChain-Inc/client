@@ -12,6 +12,7 @@ def _json(value):
 def test_tensor_reflection_preserves_tensor_hint():
     class Math(tc.Library):
         publisher = "example-devco"
+        resource_name = "math"
         version = "0.1.0"
 
         @tc.post

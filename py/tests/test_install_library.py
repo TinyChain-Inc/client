@@ -12,6 +12,7 @@ from .support import install_token
 def test_install_python_library(tmp_path: pathlib.Path):
     class Example(tc.Library):
         publisher = "example-devco"
+        resource_name = "example"
         version = "0.1.0"
         dependencies = ()
 
@@ -35,6 +36,7 @@ def test_install_python_library(tmp_path: pathlib.Path):
 
     class Example(tc.Library):
         publisher = "example-devco"
+        resource_name = "example"
         version = "0.1.0"
 
         @tc.get
@@ -52,6 +54,7 @@ def test_install_python_library(tmp_path: pathlib.Path):
 def test_install_python_library_string_concat(tmp_path: pathlib.Path):
     class Greeter(tc.Library):
         publisher = "example-devco"
+        resource_name = "greeter"
         version = "0.1.0"
 
         @tc.get

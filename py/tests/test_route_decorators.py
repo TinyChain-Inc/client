@@ -6,6 +6,7 @@ import tinychain as tc
 def test_route_decorators_return_typed_refs():
     class A(tc.Library):
         publisher = "example-devco"
+        resource_name = "a"
         version = "0.1.0"
 
         @tc.get

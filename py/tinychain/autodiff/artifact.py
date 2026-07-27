@@ -394,6 +394,7 @@ def build_derivative_artifact_library(
     artifact.__name__ = "artifact"
     artifact.__qualname__ = f"{class_name}.artifact"
 
+    resource_name = public_artifact_identity(manifest).name
     try:
         library_cls = type(
             class_name,
@@ -401,6 +402,7 @@ def build_derivative_artifact_library(
             {
                 "__module__": __name__,
                 "publisher": publisher,
+                "resource_name": resource_name,
                 "version": version,
                 "dependencies": dependencies,
                 "artifact": get(artifact),
@@ -416,16 +418,21 @@ def build_derivative_artifact_library(
 def build_derivative_execution_library(
     *,
     publisher: str,
+    resource_name: str,
     class_name: str,
     version: str,
     program: object,
     route_name: str = "execute",
-    artifact_class_name: str | None = None,
+    artifact_resource_name: str | None = None,
 ) -> type[Library]:
-    """Build a normal installable Library for a compiled derivative program."""
+    """Build a normal installable Library for a compiled derivative program.
+
+    ``resource_name`` is the canonical library path component and is supplied
+    explicitly, independently from the Python ``class_name``.
+    """
     _validate_route_name(route_name)
-    if artifact_class_name is not None:
-        _validate_execution_library_identity(class_name, artifact_class_name)
+    if artifact_resource_name is not None:
+        _validate_execution_library_identity(resource_name, artifact_resource_name)
 
     compiled = compile_derivative_program(program, defer_symbolic_shape_params=True)
     _validate_execution_params(compiled.params)
@@ -441,6 +448,7 @@ def build_derivative_execution_library(
             {
                 "__module__": __name__,
                 "publisher": publisher,
+                "resource_name": resource_name,
                 "version": version,
                 "__tc_derivative_route_name__": route_name,
                 "__tc_derivative_params__": compiled.params,
@@ -452,7 +460,9 @@ def build_derivative_execution_library(
     except (SyntaxError, TypeError, ValueError) as exc:
         raise ArtifactError("invalid_manifest", str(exc)) from exc
 
-    _validate_execution_library_class(library_cls, class_name, publisher, version)
+    _validate_execution_library_class(
+        library_cls, class_name, resource_name, publisher, version
+    )
     return library_cls
 
 
@@ -518,10 +528,10 @@ def _execution_route_source(route_name: str, params: tuple[str, ...]) -> str:
 
 
 def _validate_execution_library_identity(
-    execution_class_name: str,
-    artifact_class_name: str,
+    execution_resource_name: str,
+    artifact_resource_name: str,
 ) -> None:
-    if _artifact_resource_name(execution_class_name) == _artifact_resource_name(artifact_class_name):
+    if execution_resource_name == artifact_resource_name:
         raise ArtifactError(
             "invalid_manifest",
             "derivative execution library identity must not collide with artifact library identity",
@@ -531,11 +541,14 @@ def _validate_execution_library_identity(
 def _validate_execution_library_class(
     library_cls: type[Library],
     class_name: str,
+    resource_name: str,
     publisher: str,
     version: str,
 ) -> None:
     if library_cls.__name__ != class_name:
         raise ArtifactError("invalid_manifest", "execution library class name mismatch")
+    if getattr(library_cls, "resource_name", None) != resource_name:
+        raise ArtifactError("invalid_manifest", "execution library resource_name mismatch")
     if getattr(library_cls, "publisher", None) != publisher:
         raise ArtifactError("invalid_manifest", "execution library publisher mismatch")
     if getattr(library_cls, "version", None) != version:
@@ -551,11 +564,11 @@ def _validate_artifact_library_identity(
     manifest: DerivativeArtifactManifest,
 ) -> None:
     identity = public_artifact_identity(manifest)
-    class_resource_name = _artifact_resource_name(library_cls.__name__)
-    if identity.name != class_resource_name:
+    library_resource_name = getattr(library_cls, "resource_name", None)
+    if identity.name != library_resource_name:
         raise ArtifactError(
             "invalid_manifest",
-            "artifact_name must match the derived Library class resource name",
+            "artifact manifest public identity must match Library.resource_name",
         )
     try:
         class_path = library_cls.class_id().path

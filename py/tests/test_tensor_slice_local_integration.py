@@ -14,6 +14,7 @@ TIMEOUT_SECONDS = 5
 
 class TensorSlice(tc.Library):
     publisher = "example-devco"
+    resource_name = "tensor_slice"
     version = "0.1.0"
 
     @tc.post
@@ -27,6 +28,7 @@ class TensorSlice(tc.Library):
 
 class TensorOps(tc.Library):
     publisher = "example-devco"
+    resource_name = "tensor_ops"
     version = "0.1.0"
 
     @tc.post

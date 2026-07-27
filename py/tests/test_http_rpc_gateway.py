@@ -29,6 +29,7 @@ def test_pyo3_kernel_resolves_opref_over_http_gateway(tmp_path):
 
         class Local(tc.Library):
             publisher = "example-devco"
+            resource_name = "local"
             version = "0.1.0"
             dependencies = (tc.URI.parse(f"http://{addr}{b_root}"),)
 
@@ -77,6 +78,7 @@ def test_kernel_with_library_does_not_read_auth_env(monkeypatch, tmp_path):
 
     class Local(tc.Library):
         publisher = "example-devco"
+        resource_name = "local"
         version = "0.1.0"
         dependencies = (remote_dep,)
 

@@ -57,9 +57,20 @@ staying thin and well-documented for new users.
 - Preserve `tc.String` as the value-module `String(Value)` type. String
   templating belongs on `String.render(...)` only; do not add render methods to
   generic `Value` or unrelated scalar types.
-- Derive library/service/class names from Python class names and route names from
-  method names. Do not reintroduce decorator or subclass `name` overrides; rename
-  the class/method when a different URI is needed.
+- Declare library resource identity explicitly: every concrete `Library` subclass
+  sets canonical class-level `publisher`, `resource_name`, and `version`, where
+  `resource_name` is the library name path component in
+  `/lib/{publisher}/{resource_name}/{version}`. Do not derive library identity from
+  the Python class name, and do not reintroduce a raw `name` field or decorator/
+  constructor `name` overrides as an identity source. Route names still come from
+  method names.
+- Choose `resource_name` as a well-formed TinyChain `Id` path component: use
+  lowercase ASCII letters and digits separated by single `-` or `_` characters.
+  Keep it descriptive but concise, and prefer the domain concept or capability
+  being named. Normally omit redundant resource-kind suffixes such as `library`,
+  `service`, or `class`; include one only when needed to disambiguate the
+  resource. Treat `resource_name` as stable external identity because changing
+  it changes every published URI.
 - Path-only library/service/class URIs target the active/default local PyO3 host;
   authority-qualified URIs target HTTP(S). Preserve `with tc.backend(...)` as an
   override, not as a requirement for ordinary package calls.

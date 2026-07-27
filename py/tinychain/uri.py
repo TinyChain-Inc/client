@@ -88,13 +88,27 @@ def _segment(label: str, value: str) -> str:
     return value
 
 
-def _class_resource_name(cls: type) -> str:
-    explicit = cls.__dict__.get("name")
-    if explicit is not None:
-        raise TypeError(
-            "Library name overrides are not supported; derive the resource name from the class name"
+# Canonical grammar for ``Library.resource_name``: lowercase ASCII alphanumeric
+# components joined by single ``-`` or ``_`` separators (e.g. ``ilc``,
+# ``ilc-client``, ``ordinary_client``, ``v2``, ``library2-client``).
+_RESOURCE_NAME_RE = re.compile(r"[a-z0-9]+(?:[-_][a-z0-9]+)*")
+
+
+def validate_resource_name(value: object) -> str:
+    """Validate and return a canonical ``Library.resource_name``.
+
+    ``resource_name`` is the sole source of truth for the library name path
+    component. This is the single validation path for that field.
+    """
+    if not isinstance(value, str) or not value:
+        raise ValueError("resource_name must be a non-empty string")
+    if _RESOURCE_NAME_RE.fullmatch(value) is None:
+        raise ValueError(
+            "resource_name must match [a-z0-9]+(?:[-_][a-z0-9]+)* "
+            "(lowercase alphanumerics with single '-' or '_' separators): "
+            f"{value!r}"
         )
-    return _python_name_to_resource(cls.__name__)
+    return value
 
 
 def _python_name_to_resource(name: str) -> str:

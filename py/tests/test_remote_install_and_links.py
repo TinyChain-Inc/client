@@ -8,6 +8,7 @@ import tinychain as tc
 
 class Greeter(tc.Library):
     publisher = "example-devco"
+    resource_name = "greeter"
     version = "0.1.0"
 
     @tc.get

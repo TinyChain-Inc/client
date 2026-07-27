@@ -22,10 +22,12 @@ def test_backend_healthz_routes_to_rust_handler():
 def test_kernel_handle_installs_library_via_rust_handlers(tmp_path: pathlib.Path):
     class Hello(tc.Library):
         publisher = "example-devco"
+        resource_name = "hello"
         version = "0.1.0"
 
     class Updated(tc.Library):
         publisher = "example-devco"
+        resource_name = "updated"
         version = "0.2.0"
 
         @tc.get
@@ -55,10 +57,12 @@ def test_kernel_handle_installs_library_via_rust_handlers(tmp_path: pathlib.Path
 def test_kernel_handle_rejects_unauthorized_library_install(tmp_path: pathlib.Path):
     class Hello(tc.Library):
         publisher = "example-devco"
+        resource_name = "hello"
         version = "0.1.0"
 
     class Updated(tc.Library):
         publisher = "example-devco"
+        resource_name = "updated"
         version = "0.2.0"
 
         @tc.get
