@@ -438,7 +438,7 @@ def test_library_instances_do_not_accept_dependency_overrides():
         publisher = "example-devco"
         resource_name = "a"
         version = "0.1.0"
-        dependencies = (tc.URI(path=tc.URI("lib", "example-devco", "b", "0.1.0")),)
+        dependencies = (tc.URI("lib", "example-devco", "b", "0.1.0"),)
 
     with pytest.raises(TypeError, match="dependencies"):
         A(dependencies=())
