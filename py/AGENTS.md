@@ -64,6 +64,13 @@ staying thin and well-documented for new users.
   the Python class name, and do not reintroduce a raw `name` field or decorator/
   constructor `name` overrides as an identity source. Route names still come from
   method names.
+- Choose `resource_name` as a well-formed TinyChain `Id` path component: use
+  lowercase ASCII letters and digits separated by single `-` or `_` characters.
+  Keep it descriptive but concise, and prefer the domain concept or capability
+  being named. Normally omit redundant resource-kind suffixes such as `library`,
+  `service`, or `class`; include one only when needed to disambiguate the
+  resource. Treat `resource_name` as stable external identity because changing
+  it changes every published URI.
 - Path-only library/service/class URIs target the active/default local PyO3 host;
   authority-qualified URIs target HTTP(S). Preserve `with tc.backend(...)` as an
   override, not as a requirement for ordinary package calls.
