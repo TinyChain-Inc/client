@@ -26,6 +26,7 @@ from .refs import (
     TCRef,
     While,
     _looks_like_tcref_map,
+    tcref_form_of,
 )
 
 if TYPE_CHECKING:

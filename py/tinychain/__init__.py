@@ -77,6 +77,10 @@ globals().pop("wasm", None)
 def execute(op: "OpRef | Ref") -> object:
     if hasattr(op, "op"):
         op = op.op
+    elif hasattr(op, "_form"):
+        form = getattr(op, "_form")
+        if isinstance(form, (OpRef, Ref)):
+            op = form
     if not isinstance(op, (OpRef, Ref)):
         raise TypeError(f"expected OpRef or Ref, got {type(op).__name__}")
 
