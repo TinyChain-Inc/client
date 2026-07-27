@@ -4,6 +4,7 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Iterator, Mapping, Sequence, cast
 
 from ...uri import URI, path, uri
+from ..base import State
 from .opdef import (
     DeleteOpDef,
     GetOpDef,
@@ -14,9 +15,6 @@ from .opdef import (
 from .ops import Delete, Get, Op, Post, Put
 from .refs import (
     OPREF_DELETE_TAG,
-    TCREF_COND,
-    TCREF_FOR_EACH,
-    TCREF_WHILE,
     Cond,
     DeleteOpRef,
     ForEach,
@@ -214,8 +212,8 @@ def _literal_number(form: object) -> int | float | bool | None:
     return None
 
 
-def id(name: str, *, ctx: "Context | None" = None) -> "Scalar":
-    active_ctx = _resolve_context(ctx)
+def id(name: str) -> "Scalar":
+    active_ctx = _resolve_context()
     if active_ctx is not None:
         try:
             return getattr(active_ctx, name)
@@ -243,7 +241,7 @@ def scalar_for_hint(name: str, hint: object) -> "Scalar":
 
 
 def _scalar_class_for_hint(hint: object) -> type["Scalar"]:
-    ValueBase, ValueBool, _, ValueMap, ValueNumber, ValueString, ValueTuple, _ = _value_runtime()
+    Value, ValueBool, _, ValueMap, ValueNumber, ValueString, ValueTuple, _ = _value_runtime()
 
     if isinstance(hint, type):
         try:
@@ -271,7 +269,7 @@ def _scalar_class_for_hint(hint: object) -> type["Scalar"]:
             return Map
         if issubclass(hint, ValueString):
             return String
-        if issubclass(hint, ValueBase):
+        if issubclass(hint, Value):
             return Scalar
         if issubclass(hint, Scalar):
             return hint
@@ -527,11 +525,9 @@ def cond(
 def after(
     dependency: "Scalar | Value | object",
     then: "Scalar | Value | object",
-    *,
-    ctx: "Context | None" = None,
 ) -> "Scalar":
     bound_then = autobox(then)
-    active_ctx = _resolve_context(ctx) or _context_from_values(dependency, then)
+    active_ctx = _resolve_context() or _context_from_values(dependency, then)
     if active_ctx is not None:
         # Bind an explicit dependency edge so side-effect order is encoded in the OpDef form.
         active_ctx.bind_auto(autobox(dependency), prefix="_after")
@@ -570,7 +566,7 @@ def form_of(value: "Scalar | object") -> object:
     return value
 
 
-class Scalar:
+class Scalar(State):
     """
     Minimal v2 Scalar mirror for Python-side reflection and static analysis.
 
@@ -581,137 +577,11 @@ class Scalar:
     - scalar op defs (typed `/state/scalar/op/*` maps)
     """
 
-    __slots__ = ("_form", "_ctx")
-
     def __init__(self, form: object = None, *, ref: TCRef | None = None, ctx: "Context | None" = None):
-        if form is not None and ref is not None:
-            raise TypeError("Scalar accepts either form or ref, not both")
-
-        self._form = ref if ref is not None else form
-        self._ctx = ctx
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, Scalar):
-            return False
-
-        return form_of(self) == form_of(other)
-
-    def __ne__(self, other: object) -> bool:
-        return not self.__eq__(other)
-
-    def __hash__(self) -> int:
-        # Scalar instances may appear transiently as symbolic map keys during
-        # route compilation; hash on encoded shape to keep semantics stable.
-        return hash(repr(self.to_json()))
+        super().__init__(form, ref=ref, ctx=ctx)
 
     def to_json(self) -> object:
         return _json_of(form_of(self))
-
-    @classmethod
-    def _from_opref(cls, opref: OpRef, *, ctx: "Context | None" = None) -> "Scalar":
-        try:
-            return cls(ref=TCRef(opref), ctx=ctx)
-        except TypeError:
-            # Value subclasses (e.g. Tuple, Null) carry deferred ops in their
-            # own constructor form and do not accept ref=...
-            scalar = cls(opref)
-            if isinstance(scalar, Scalar):
-                scalar._ctx = ctx
-            return scalar
-
-    @classmethod
-    def _get_ref(
-        cls,
-        subject: str,
-        key: "Scalar | Value | object" = None,
-        *,
-        ctx: "Context | None" = None,
-    ) -> "Scalar":
-        return cls._from_opref(GetOpRef(subject, key), ctx=ctx)
-
-    @classmethod
-    def _put_ref(
-        cls,
-        subject: str,
-        key: "Scalar | Value | object",
-        value: "Scalar | Value | object",
-        *,
-        ctx: "Context | None" = None,
-    ) -> "Scalar":
-        return cls._from_opref(PutOpRef(subject, key, value), ctx=ctx)
-
-    @classmethod
-    def _post_ref(
-        cls,
-        subject: str,
-        params: Mapping[str, "Scalar | Value | object"] | None = None,
-        *,
-        ctx: "Context | None" = None,
-    ) -> "Scalar":
-        return cls._from_opref(PostOpRef(subject, params or {}), ctx=ctx)
-
-    @classmethod
-    def _delete_ref(
-        cls,
-        subject: str,
-        key: "Scalar | Value | object" = None,
-        *,
-        ctx: "Context | None" = None,
-    ) -> "Scalar":
-        return cls._from_opref(DeleteOpRef(subject, key), ctx=ctx)
-
-    def _subject_ref(self, method: str | None = None, *, ctx: "Context | None" = None) -> str:
-        subject = self._subject(ctx=ctx)
-        return f"{subject}/{method}" if method else subject
-
-    def _get(
-        self,
-        method: str | None = None,
-        key: "Scalar | Value | object" = None,
-        *,
-        rtype: type["Scalar"] | None = None,
-        ctx: "Context | None" = None,
-    ) -> "Scalar":
-        cls = rtype or type(self)
-        active_ctx = ctx if ctx is not None else self._ctx
-        return cls._get_ref(self._subject_ref(method, ctx=active_ctx), key, ctx=active_ctx)
-
-    def _put(
-        self,
-        value: "Scalar | Value | object",
-        method: str | None = None,
-        key: "Scalar | Value | object" = None,
-        *,
-        rtype: type["Scalar"] | None = None,
-        ctx: "Context | None" = None,
-    ) -> "Scalar":
-        cls = rtype or type(self)
-        active_ctx = ctx if ctx is not None else self._ctx
-        return cls._put_ref(self._subject_ref(method, ctx=active_ctx), key, value, ctx=active_ctx)
-
-    def _post(
-        self,
-        method: str | None = None,
-        params: Mapping[str, "Scalar | Value | object"] | None = None,
-        *,
-        rtype: type["Scalar"] | None = None,
-        ctx: "Context | None" = None,
-    ) -> "Scalar":
-        cls = rtype or type(self)
-        active_ctx = ctx if ctx is not None else self._ctx
-        return cls._post_ref(self._subject_ref(method, ctx=active_ctx), params, ctx=active_ctx)
-
-    def _delete(
-        self,
-        method: str | None = None,
-        key: "Scalar | Value | object" = None,
-        *,
-        rtype: type["Scalar"] | None = None,
-        ctx: "Context | None" = None,
-    ) -> "Scalar":
-        cls = rtype or type(self)
-        active_ctx = ctx if ctx is not None else self._ctx
-        return cls._delete_ref(self._subject_ref(method, ctx=active_ctx), key, ctx=active_ctx)
 
     def class_(self) -> "Scalar":
         return Scalar._post_ref(SCALAR_REFLECT_CLASS, {"scalar": self}, ctx=self._ctx)
@@ -727,80 +597,6 @@ class Scalar:
 
     def reflect_scalars(self) -> "Tuple":
         return Tuple._post_ref(OPDEF_REFLECT_SCALARS, {"op": self}, ctx=self._ctx)
-
-    def _subject(self, *, ctx: "Context | None" = None) -> str:
-        form = form_of(self)
-        active_ctx = ctx if ctx is not None else self._ctx
-
-        def _stage_subject() -> str | None:
-            if active_ctx is None:
-                return None
-
-            bound = active_ctx.bind_auto(self)
-            bound_form = form_of(bound)
-            if isinstance(bound_form, TCRef):
-                bound_ref_form = form_of(bound_form)
-                if isinstance(bound_ref_form, IdRef):
-                    return bound_ref_form.key()
-
-            return None
-
-        def _subject_from_op(candidate: object) -> str | None:
-            if isinstance(candidate, OpRef):
-                subject = coerce_op_subject(candidate.subject)
-            else:
-                runtime_candidate = OpRef.from_runtime(candidate)
-                if runtime_candidate is None:
-                    return None
-                subject = coerce_op_subject(runtime_candidate.subject)
-
-            staged = _stage_subject()
-            return staged if staged is not None else subject
-
-        if isinstance(form, OpRef):
-            subject = _subject_from_op(form)
-            if subject is not None:
-                return subject
-
-        subject = _subject_from_op(form)
-        if subject is not None:
-            return subject
-
-        if isinstance(form, Mapping) and len(form) == 1:
-            (key, _value), = form.items()
-            if isinstance(key, str) and key.startswith("$"):
-                return key
-
-        if isinstance(form, Sequence) and not isinstance(form, (str, bytes, bytearray)):
-            staged = _stage_subject()
-            if staged is not None:
-                return staged
-
-        if isinstance(form, TCRef):
-            ref_form = form_of(form)
-            if isinstance(ref_form, IdRef):
-                return ref_form.key()
-
-            subject = _subject_from_op(ref_form)
-            if subject is not None:
-                return subject
-
-            if isinstance(ref_form, Cond):
-                return TCREF_COND
-            if isinstance(ref_form, While):
-                return TCREF_WHILE
-            if isinstance(ref_form, ForEach):
-                return TCREF_FOR_EACH
-
-        staged = _stage_subject()
-        if staged is not None:
-            return staged
-
-        inner = form_of(form) if isinstance(form, TCRef) else None
-        raise TypeError(
-            "expected a Scalar id/op ref for an op subject, got "
-            f"{type(form).__name__}: {form!r}; inner={type(inner).__name__ if inner is not None else None}: {inner!r}"
-        )
 
     @staticmethod
     def from_json(obj: Any) -> "Scalar":
@@ -1364,7 +1160,7 @@ def _infer_reduce_item_name(
     referenced_ids: set[str] = set()
     subject_ids: set[str] = set()
     for _, scalar in resolved_op.form:
-        _collect_ref_ids_from_json(scalar.to_json(), referenced_ids, subject_ids)
+        _collect_ref_ids_from_form(form_of(scalar), referenced_ids, subject_ids)
 
     subject_candidates = sorted(
         name for name in subject_ids if name not in defined_ids and name not in state_keys
@@ -1427,22 +1223,57 @@ def _resolve_reduce_opdef(op: "OpDef | Scalar | object", *, ctx: "Context | None
     return None
 
 
-def _collect_ref_ids_from_json(node: object, out: set[str], subject_ids: set[str]) -> None:
-    if isinstance(node, list):
-        for item in node:
-            _collect_ref_ids_from_json(item, out, subject_ids)
+def _record_subject_token(subject: str, out: set[str], subject_ids: set[str]) -> None:
+    if not subject.startswith("$"):
         return
 
-    if isinstance(node, dict):
+    head, sep, _tail = subject[1:].partition("/")
+    if not head:
+        return
+
+    out.add(head)
+    if sep:
+        subject_ids.add(head)
+
+
+def _collect_ref_ids_from_form(node: object, out: set[str], subject_ids: set[str]) -> None:
+    if isinstance(node, Scalar):
+        _collect_ref_ids_from_form(form_of(node), out, subject_ids)
+        return
+
+    if isinstance(node, TCRef):
+        _collect_ref_ids_from_form(form_of(node), out, subject_ids)
+        return
+
+    if isinstance(node, IdRef):
+        out.add(node.name)
+        return
+
+    if isinstance(node, OpRef):
+        _record_subject_token(coerce_op_subject(node.subject), out, subject_ids)
+        _collect_ref_ids_from_form(node.args, out, subject_ids)
+        return
+
+    runtime_op = OpRef.from_runtime(node)
+    if runtime_op is not None:
+        _collect_ref_ids_from_form(runtime_op, out, subject_ids)
+        return
+
+    if isinstance(node, OpDef):
+        for _name, scalar in node.form:
+            _collect_ref_ids_from_form(form_of(scalar), out, subject_ids)
+        return
+
+    if isinstance(node, Mapping):
         for key, value in node.items():
-            if isinstance(key, str) and key.startswith("$"):
-                head, sep, _tail = key[1:].partition("/")
-                token = head
-                if token:
-                    out.add(token)
-                    if sep:
-                        subject_ids.add(token)
-            _collect_ref_ids_from_json(value, out, subject_ids)
+            if isinstance(key, str):
+                _record_subject_token(key, out, subject_ids)
+            _collect_ref_ids_from_form(value, out, subject_ids)
+        return
+
+    if isinstance(node, Sequence) and not isinstance(node, (str, bytes, bytearray)):
+        for item in node:
+            _collect_ref_ids_from_form(item, out, subject_ids)
 
 
 def _encode_form(form: Sequence[tuple[str, Scalar]]) -> list[list[object]]:

@@ -63,13 +63,12 @@ class BTree(Collection):
         ref: TCRef | None = None,
         rows: object = None,
         native: object = None,
-        ctx: "Context | None" = None,
     ):
         if native is not None and (form is not None or ref is not None):
             raise TypeError("BTree accepts either native or symbolic form/ref")
 
         if native is not None:
-            super().__init__(None, ctx=ctx)
+            super().__init__(None)
             self._native = native
             return
 
@@ -77,16 +76,16 @@ class BTree(Collection):
             schema = _normalize_schema(form)
             normalized_rows = _normalize_rows(rows or [])
 
-            if _is_imperative_mode(ctx=ctx):
-                super().__init__(None, ctx=ctx)
+            if _is_imperative_mode():
+                super().__init__(None)
                 self._native = _require_local_btree(schema, normalized_rows)
                 return
 
-            super().__init__({BTREE_PATH: [schema, normalized_rows]}, ctx=ctx)
+            super().__init__({BTREE_PATH: [schema, normalized_rows]})
             self._native = None
             return
 
-        super().__init__(form, ref=ref, ctx=ctx)
+        super().__init__(form, ref=ref)
         self._native = None
 
     @classmethod
@@ -137,12 +136,12 @@ class BTree(Collection):
 
         return Scalar(form).to_json()
 
-    def contains(self, row: object, *, ctx: "Context | None" = None) -> Bool:
+    def contains(self, row: object) -> Bool:
         if self._native is not None:
             return self._native.contains(_native_row(row, _native_key_arity(self.to_json())))
-        return self._get("contains", autobox(row), rtype=Bool, ctx=ctx)
+        return self._get("contains", autobox(row), rtype=Bool)
 
-    def count(self, key: object = None, *, ctx: "Context | None" = None) -> Number:
+    def count(self, key: object = None) -> Number:
         if self._native is not None:
             rows = _native_rows(self.to_json())
             if key is None:
@@ -150,24 +149,24 @@ class BTree(Collection):
 
             start, end, _ = _slice_bounds(key)
             return len(_slice_rows(rows, start, end, reverse=False))
-        return self._get("count", autobox(key), rtype=Number, ctx=ctx)
+        return self._get("count", autobox(key), rtype=Number)
 
-    def is_empty(self, key: object = None, *, ctx: "Context | None" = None) -> Bool:
+    def is_empty(self, key: object = None) -> Bool:
         if self._native is not None:
             return self.count(key) == 0
-        return self._get("is_empty", autobox(key), rtype=Bool, ctx=ctx)
+        return self._get("is_empty", autobox(key), rtype=Bool)
 
-    def insert(self, row: object, *, ctx: "Context | None" = None) -> Tuple:
+    def insert(self, row: object) -> Tuple:
         if self._native is not None:
             self._native.insert(_native_row(row, _native_key_arity(self.to_json())))
             return None
-        return self._post("insert", {"row": autobox(row)}, rtype=Tuple, ctx=ctx)
+        return self._post("insert", {"row": autobox(row)}, rtype=Tuple)
 
-    def delete(self, row: object, *, ctx: "Context | None" = None) -> Null:
+    def delete(self, row: object) -> Null:
         if self._native is not None:
             self._native.delete(_native_row(row, _native_key_arity(self.to_json())))
             return None
-        return self._delete(key=autobox(row), rtype=Null, ctx=ctx)
+        return self._delete(key=autobox(row), rtype=Null)
 
     def slice(
         self,
@@ -175,7 +174,6 @@ class BTree(Collection):
         end: object = None,
         *,
         reverse: bool = False,
-        ctx: "Context | None" = None,
     ) -> "BTree":
         if self._native is not None:
             payload = self.to_json()
@@ -189,7 +187,7 @@ class BTree(Collection):
             "end": autobox(end),
             "reverse": autobox(reverse),
         }
-        return self._get("slice", key, rtype=BTree, ctx=ctx)
+        return self._get("slice", key, rtype=BTree)
 
 
 def _looks_like_schema(form: object) -> bool:
@@ -199,12 +197,17 @@ def _looks_like_schema(form: object) -> bool:
     return all(isinstance(column, (list, tuple)) for column in form)
 
 
-def _is_imperative_mode(*, ctx: "Context | None" = None) -> bool:
-    if ctx is not None:
-        return False
-
+def _is_imperative_mode() -> bool:
     executor = try_current()
     if executor is not None and not executor.is_eager():
+        return False
+
+    try:
+        from ..context import current_context
+    except ImportError:
+        current_context = None
+
+    if current_context is not None and current_context() is not None:
         return False
 
     return True

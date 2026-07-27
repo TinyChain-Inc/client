@@ -19,6 +19,16 @@ def _sorted_items(obj: Mapping[str, Any]) -> list[tuple[str, Any]]:
     return sorted(obj.items(), key=lambda kv: kv[0])
 
 
+def _freeze_shape(value: object) -> object:
+    if value is None or isinstance(value, (bool, int, float, complex, str, bytes)):
+        return value
+    if isinstance(value, Mapping):
+        return tuple((key, _freeze_shape(val)) for key, val in _sorted_items(value))
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return tuple(_freeze_shape(item) for item in value)
+    return value
+
+
 def _looks_like_tcref_map(obj: Mapping[str, object]) -> bool:
     if len(obj) != 1:
         return False
@@ -92,11 +102,14 @@ class OpRef:
     def args(self) -> object:
         raise NotImplementedError()
 
+    def _cmp_key(self) -> object:
+        raise NotImplementedError()
+
     def __eq__(self, other: object) -> bool:
-        return isinstance(other, OpRef) and self.to_json() == other.to_json()
+        return type(self) is type(other) and self._cmp_key() == other._cmp_key()
 
     def __hash__(self) -> int:
-        return hash(repr(self.to_json()))
+        return hash((type(self), _freeze_shape(self._cmp_key())))
 
     def to_json(self) -> dict[str, object]:
         raise NotImplementedError()
@@ -183,6 +196,11 @@ class GetOpRef(OpRef):
     def args(self) -> object:
         return [self._key.to_json()]
 
+    def _cmp_key(self) -> object:
+        from . import form_of
+
+        return self._subject, form_of(self._key)
+
     def to_json(self) -> dict[str, object]:
         return {self.subject: self.args}
 
@@ -206,6 +224,11 @@ class PutOpRef(OpRef):
     @property
     def args(self) -> object:
         return [self._key.to_json(), self._value.to_json()]
+
+    def _cmp_key(self) -> object:
+        from . import form_of
+
+        return self._subject, form_of(self._key), form_of(self._value)
 
     def to_json(self) -> dict[str, object]:
         return {self.subject: self.args}
@@ -234,6 +257,11 @@ class PostOpRef(OpRef):
     def args(self) -> object:
         return {key: value.to_json() for key, value in _sorted_items(self._params)}
 
+    def _cmp_key(self) -> object:
+        from . import form_of
+
+        return self._subject, tuple((key, form_of(value)) for key, value in _sorted_items(self._params))
+
     def to_json(self) -> dict[str, object]:
         return {self.subject: self.args}
 
@@ -256,6 +284,11 @@ class DeleteOpRef(OpRef):
     @property
     def args(self) -> object:
         return self._key.to_json()
+
+    def _cmp_key(self) -> object:
+        from . import form_of
+
+        return self._subject, form_of(self._key)
 
     def to_json(self) -> dict[str, object]:
         return {OPREF_DELETE_TAG: [self.subject, self.args]}
@@ -382,7 +415,7 @@ class TCRef:
         return isinstance(other, TCRef) and self._form == other._form
 
     def __hash__(self) -> int:
-        return hash(repr(self.to_json()))
+        return hash((type(self._form), self._form))
 
     def to_json(self) -> dict[str, object]:
         from . import _json_of, form_of

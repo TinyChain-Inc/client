@@ -19,11 +19,14 @@ class OpDef:
     def form(self) -> list[tuple[str, "Scalar"]]:
         raise NotImplementedError()
 
+    def _cmp_key(self) -> object:
+        raise NotImplementedError()
+
     def __eq__(self, other: object) -> bool:
-        return isinstance(other, OpDef) and self.to_json() == other.to_json()
+        return type(self) is type(other) and self._cmp_key() == other._cmp_key()
 
     def __hash__(self) -> int:
-        return hash(repr(self.to_json()))
+        return hash((type(self), self._cmp_key()))
 
     def last_id(self) -> str | None:
         if not self.form:
@@ -121,6 +124,11 @@ class GetOpDef(OpDef):
     def form(self) -> list[tuple[str, "Scalar"]]:
         return self._form
 
+    def _cmp_key(self) -> object:
+        from . import form_of
+
+        return self.key, tuple((name, form_of(scalar)) for name, scalar in self._form)
+
     def to_json(self) -> dict[str, object]:
         from . import OPDEF_GET, _encode_form
 
@@ -146,6 +154,11 @@ class PutOpDef(OpDef):
     def form(self) -> list[tuple[str, "Scalar"]]:
         return self._form
 
+    def _cmp_key(self) -> object:
+        from . import form_of
+
+        return self.key, self.value, tuple((name, form_of(scalar)) for name, scalar in self._form)
+
     def to_json(self) -> dict[str, object]:
         from . import OPDEF_PUT, _encode_form
 
@@ -165,6 +178,11 @@ class PostOpDef(OpDef):
     @property
     def form(self) -> list[tuple[str, "Scalar"]]:
         return self._form
+
+    def _cmp_key(self) -> object:
+        from . import form_of
+
+        return tuple((name, form_of(scalar)) for name, scalar in self._form)
 
     def to_json(self) -> dict[str, object]:
         from . import OPDEF_POST, _encode_form
@@ -189,6 +207,11 @@ class DeleteOpDef(OpDef):
     @property
     def form(self) -> list[tuple[str, "Scalar"]]:
         return self._form
+
+    def _cmp_key(self) -> object:
+        from . import form_of
+
+        return self.key, tuple((name, form_of(scalar)) for name, scalar in self._form)
 
     def to_json(self) -> dict[str, object]:
         from . import OPDEF_DELETE, _encode_form

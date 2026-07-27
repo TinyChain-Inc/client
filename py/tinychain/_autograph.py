@@ -742,9 +742,7 @@ def _id_call(name: str) -> ast.Call:
             ctx=ast.Load(),
         ),
         args=[ast.Constant(value=name)],
-        keywords=[
-            ast.keyword(arg="ctx", value=ast.Name(id="_tc_cxt", ctx=ast.Load())),
-        ],
+        keywords=[],
     )
 
 

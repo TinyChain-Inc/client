@@ -93,6 +93,10 @@ staying thin and well-documented for new users.
   field probing on symbolic wrappers.
 - Keep `form_of(...)` as the single canonical unwrapping helper for symbolic
   forms. Do not introduce type-specific `*_form_of` helpers for wrappers.
+- Keep wire serialization (`to_json`/`from_json`) at transport/persistence
+  boundaries only. Do not use JSON encoding/decoding as the semantic engine for
+  internal equality, hashing, subject/ref construction, or control-flow
+  decisions; operate on canonical in-memory forms instead.
 - In client/runtime wrapper logic, avoid direct `...__uri__` field dereference
   for path strings. Prefer shared `tc.path(...)` / `tc.uri(...)` helpers.
 - Keep `tc.state.Value` as a minimal base with explicit concrete subclasses
