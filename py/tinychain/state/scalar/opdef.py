@@ -39,23 +39,25 @@ class OpDef:
         for _, scalar in self.form:
             yield from _iter_scalar_nodes(scalar)
 
-    def reflect_form(self) -> "Scalar":
-        from . import OPDEF_REFLECT_FORM, PostOpRef, Scalar, TCRef
+    def _reflect(self, subject: str) -> "Scalar":
+        from . import PostOpRef, Scalar
 
-        opref = PostOpRef(OPDEF_REFLECT_FORM, {"op": self})
-        return Scalar(ref=TCRef(opref))
+        return Scalar(ref=PostOpRef(subject, {"op": self}))
+
+    def reflect_form(self) -> "Scalar":
+        from . import OPDEF_REFLECT_FORM
+
+        return self._reflect(OPDEF_REFLECT_FORM)
 
     def reflect_last_id(self) -> "Scalar":
-        from . import OPDEF_REFLECT_LAST_ID, PostOpRef, Scalar, TCRef
+        from . import OPDEF_REFLECT_LAST_ID
 
-        opref = PostOpRef(OPDEF_REFLECT_LAST_ID, {"op": self})
-        return Scalar(ref=TCRef(opref))
+        return self._reflect(OPDEF_REFLECT_LAST_ID)
 
     def reflect_scalars(self) -> "Scalar":
-        from . import OPDEF_REFLECT_SCALARS, PostOpRef, Scalar, TCRef
+        from . import OPDEF_REFLECT_SCALARS
 
-        opref = PostOpRef(OPDEF_REFLECT_SCALARS, {"op": self})
-        return Scalar(ref=TCRef(opref))
+        return self._reflect(OPDEF_REFLECT_SCALARS)
 
     def class_(self) -> "Scalar":
         from . import Scalar

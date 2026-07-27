@@ -25,7 +25,6 @@ from .refs import (
     PutOpRef,
     TCRef,
     While,
-    coerce_subject as coerce_op_subject,
     _looks_like_tcref_map,
 )
 
@@ -68,16 +67,19 @@ def _json_of(form: object) -> object:
     if runtime_op is not None:
         return runtime_op.to_json()
 
+    if isinstance(form, (OpRef, OpDef, Cond, While, ForEach)):
+        return form.to_json()
     if isinstance(form, Value):
         return form.to_json()
     if isinstance(form, Scalar):
         return _json_of(form_of(form))
     if isinstance(form, TCRef):
-        return _json_of(form_of(form))
+        ref_form = form_of(form)
+        if ref_form is form:
+            return form.to_json()
+        return _json_of(ref_form)
     if isinstance(form, IdRef):
         return {form.key(): []}
-    if isinstance(form, (OpRef, OpDef, Cond, While, ForEach)):
-        return form.to_json()
     if isinstance(form, Mapping):
         return {k: _json_of(v) for k, v in _sorted_items(form)}
     if isinstance(form, Sequence) and not isinstance(form, (str, bytes, bytearray)):
@@ -99,10 +101,10 @@ def autobox(
         value_ctx = getattr(obj, "_ctx", None)
         op = getattr(obj, "op", None)
         if isinstance(op, OpRef):
-            return _scalar_like(obj, ref=TCRef(op), ctx=value_ctx)
+            return _scalar_like(obj, ref=op, ctx=value_ctx)
         runtime_op = OpRef.from_runtime(op)
         if runtime_op is not None:
-            return _scalar_like(obj, ref=TCRef(runtime_op), ctx=value_ctx)
+            return _scalar_like(obj, ref=runtime_op, ctx=value_ctx)
         if isinstance(op, RuntimeOpRef):
             raise TypeError(f"unsupported runtime OpRef type {type(op).__name__}")
         return _scalar_like(obj, value=obj, ctx=value_ctx)
@@ -451,8 +453,8 @@ def _typed_from_cond(cond_ref: Cond) -> Scalar:
 def _typed_from_op_ref(op_ref: OpRef) -> Scalar:
     subject = op_ref.subject
     if not isinstance(subject, str):
-        return Symbol(ref=TCRef(op_ref))
-    ref = TCRef(op_ref)
+        return Symbol(ref=op_ref)
+    ref = op_ref
 
     exact_dispatch: dict[str, type[Scalar]] = {
         SCALAR_REFLECT_REF_PARTS: Tuple,
@@ -464,7 +466,7 @@ def _typed_from_op_ref(op_ref: OpRef) -> Scalar:
     if wrapper is not None:
         return wrapper(ref=ref)
 
-    return Symbol(ref=TCRef(op_ref))
+    return Symbol(ref=op_ref)
 
 
 def _typed_from_tcref(ref: TCRef) -> Scalar:
@@ -583,20 +585,23 @@ class Scalar(State):
     def to_json(self) -> object:
         return _json_of(form_of(self))
 
+    def _reflect(self, subject: str, payload_key: str, payload_value: object, *, rtype: type["Scalar"]) -> "Scalar":
+        return rtype._post_ref(subject, {payload_key: payload_value}, ctx=self._ctx)
+
     def class_(self) -> "Scalar":
-        return Scalar._post_ref(SCALAR_REFLECT_CLASS, {"scalar": self}, ctx=self._ctx)
+        return self._reflect(SCALAR_REFLECT_CLASS, "scalar", self, rtype=Scalar)
 
     def ref_parts(self) -> "Tuple":
-        return Tuple._post_ref(SCALAR_REFLECT_REF_PARTS, {"scalar": self}, ctx=self._ctx)
+        return cast(Tuple, self._reflect(SCALAR_REFLECT_REF_PARTS, "scalar", self, rtype=Tuple))
 
     def reflect_form(self) -> "Tuple":
-        return Tuple._post_ref(OPDEF_REFLECT_FORM, {"op": self}, ctx=self._ctx)
+        return cast(Tuple, self._reflect(OPDEF_REFLECT_FORM, "op", self, rtype=Tuple))
 
     def reflect_last_id(self) -> "String":
-        return String._post_ref(OPDEF_REFLECT_LAST_ID, {"op": self}, ctx=self._ctx)
+        return cast(String, self._reflect(OPDEF_REFLECT_LAST_ID, "op", self, rtype=String))
 
     def reflect_scalars(self) -> "Tuple":
-        return Tuple._post_ref(OPDEF_REFLECT_SCALARS, {"op": self}, ctx=self._ctx)
+        return cast(Tuple, self._reflect(OPDEF_REFLECT_SCALARS, "op", self, rtype=Tuple))
 
     @staticmethod
     def from_json(obj: Any) -> "Scalar":
@@ -636,24 +641,75 @@ class Scalar(State):
         raise TypeError(f"cannot decode Scalar from {type(obj).__name__}")
 
 
+def _post_ref_call(
+    owner: Scalar,
+    method: str,
+    params: Mapping[str, object],
+    *,
+    rtype: type[Scalar],
+    ctx: "Context | None" = None,
+) -> Scalar:
+    subject = _subject_method(owner, method, ctx=ctx)
+    active_ctx = owner._ctx if ctx is None else ctx
+    return rtype(ref=PostOpRef(subject, params), ctx=active_ctx)
+
+
+def _post_binary_call(owner: Scalar, method: str, other: "Scalar | Value | object", *, rtype: type[Scalar]) -> Scalar:
+    return _post_ref_call(owner, method, {"r": autobox(other)}, rtype=rtype)
+
+
+def _post_unary_call(owner: Scalar, method: str, *, rtype: type[Scalar]) -> Scalar:
+    return _post_ref_call(owner, method, {}, rtype=rtype)
+
+
+def _subject_method(owner: Scalar, method: str, *, ctx: "Context | None" = None) -> str:
+    return f"{owner._subject(ctx=ctx)}/{method}"
+
+
+def _is_concat_operand(left: object, raw: object) -> bool:
+    return isinstance(left, (Tuple, Map, String)) or isinstance(raw, (list, tuple, dict, str))
+
+
+def _reverse_post_call(
+    owner: Scalar,
+    other: object,
+    *,
+    method: str,
+    rtype: type[Scalar],
+    chain_type: type[Scalar] | None = None,
+) -> Scalar:
+    left = autobox(other)
+    if chain_type is not None and isinstance(left, chain_type):
+        return getattr(left, method)(owner)
+    return rtype(ref=PostOpRef(f"{left._subject()}/{method}", {"r": owner}), ctx=getattr(left, "_ctx", None))
+
+
+def _seq_form_or_none(obj: object) -> Sequence | None:
+    return obj if isinstance(obj, Sequence) and not isinstance(obj, (str, bytes, bytearray)) else None
+
+
+def _map_form_or_none(obj: object) -> Mapping | None:
+    return obj if isinstance(obj, Mapping) else None
+
+
 class Comparable(Scalar):
     def eq(self, other: "Scalar | Value | object") -> "Bool":
-        return Bool(ref=TCRef(PostOpRef(f"{self._subject()}/eq", {"r": autobox(other)})), ctx=self._ctx)
+        return cast(Bool, _post_binary_call(self, "eq", other, rtype=Bool))
 
     def ne(self, other: "Scalar | Value | object") -> "Bool":
-        return Bool(ref=TCRef(PostOpRef(f"{self._subject()}/ne", {"r": autobox(other)})), ctx=self._ctx)
+        return cast(Bool, _post_binary_call(self, "ne", other, rtype=Bool))
 
     def gt(self, other: "Scalar | Value | object") -> "Bool":
-        return Bool(ref=TCRef(PostOpRef(f"{self._subject()}/gt", {"r": autobox(other)})), ctx=self._ctx)
+        return cast(Bool, _post_binary_call(self, "gt", other, rtype=Bool))
 
     def ge(self, other: "Scalar | Value | object") -> "Bool":
-        return Bool(ref=TCRef(PostOpRef(f"{self._subject()}/ge", {"r": autobox(other)})), ctx=self._ctx)
+        return cast(Bool, _post_binary_call(self, "ge", other, rtype=Bool))
 
     def lt(self, other: "Scalar | Value | object") -> "Bool":
-        return Bool(ref=TCRef(PostOpRef(f"{self._subject()}/lt", {"r": autobox(other)})), ctx=self._ctx)
+        return cast(Bool, _post_binary_call(self, "lt", other, rtype=Bool))
 
     def le(self, other: "Scalar | Value | object") -> "Bool":
-        return Bool(ref=TCRef(PostOpRef(f"{self._subject()}/le", {"r": autobox(other)})), ctx=self._ctx)
+        return cast(Bool, _post_binary_call(self, "le", other, rtype=Bool))
 
     def __gt__(self, other: object) -> "Bool":
         return self.gt(other)
@@ -686,26 +742,23 @@ class Comparable(Scalar):
 
 class Numeric(Comparable):
     def add(self, other: "Scalar | Value | object") -> "Numeric":
-        return Numeric(ref=TCRef(PostOpRef(f"{self._subject()}/add", {"r": autobox(other)})), ctx=self._ctx)
+        return Numeric(ref=PostOpRef(f"{self._subject()}/add", {"r": autobox(other)}), ctx=self._ctx)
 
     def __add__(self, other: object) -> "Numeric":
         return self.add(other)
 
     def __radd__(self, other: object) -> "Numeric":
-        left = autobox(other)
-        if isinstance(left, Numeric):
-            return left.add(self)
-        return Numeric(ref=TCRef(PostOpRef(f"{left._subject()}/add", {"r": self})), ctx=getattr(left, "_ctx", None))
+        return cast(Numeric, _reverse_post_call(self, other, method="add", rtype=Numeric, chain_type=Numeric))
 
 
 class Iterable(Comparable):
     def len(self) -> "Number":
         subject = f"{self._subject()}/len"
-        return Number(ref=TCRef(PostOpRef(subject, {})), ctx=self._ctx)
+        return Number(ref=PostOpRef(subject, {}), ctx=self._ctx)
 
     def get(self, index: "Scalar | Value | object") -> "Scalar":
         subject = f"{self._subject()}/get"
-        return Symbol(ref=TCRef(PostOpRef(subject, {"i": autobox(index)})), ctx=self._ctx)
+        return Symbol(ref=PostOpRef(subject, {"i": autobox(index)}), ctx=self._ctx)
 
     def __getitem__(self, index: "Scalar | Value | object") -> "Scalar":
         if isinstance(index, slice):
@@ -714,200 +767,126 @@ class Iterable(Comparable):
             start = 0 if index.start is None else index.start
             stop = self.len() if index.stop is None else index.stop
             subject = f"{self._subject()}/slice"
-            return Iterable(ref=TCRef(PostOpRef(subject, {"start": autobox(start), "stop": autobox(stop)})), ctx=self._ctx)
+            return Iterable(ref=PostOpRef(subject, {"start": autobox(start), "stop": autobox(stop)}), ctx=self._ctx)
         return self.get(index)
 
     def concat(self, other: "Scalar | Value | object") -> "Iterable":
-        return Iterable(ref=TCRef(PostOpRef(f"{self._subject()}/concat", {"r": autobox(other)})), ctx=self._ctx)
+        return Iterable(ref=PostOpRef(f"{self._subject()}/concat", {"r": autobox(other)}), ctx=self._ctx)
 
     def __add__(self, other: object) -> "Iterable":
         right = autobox(other)
-        if isinstance(right, (Tuple, Map, String)) or isinstance(other, (list, tuple, dict, str)):
+        if _is_concat_operand(right, other):
             return self.concat(right)
-        return Iterable(ref=TCRef(PostOpRef(f"{self._subject()}/add", {"r": right})), ctx=self._ctx)
+        return Iterable(ref=PostOpRef(f"{self._subject()}/add", {"r": right}), ctx=self._ctx)
 
     def __radd__(self, other: object) -> "Iterable":
         left = autobox(other)
         method = "add"
-        if isinstance(left, (Tuple, Map, String)) or isinstance(other, (list, tuple, dict, str)):
+        if _is_concat_operand(left, other):
             method = "concat"
-        return Iterable(ref=TCRef(PostOpRef(f"{left._subject()}/{method}", {"r": self})), ctx=getattr(left, "_ctx", None))
+        return cast(Iterable, _reverse_post_call(self, other, method=method, rtype=Iterable))
 
 
 class Symbol(Numeric, Iterable):
     def _string_render(self, params: Mapping[str, object]) -> "String":
-        return String(ref=TCRef(PostOpRef(f"{self._subject()}/render", params)), ctx=self._ctx)
+        return String(ref=PostOpRef(f"{self._subject()}/render", params), ctx=self._ctx)
 
     def __add__(self, other: object) -> "Symbol":
         right = autobox(other)
-        if isinstance(right, (Tuple, Map, String)) or isinstance(other, (list, tuple, dict, str)):
-            return Symbol(ref=TCRef(PostOpRef(f"{self._subject()}/concat", {"r": right})), ctx=self._ctx)
-        return Symbol(ref=TCRef(PostOpRef(f"{self._subject()}/add", {"r": right})), ctx=self._ctx)
+        if _is_concat_operand(right, other):
+            return Symbol(ref=PostOpRef(f"{self._subject()}/concat", {"r": right}), ctx=self._ctx)
+        return Symbol(ref=PostOpRef(f"{self._subject()}/add", {"r": right}), ctx=self._ctx)
 
     def __radd__(self, other: object) -> "Symbol":
         left = autobox(other)
         method = "add"
-        if isinstance(left, (Tuple, Map, String)) or isinstance(other, (list, tuple, dict, str)):
+        if _is_concat_operand(left, other):
             method = "concat"
-        return Symbol(ref=TCRef(PostOpRef(f"{left._subject()}/{method}", {"r": self})), ctx=getattr(left, "_ctx", None))
+        return cast(Symbol, _reverse_post_call(self, other, method=method, rtype=Symbol))
 
 
 class Number(Numeric):
-    def eq(self, other: "Scalar | Value | object") -> "Bool":
+    def _compare(self, method: str, other: "Scalar | Value | object", *, reverse_method: str, literal_cmp) -> "Bool":
         right = autobox(other)
         left_form = form_of(self)
         right_form = form_of(right)
         left_literal = _literal_number(left_form)
         right_literal = _literal_number(right_form)
         if left_literal is not None and right_literal is not None:
-            return Bool(left_literal == right_literal)
+            return Bool(literal_cmp(left_literal, right_literal))
         if left_literal is not None and isinstance(right, Comparable):
-            return right.eq(left_literal)
-        return Bool(ref=TCRef(PostOpRef(f"{self._subject()}/eq", {"r": right})), ctx=self._ctx)
+            return getattr(right, reverse_method)(left_literal)
+        return Bool(ref=PostOpRef(f"{self._subject()}/{method}", {"r": right}), ctx=self._ctx)
+
+    def _arithmetic(self, method: str, other: "Scalar | Value | object", *, literal_op) -> "Number":
+        right = autobox(other)
+        left_form = form_of(self)
+        right_form = form_of(right)
+        left_literal = _literal_number(left_form)
+        right_literal = _literal_number(right_form)
+        if left_literal is not None and right_literal is not None:
+            return Number(literal_op(left_literal, right_literal))
+        return Number(ref=PostOpRef(f"{self._subject()}/{method}", {"r": right}), ctx=self._ctx)
+
+    def _reverse_arithmetic(self, method: str, other: object) -> "Number":
+        left = autobox(other)
+        if isinstance(left, Number):
+            return getattr(left, method)(self)
+        return Number(ref=PostOpRef(f"{left._subject()}/{method}", {"r": self}), ctx=getattr(left, "_ctx", None))
+
+    def eq(self, other: "Scalar | Value | object") -> "Bool":
+        return self._compare("eq", other, reverse_method="eq", literal_cmp=lambda l, r: l == r)
 
     def ne(self, other: "Scalar | Value | object") -> "Bool":
-        right = autobox(other)
-        left_form = form_of(self)
-        right_form = form_of(right)
-        left_literal = _literal_number(left_form)
-        right_literal = _literal_number(right_form)
-        if left_literal is not None and right_literal is not None:
-            return Bool(left_literal != right_literal)
-        if left_literal is not None and isinstance(right, Comparable):
-            return right.ne(left_literal)
-        return Bool(ref=TCRef(PostOpRef(f"{self._subject()}/ne", {"r": right})), ctx=self._ctx)
+        return self._compare("ne", other, reverse_method="ne", literal_cmp=lambda l, r: l != r)
 
     def gt(self, other: "Scalar | Value | object") -> "Bool":
-        right = autobox(other)
-        left_form = form_of(self)
-        right_form = form_of(right)
-        left_literal = _literal_number(left_form)
-        right_literal = _literal_number(right_form)
-        if left_literal is not None and right_literal is not None:
-            return Bool(left_literal > right_literal)
-        if left_literal is not None and isinstance(right, Comparable):
-            return right.lt(left_literal)
-        return Bool(ref=TCRef(PostOpRef(f"{self._subject()}/gt", {"r": right})), ctx=self._ctx)
+        return self._compare("gt", other, reverse_method="lt", literal_cmp=lambda l, r: l > r)
 
     def ge(self, other: "Scalar | Value | object") -> "Bool":
-        right = autobox(other)
-        left_form = form_of(self)
-        right_form = form_of(right)
-        left_literal = _literal_number(left_form)
-        right_literal = _literal_number(right_form)
-        if left_literal is not None and right_literal is not None:
-            return Bool(left_literal >= right_literal)
-        if left_literal is not None and isinstance(right, Comparable):
-            return right.le(left_literal)
-        return Bool(ref=TCRef(PostOpRef(f"{self._subject()}/ge", {"r": right})), ctx=self._ctx)
+        return self._compare("ge", other, reverse_method="le", literal_cmp=lambda l, r: l >= r)
 
     def lt(self, other: "Scalar | Value | object") -> "Bool":
-        right = autobox(other)
-        left_form = form_of(self)
-        right_form = form_of(right)
-        left_literal = _literal_number(left_form)
-        right_literal = _literal_number(right_form)
-        if left_literal is not None and right_literal is not None:
-            return Bool(left_literal < right_literal)
-        if left_literal is not None and isinstance(right, Comparable):
-            return right.gt(left_literal)
-        return Bool(ref=TCRef(PostOpRef(f"{self._subject()}/lt", {"r": right})), ctx=self._ctx)
+        return self._compare("lt", other, reverse_method="gt", literal_cmp=lambda l, r: l < r)
 
     def le(self, other: "Scalar | Value | object") -> "Bool":
-        right = autobox(other)
-        left_form = form_of(self)
-        right_form = form_of(right)
-        left_literal = _literal_number(left_form)
-        right_literal = _literal_number(right_form)
-        if left_literal is not None and right_literal is not None:
-            return Bool(left_literal <= right_literal)
-        if left_literal is not None and isinstance(right, Comparable):
-            return right.ge(left_literal)
-        return Bool(ref=TCRef(PostOpRef(f"{self._subject()}/le", {"r": right})), ctx=self._ctx)
+        return self._compare("le", other, reverse_method="ge", literal_cmp=lambda l, r: l <= r)
 
     def add(self, other: "Scalar | Value | object") -> "Number":
-        right = autobox(other)
-        left_form = form_of(self)
-        right_form = form_of(right)
-        left_literal = _literal_number(left_form)
-        right_literal = _literal_number(right_form)
-        if left_literal is not None and right_literal is not None:
-            return Number(left_literal + right_literal)
-        subject = f"{self._subject()}/add"
-        opref = PostOpRef(subject, {"r": right})
-        return Number(ref=TCRef(opref), ctx=self._ctx)
+        return self._arithmetic("add", other, literal_op=lambda l, r: l + r)
 
     def sub(self, other: "Scalar | Value | object") -> "Number":
-        right = autobox(other)
-        left_form = form_of(self)
-        right_form = form_of(right)
-        left_literal = _literal_number(left_form)
-        right_literal = _literal_number(right_form)
-        if left_literal is not None and right_literal is not None:
-            return Number(left_literal - right_literal)
-        subject = f"{self._subject()}/sub"
-        opref = PostOpRef(subject, {"r": right})
-        return Number(ref=TCRef(opref), ctx=self._ctx)
+        return self._arithmetic("sub", other, literal_op=lambda l, r: l - r)
 
     def mul(self, other: "Scalar | Value | object") -> "Number":
-        right = autobox(other)
-        left_form = form_of(self)
-        right_form = form_of(right)
-        left_literal = _literal_number(left_form)
-        right_literal = _literal_number(right_form)
-        if left_literal is not None and right_literal is not None:
-            return Number(left_literal * right_literal)
-        subject = f"{self._subject()}/mul"
-        opref = PostOpRef(subject, {"r": right})
-        return Number(ref=TCRef(opref), ctx=self._ctx)
+        return self._arithmetic("mul", other, literal_op=lambda l, r: l * r)
 
     def div(self, other: "Scalar | Value | object") -> "Number":
-        right = autobox(other)
-        left_form = form_of(self)
-        right_form = form_of(right)
-        left_literal = _literal_number(left_form)
-        right_literal = _literal_number(right_form)
-        if left_literal is not None and right_literal is not None:
-            return Number(left_literal / right_literal)
-        subject = f"{self._subject()}/div"
-        opref = PostOpRef(subject, {"r": right})
-        return Number(ref=TCRef(opref), ctx=self._ctx)
+        return self._arithmetic("div", other, literal_op=lambda l, r: l / r)
 
     def __add__(self, other: object) -> "Number":
         return self.add(other)
 
     def __radd__(self, other: object) -> "Number":
-        left = autobox(other)
-        if isinstance(left, Number):
-            return left.add(self)
-        return Number(ref=TCRef(PostOpRef(f"{left._subject()}/add", {"r": self})), ctx=getattr(left, "_ctx", None))
+        return self._reverse_arithmetic("add", other)
 
     def __sub__(self, other: object) -> "Number":
         return self.sub(other)
 
     def __rsub__(self, other: object) -> "Number":
-        left = autobox(other)
-        if isinstance(left, Number):
-            return left.sub(self)
-        return Number(ref=TCRef(PostOpRef(f"{left._subject()}/sub", {"r": self})), ctx=getattr(left, "_ctx", None))
+        return self._reverse_arithmetic("sub", other)
 
     def __mul__(self, other: object) -> "Number":
         return self.mul(other)
 
     def __rmul__(self, other: object) -> "Number":
-        left = autobox(other)
-        if isinstance(left, Number):
-            return left.mul(self)
-        return Number(ref=TCRef(PostOpRef(f"{left._subject()}/mul", {"r": self})), ctx=getattr(left, "_ctx", None))
+        return self._reverse_arithmetic("mul", other)
 
     def __truediv__(self, other: object) -> "Number":
         return self.div(other)
 
     def __rtruediv__(self, other: object) -> "Number":
-        left = autobox(other)
-        if isinstance(left, Number):
-            return left.div(self)
-        return Number(ref=TCRef(PostOpRef(f"{left._subject()}/div", {"r": self})), ctx=getattr(left, "_ctx", None))
+        return self._reverse_arithmetic("div", other)
 
     def __gt__(self, other: object) -> "Bool":
         return self.gt(other)
@@ -922,31 +901,17 @@ class Number(Numeric):
         return self.le(other)
 
 class Bool(Comparable):
-    def eq(self, other: "Scalar | Value | object") -> "Bool":
-        return Bool(ref=TCRef(PostOpRef(f"{self._subject()}/eq", {"r": autobox(other)})), ctx=self._ctx)
-
-    def ne(self, other: "Scalar | Value | object") -> "Bool":
-        return Bool(ref=TCRef(PostOpRef(f"{self._subject()}/ne", {"r": autobox(other)})), ctx=self._ctx)
-
     def logical_and(self, other: "Scalar | Value | object") -> "Bool":
-        subject = f"{self._subject()}/and"
-        opref = PostOpRef(subject, {"r": autobox(other)})
-        return Bool(ref=TCRef(opref), ctx=self._ctx)
+        return cast(Bool, _post_binary_call(self, "and", other, rtype=Bool))
 
     def logical_not(self) -> "Bool":
-        subject = f"{self._subject()}/not"
-        opref = PostOpRef(subject, {})
-        return Bool(ref=TCRef(opref), ctx=self._ctx)
+        return cast(Bool, _post_unary_call(self, "not", rtype=Bool))
 
     def logical_or(self, other: "Scalar | Value | object") -> "Bool":
-        subject = f"{self._subject()}/or"
-        opref = PostOpRef(subject, {"r": autobox(other)})
-        return Bool(ref=TCRef(opref), ctx=self._ctx)
+        return cast(Bool, _post_binary_call(self, "or", other, rtype=Bool))
 
     def logical_xor(self, other: "Scalar | Value | object") -> "Bool":
-        subject = f"{self._subject()}/xor"
-        opref = PostOpRef(subject, {"r": autobox(other)})
-        return Bool(ref=TCRef(opref), ctx=self._ctx)
+        return cast(Bool, _post_binary_call(self, "xor", other, rtype=Bool))
 
 
 def _reduce_scalar(
@@ -956,10 +921,12 @@ def _reduce_scalar(
     *,
     ctx: "Context | None" = None,
 ) -> Scalar:
+    from .reduce import infer_reduce_item_name
+
     infer_ctx = _context_from_values(op, value)
     if infer_ctx is None:
         infer_ctx = ctx
-    item_name = _infer_reduce_item_name(op, value, ctx=infer_ctx)
+    item_name = infer_reduce_item_name(op, value, ctx=infer_ctx)
     opref = PostOpRef(
         subject,
         {
@@ -968,65 +935,49 @@ def _reduce_scalar(
             "value": autobox(value),
         },
     )
-    return Scalar(ref=TCRef(opref), ctx=ctx)
+    return Scalar(ref=opref, ctx=ctx)
 
 
 class Tuple(Iterable):
-    def eq(self, other: "Scalar | Value | object") -> "Bool":
-        return Bool(ref=TCRef(PostOpRef(f"{self._subject()}/eq", {"r": autobox(other)})), ctx=self._ctx)
-
-    def ne(self, other: "Scalar | Value | object") -> "Bool":
-        return Bool(ref=TCRef(PostOpRef(f"{self._subject()}/ne", {"r": autobox(other)})), ctx=self._ctx)
-
     def len(self) -> "Number":
-        form = form_of(self)
-        if isinstance(form, Sequence) and not isinstance(form, (str, bytes, bytearray)):
+        form = _seq_form_or_none(form_of(self))
+        if form is not None:
             return Number(len(form))
         subject = f"{self._subject()}/len"
-        return Number(ref=TCRef(PostOpRef(subject, {})), ctx=self._ctx)
+        return Number(ref=PostOpRef(subject, {}), ctx=self._ctx)
 
     def head(self) -> Scalar:
         subject = f"{self._subject()}/head"
-        return Symbol(ref=TCRef(PostOpRef(subject, {})), ctx=self._ctx)
+        return Symbol(ref=PostOpRef(subject, {}), ctx=self._ctx)
 
     def tail(self) -> "Tuple":
         subject = f"{self._subject()}/tail"
-        return Tuple(ref=TCRef(PostOpRef(subject, {})), ctx=self._ctx)
+        return Tuple(ref=PostOpRef(subject, {}), ctx=self._ctx)
 
     def concat(self, other: "Scalar | Value | object") -> "Tuple":
-        form = form_of(self)
+        form = _seq_form_or_none(form_of(self))
         right = autobox(other)
-        right_form = form_of(right)
-        if (
-            isinstance(form, Sequence)
-            and not isinstance(form, (str, bytes, bytearray))
-            and isinstance(right_form, Sequence)
-            and not isinstance(right_form, (str, bytes, bytearray))
-        ):
+        right_form = _seq_form_or_none(form_of(right))
+        if form is not None and right_form is not None:
             return Tuple(list(form) + list(right_form))
         subject = f"{self._subject()}/concat"
-        return Tuple(ref=TCRef(PostOpRef(subject, {"r": right})), ctx=self._ctx)
+        return Tuple(ref=PostOpRef(subject, {"r": right}), ctx=self._ctx)
 
     def get(self, index: "Scalar | Value | object") -> Scalar:
-        form = form_of(self)
-        if isinstance(form, Sequence) and not isinstance(form, (str, bytes, bytearray)) and isinstance(index, int):
+        form = _seq_form_or_none(form_of(self))
+        if form is not None and isinstance(index, int):
             return autobox(form[index])
         subject = f"{self._subject()}/get"
-        return Symbol(ref=TCRef(PostOpRef(subject, {"i": autobox(index)})), ctx=self._ctx)
+        return Symbol(ref=PostOpRef(subject, {"i": autobox(index)}), ctx=self._ctx)
 
     def slice(self, start: "Scalar | Value | object", stop: "Scalar | Value | object") -> "Tuple":
-        form = form_of(self)
+        form = _seq_form_or_none(form_of(self))
         start_literal = _literal_number(form_of(autobox(start)))
         stop_literal = _literal_number(form_of(autobox(stop)))
-        if (
-            isinstance(form, Sequence)
-            and not isinstance(form, (str, bytes, bytearray))
-            and start_literal is not None
-            and stop_literal is not None
-        ):
+        if form is not None and start_literal is not None and stop_literal is not None:
             return Tuple(list(form)[int(start_literal) : int(stop_literal)])
         subject = f"{self._subject()}/slice"
-        return Tuple(ref=TCRef(PostOpRef(subject, {"start": autobox(start), "stop": autobox(stop)})), ctx=self._ctx)
+        return Tuple(ref=PostOpRef(subject, {"start": autobox(start), "stop": autobox(stop)}), ctx=self._ctx)
 
     def __getitem__(self, index: "Scalar | Value | object") -> Scalar:
         if isinstance(index, slice):
@@ -1041,10 +992,7 @@ class Tuple(Iterable):
         return self.concat(other)
 
     def __radd__(self, other: object) -> "Tuple":
-        left = autobox(other)
-        if isinstance(left, Tuple):
-            return left.concat(self)
-        return Tuple(ref=TCRef(PostOpRef(f"{left._subject()}/concat", {"r": self})))
+        return cast(Tuple, _reverse_post_call(self, other, method="concat", rtype=Tuple, chain_type=Tuple))
 
     def reduce(
         self,
@@ -1052,29 +1000,23 @@ class Tuple(Iterable):
         op: "OpDef | Scalar | object",
         value: "Scalar | Value | object",
     ) -> Scalar:
-        return _reduce_scalar(f"{self._subject()}/reduce", op, value, ctx=self._ctx)
+        return _reduce_scalar(_subject_method(self, "reduce"), op, value, ctx=self._ctx)
 
 
 class Map(Comparable):
-    def eq(self, other: "Scalar | Value | object") -> "Bool":
-        return Bool(ref=TCRef(PostOpRef(f"{self._subject()}/eq", {"r": autobox(other)})), ctx=self._ctx)
-
-    def ne(self, other: "Scalar | Value | object") -> "Bool":
-        return Bool(ref=TCRef(PostOpRef(f"{self._subject()}/ne", {"r": autobox(other)})), ctx=self._ctx)
-
     def len(self) -> "Number":
-        form = form_of(self)
-        if isinstance(form, Mapping):
+        form = _map_form_or_none(form_of(self))
+        if form is not None:
             return Number(len(form))
         subject = f"{self._subject()}/len"
-        return Number(ref=TCRef(PostOpRef(subject, {})), ctx=self._ctx)
+        return Number(ref=PostOpRef(subject, {}), ctx=self._ctx)
 
     def get(self, index: "Scalar | Value | object") -> Scalar:
-        form = form_of(self)
-        if isinstance(form, Mapping) and isinstance(index, str) and index in form:
+        form = _map_form_or_none(form_of(self))
+        if form is not None and isinstance(index, str) and index in form:
             return autobox(form[index])
         subject = f"{self._subject()}/get"
-        return Symbol(ref=TCRef(PostOpRef(subject, {"i": autobox(index)})), ctx=self._ctx)
+        return Symbol(ref=PostOpRef(subject, {"i": autobox(index)}), ctx=self._ctx)
 
     def __getitem__(self, index: "Scalar | Value | object") -> Scalar:
         return self.get(index)
@@ -1085,195 +1027,24 @@ class Map(Comparable):
         op: "OpDef | Scalar | object",
         value: "Scalar | Value | object",
     ) -> Scalar:
-        return _reduce_scalar(f"{self._subject()}/reduce", op, value, ctx=self._ctx)
+        return _reduce_scalar(_subject_method(self, "reduce"), op, value, ctx=self._ctx)
 
 
 class String(Comparable):
-    def eq(self, other: "Scalar | Value | object") -> "Bool":
-        return Bool(ref=TCRef(PostOpRef(f"{self._subject()}/eq", {"r": autobox(other)})), ctx=self._ctx)
-
-    def ne(self, other: "Scalar | Value | object") -> "Bool":
-        return Bool(ref=TCRef(PostOpRef(f"{self._subject()}/ne", {"r": autobox(other)})), ctx=self._ctx)
-
     def concat(self, other: "Scalar | Value | object") -> "String":
         subject = f"{self._subject()}/concat"
-        return String(ref=TCRef(PostOpRef(subject, {"r": autobox(other)})), ctx=self._ctx)
+        return String(ref=PostOpRef(subject, {"r": autobox(other)}), ctx=self._ctx)
 
     def _string_render(self, params: Mapping[str, object]) -> "String":
         active_ctx = self._ctx or _context_from_values(*params.values())
         subject = f"{self._subject(ctx=active_ctx)}/render"
-        return String(ref=TCRef(PostOpRef(subject, params)), ctx=active_ctx)
+        return String(ref=PostOpRef(subject, params), ctx=active_ctx)
 
     def __add__(self, other: object) -> "String":
         return self.concat(other)
 
     def __radd__(self, other: object) -> "String":
-        left = autobox(other)
-        if isinstance(left, String):
-            return left.concat(self)
-        return String(ref=TCRef(PostOpRef(f"{left._subject()}/concat", {"r": self})))
-
-
-def _reduce_state_keys(value: "Scalar | Value | object") -> set[str]:
-    Value, _, _, ValueMap, _, _, _, value_form_of = _value_runtime()
-
-    if isinstance(value, Scalar):
-        value_form = form_of(value)
-        if isinstance(value_form, Mapping):
-            return set(value_form.keys())
-        if isinstance(value_form, ValueMap):
-            map_form = value_form_of(value_form)
-            if isinstance(map_form, dict):
-                return set(map_form.keys())
-        return set()
-
-    if isinstance(value, Value):
-        if isinstance(value, ValueMap):
-            map_form = value_form_of(value)
-            if isinstance(map_form, dict):
-                return set(map_form.keys())
-        return set()
-
-    if isinstance(value, Mapping):
-        keys: set[str] = set()
-        for key in value.keys():
-            if not isinstance(key, str):
-                raise TypeError("reduce state map keys must be strings")
-            keys.add(key)
-        return keys
-
-    return set()
-
-
-def _infer_reduce_item_name(
-    op: "OpDef | Scalar | object",
-    value: "Scalar | Value | object",
-    *,
-    ctx: "Context | None" = None,
-) -> str:
-    resolved_op = _resolve_reduce_opdef(op, ctx=ctx)
-    if resolved_op is None:
-        raise TypeError("reduce requires a concrete OpDef to infer item binding")
-
-    state_keys = _reduce_state_keys(value)
-    defined_ids = {name for name, _ in resolved_op.form}
-    referenced_ids: set[str] = set()
-    subject_ids: set[str] = set()
-    for _, scalar in resolved_op.form:
-        _collect_ref_ids_from_form(form_of(scalar), referenced_ids, subject_ids)
-
-    subject_candidates = sorted(
-        name for name in subject_ids if name not in defined_ids and name not in state_keys
-    )
-    if len(subject_candidates) == 1:
-        return subject_candidates[0]
-    if len(subject_candidates) > 1:
-        raise TypeError(
-            "reduce item binding is ambiguous; reducer references multiple subject inputs: "
-            + ", ".join(subject_candidates)
-        )
-
-    external_ids = sorted(name for name in referenced_ids if name not in defined_ids)
-    candidates = [name for name in external_ids if name not in state_keys]
-
-    if len(candidates) == 1:
-        return candidates[0]
-
-    if not candidates:
-        raise TypeError(
-            "reduce could not infer item binding: reducer must reference exactly one external input not present in state"
-        )
-
-    raise TypeError(
-        "reduce item binding is ambiguous; reducer references multiple external inputs: "
-        + ", ".join(candidates)
-    )
-
-
-def _resolve_reduce_opdef(op: "OpDef | Scalar | object", *, ctx: "Context | None" = None) -> "OpDef | None":
-    if isinstance(op, OpDef):
-        return op
-
-    if not isinstance(op, Scalar):
-        return None
-
-    op_form = form_of(op)
-    if isinstance(op_form, OpDef):
-        return op_form
-
-    if not isinstance(op_form, TCRef):
-        return None
-    op_ref_form = form_of(op_form)
-    if not isinstance(op_ref_form, IdRef):
-        return None
-
-    active_ctx = ctx
-    if active_ctx is None:
-        return None
-
-    target = op_ref_form.name
-    for name, scalar in active_ctx.form():
-        if name != target:
-            continue
-        scalar_form = form_of(scalar)
-        if isinstance(scalar_form, OpDef):
-            return scalar_form
-        return _resolve_reduce_opdef(scalar, ctx=active_ctx)
-
-    return None
-
-
-def _record_subject_token(subject: str, out: set[str], subject_ids: set[str]) -> None:
-    if not subject.startswith("$"):
-        return
-
-    head, sep, _tail = subject[1:].partition("/")
-    if not head:
-        return
-
-    out.add(head)
-    if sep:
-        subject_ids.add(head)
-
-
-def _collect_ref_ids_from_form(node: object, out: set[str], subject_ids: set[str]) -> None:
-    if isinstance(node, Scalar):
-        _collect_ref_ids_from_form(form_of(node), out, subject_ids)
-        return
-
-    if isinstance(node, TCRef):
-        _collect_ref_ids_from_form(form_of(node), out, subject_ids)
-        return
-
-    if isinstance(node, IdRef):
-        out.add(node.name)
-        return
-
-    if isinstance(node, OpRef):
-        _record_subject_token(coerce_op_subject(node.subject), out, subject_ids)
-        _collect_ref_ids_from_form(node.args, out, subject_ids)
-        return
-
-    runtime_op = OpRef.from_runtime(node)
-    if runtime_op is not None:
-        _collect_ref_ids_from_form(runtime_op, out, subject_ids)
-        return
-
-    if isinstance(node, OpDef):
-        for _name, scalar in node.form:
-            _collect_ref_ids_from_form(form_of(scalar), out, subject_ids)
-        return
-
-    if isinstance(node, Mapping):
-        for key, value in node.items():
-            if isinstance(key, str):
-                _record_subject_token(key, out, subject_ids)
-            _collect_ref_ids_from_form(value, out, subject_ids)
-        return
-
-    if isinstance(node, Sequence) and not isinstance(node, (str, bytes, bytearray)):
-        for item in node:
-            _collect_ref_ids_from_form(item, out, subject_ids)
+        return cast(String, _reverse_post_call(self, other, method="concat", rtype=String, chain_type=String))
 
 
 def _encode_form(form: Sequence[tuple[str, Scalar]]) -> list[list[object]]:
