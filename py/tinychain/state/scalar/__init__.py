@@ -35,16 +35,16 @@ if TYPE_CHECKING:
 
 @lru_cache(maxsize=1)
 def _value_runtime():
-    from ..value import Bool as ValueBool
-    from ..value import Link as ValueLink
-    from ..value import Map as ValueMap
-    from ..value import Number as ValueNumber
-    from ..value import String as ValueString
-    from ..value import Tuple as ValueTuple
+    from ..value import Bool as value_bool
+    from ..value import Link as value_link
+    from ..value import Map as value_map
+    from ..value import Number as value_number
+    from ..value import String as value_string
+    from ..value import Tuple as value_tuple
     from ..value import Value
     from ..value import form_of as value_form_of
 
-    return Value, ValueBool, ValueLink, ValueMap, ValueNumber, ValueString, ValueTuple, value_form_of
+    return Value, value_bool, value_link, value_map, value_number, value_string, value_tuple, value_form_of
 
 OPDEF_GET: str = path("state", "scalar", "op", "get")
 OPDEF_PUT: str = path("state", "scalar", "op", "put")
@@ -94,7 +94,7 @@ def _json_of(form: object) -> object:
 def autobox(
     obj: "Scalar | TCRef | OpRef | IdRef | OpDef | Value | Cond | While | ForEach | object",
 ) -> "Scalar":
-    Value, _, ValueLink, _, _, _, _, _ = _value_runtime()
+    Value, _, value_link, _, _, _, _, _ = _value_runtime()
 
     if isinstance(obj, Value):
         from ...opref import OpRef as RuntimeOpRef
@@ -123,7 +123,7 @@ def autobox(
     except ImportError:
         pass
     if isinstance(obj, URI):
-        return Scalar(ValueLink(obj))
+        return Scalar(value_link(obj))
     if isinstance(obj, TCRef):
         return _typed_from_tcref(obj)
     if isinstance(obj, Cond):
@@ -150,13 +150,13 @@ def autobox(
 
 
 def _is_string_scalar(obj: object) -> bool:
-    _, _, _, _, _, ValueString, _, _ = _value_runtime()
+    _, _, _, _, _, value_string, _, _ = _value_runtime()
 
     scalar_form = form_of(obj) if isinstance(obj, Scalar) else None
     return (
         isinstance(obj, str)
-        or isinstance(obj, ValueString)
-        or isinstance(scalar_form, ValueString)
+        or isinstance(obj, value_string)
+        or isinstance(scalar_form, value_string)
     )
 
 
@@ -203,8 +203,8 @@ def _literal_number(form: object) -> int | float | bool | None:
     if isinstance(form, (int, float, bool)):
         return form
 
-    _, ValueBool, _, _, ValueNumber, _, _, _ = _value_runtime()
-    if isinstance(form, (ValueNumber, ValueBool)):
+    _, value_bool, _, _, value_number, _, _, _ = _value_runtime()
+    if isinstance(form, (value_number, value_bool)):
         try:
             json_value = form.to_json()
         except (TypeError, ValueError, AttributeError):
@@ -244,7 +244,7 @@ def scalar_for_hint(name: str, hint: object) -> "Scalar":
 
 
 def _scalar_class_for_hint(hint: object) -> type["Scalar"]:
-    Value, ValueBool, _, ValueMap, ValueNumber, ValueString, ValueTuple, _ = _value_runtime()
+    Value, value_bool, _, value_map, value_number, value_string, value_tuple, _ = _value_runtime()
 
     if isinstance(hint, type):
         try:
@@ -262,30 +262,30 @@ def _scalar_class_for_hint(hint: object) -> type["Scalar"]:
 
         if Tensor is not None and issubclass(hint, Tensor):
             return Tensor
-        if issubclass(hint, ValueNumber):
+        if issubclass(hint, value_number):
             return Number
-        if issubclass(hint, ValueBool):
+        if issubclass(hint, value_bool):
             return Bool
-        if issubclass(hint, ValueTuple):
+        if issubclass(hint, value_tuple):
             return Tuple
-        if issubclass(hint, ValueMap):
+        if issubclass(hint, value_map):
             return Map
-        if issubclass(hint, ValueString):
+        if issubclass(hint, value_string):
             return String
         if issubclass(hint, Value):
             return Scalar
         if issubclass(hint, Scalar):
             return hint
 
-    if hint is ValueNumber:
+    if hint is value_number:
         return Number
-    if hint is ValueBool:
+    if hint is value_bool:
         return Bool
-    if hint is ValueTuple:
+    if hint is value_tuple:
         return Tuple
-    if hint is ValueMap:
+    if hint is value_map:
         return Map
-    if hint is ValueString:
+    if hint is value_string:
         return String
     return Scalar
 
@@ -300,18 +300,18 @@ def _scalar_like(
     tuple: Sequence["Scalar"] | None = None,
     ctx: "Context | None" = None,
 ) -> "Scalar":
-    _, ValueBool, _, ValueMap, ValueNumber, ValueString, ValueTuple, _ = _value_runtime()
+    _, value_bool, _, value_map, value_number, value_string, value_tuple, _ = _value_runtime()
 
     scalar_type: type[Scalar] = Scalar
-    if isinstance(value_obj, ValueNumber):
+    if isinstance(value_obj, value_number):
         scalar_type = Number
-    elif isinstance(value_obj, ValueBool):
+    elif isinstance(value_obj, value_bool):
         scalar_type = Bool
-    elif isinstance(value_obj, ValueTuple):
+    elif isinstance(value_obj, value_tuple):
         scalar_type = Tuple
-    elif isinstance(value_obj, ValueMap):
+    elif isinstance(value_obj, value_map):
         scalar_type = Map
-    elif isinstance(value_obj, ValueString):
+    elif isinstance(value_obj, value_string):
         scalar_type = String
 
     # Preserve tuple/map symbolic shape where available.
