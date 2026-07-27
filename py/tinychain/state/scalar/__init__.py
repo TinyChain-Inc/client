@@ -187,7 +187,15 @@ def _context_from_values(*values: object) -> "Context | None":
 
 
 def _resolve_context(ctx: "Context | None" = None) -> "Context | None":
-    return ctx
+    if ctx is not None:
+        return ctx
+
+    try:
+        from ..context import current_context
+    except ImportError:
+        return None
+
+    return current_context()
 
 
 def _literal_number(form: object) -> int | float | bool | None:
