@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextvars
 from dataclasses import dataclass
 from typing import Iterable
 
@@ -88,14 +89,35 @@ class Context:
 
 class _ContextScope:
     def __init__(self) -> None:
-        self._ctx: Context | None = None
+        self._token: contextvars.Token[Context | None] | None = None
 
     def __enter__(self) -> Context:
-        self._ctx = Context()
-        return self._ctx
+        ctx = Context()
+        self._token = _current_context.set(ctx)
+        return ctx
 
     def __exit__(self, exc_type, exc, tb) -> None:
-        self._ctx = None
+        if self._token is not None:
+            _current_context.reset(self._token)
+            self._token = None
+
+
+_current_context: contextvars.ContextVar[Context | None] = contextvars.ContextVar(
+    "tinychain_state_context",
+    default=None,
+)
+
+
+def context() -> Context:
+    ctx = _current_context.get()
+    if ctx is None:
+        ctx = Context()
+        _current_context.set(ctx)
+    return ctx
+
+
+def current_context() -> Context | None:
+    return _current_context.get()
 
 
 def scoped_context() -> _ContextScope:
