@@ -223,7 +223,7 @@ def id(name: str, *, ctx: "Context | None" = None) -> "Scalar":
             pass
 
     # Unbound ids are represented as a generic symbolic ref.
-    return Symbol(ref=TCRef(IdRef(name)), ctx=active_ctx)
+    return Symbol(ref=TCRef.id(name), ctx=active_ctx)
 
 
 def map_of(items: Mapping[str, "Scalar | Value | object"]) -> "Scalar":
@@ -237,7 +237,7 @@ def tuple_of(items: Sequence["Scalar | Value | object"]) -> "Scalar":
 
 
 def scalar_for_hint(name: str, hint: object) -> "Scalar":
-    base = TCRef(IdRef(name))
+    base = TCRef.id(name)
     cls = _scalar_class_for_hint(hint)
     return cls(ref=base)
 

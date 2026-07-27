@@ -393,6 +393,10 @@ class TCRef:
         return raw
 
     @staticmethod
+    def id(name: str) -> "TCRef":
+        return TCRef(IdRef(name))
+
+    @staticmethod
     def from_json(obj: Any) -> "TCRef":
         from . import Scalar
 
@@ -445,7 +449,6 @@ class TCRef:
             )
 
         if key.startswith("$") and isinstance(value, list) and not value:
-            return TCRef(IdRef(key[1:]))
+            return TCRef.id(key[1:])
 
         return TCRef(OpRef.from_json(obj))
-
