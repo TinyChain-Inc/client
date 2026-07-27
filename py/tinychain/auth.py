@@ -34,7 +34,7 @@ def context():
     """
     import tinychain as tc
 
-    return tc.Ref(tc.opref.get(tc.URI.of("host", "auth", "context")))
+    return tc.Ref(tc.opref.get(tc.URI("host", "auth", "context")))
 
 
 def _rjwt():

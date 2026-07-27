@@ -64,7 +64,7 @@ def test_with_library_rejects_dependency_override_argument(tmp_path, monkeypatch
         publisher = "example-devco"
         resource_name = "a"
         version = "0.1.0"
-        dependencies = (tc.URI(path=tc.URI.of("lib", "example-devco", "b", "0.1.0")),)
+        dependencies = (tc.URI(path=tc.URI("lib", "example-devco", "b", "0.1.0")),)
 
     dependency = tc.URI.parse("http://deps.example.test:8702/lib/example-devco/c/0.1.0")
     with pytest.raises(TypeError, match="dependency"):
@@ -161,7 +161,7 @@ def test_with_library_infers_authority_from_runtime_dependency_binding(tmp_path,
         publisher = "example-devco"
         resource_name = "local"
         version = "0.1.0"
-        dependencies = (tc.URI(path=tc.URI.of("lib", "example-devco", "b", "0.1.0")),)
+        dependencies = (tc.URI(path=tc.URI("lib", "example-devco", "b", "0.1.0")),)
         dep = B()
 
     tc.kernel.with_library(Local(), data_dir=tmp_path)
@@ -183,7 +183,7 @@ def test_with_library_missing_authority_is_clear(tmp_path, monkeypatch):
         publisher = "example-devco"
         resource_name = "a"
         version = "0.1.0"
-        dependencies = (tc.URI(path=tc.URI.of("lib", "example-devco", "b", "0.1.0")),)
+        dependencies = (tc.URI(path=tc.URI("lib", "example-devco", "b", "0.1.0")),)
 
     with pytest.raises(ValueError, match="missing dependency authority"):
         tc.kernel.with_library(A(), data_dir=tmp_path)
@@ -222,7 +222,7 @@ def test_with_library_rejects_ambiguous_runtime_binding_authority(tmp_path, monk
         publisher = "example-devco"
         resource_name = "local"
         version = "0.1.0"
-        dependencies = (tc.URI(path=tc.URI.of("lib", "example-devco", "b", "0.1.0")),)
+        dependencies = (tc.URI(path=tc.URI("lib", "example-devco", "b", "0.1.0")),)
         left = LeftB()
         right = RightB()
 

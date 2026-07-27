@@ -20,12 +20,16 @@ def _looks_like_tcref_map(obj: Mapping[str, object]) -> bool:
 
     (key, _value), = obj.items()
     return isinstance(key, str) and (
-        key == URI.of(Scalar, "ref", "op", "delete") or key.startswith("/") or key.startswith("$")
+        key == str(URI(OpRef, "delete")) or key.startswith("/") or key.startswith("$")
     )
 
 
+def _subject_str(subject: str | URI) -> str:
+    return str(subject)
+
+
 class TCRef(Scalar):
-    __uri__: URI = URI(path=URI.of(Scalar, "ref"))
+    __uri__: URI = URI(Scalar, "ref")
 
     def __init__(self, form: "TCRef | Scalar"):
         if form is self:
@@ -69,7 +73,7 @@ class TCRef(Scalar):
         if not _looks_like_tcref_map(obj):
             raise TypeError("not a TCRef op map")
 
-        if key == URI.of(Scalar, "ref", "cond"):
+        if key == str(URI(TCRef, "cond")):
             if not isinstance(value, list) or len(value) != 3:
                 raise TypeError("invalid Cond ref encoding")
             raw_cond, raw_then, raw_or_else = value
@@ -80,7 +84,7 @@ class TCRef(Scalar):
                 Scalar.from_json(raw_or_else),
             )
 
-        if key == URI.of(Scalar, "ref", "while"):
+        if key == str(URI(TCRef, "while")):
             if not isinstance(value, list) or len(value) != 3:
                 raise TypeError("invalid While ref encoding")
             cond, op, state = value
@@ -89,7 +93,7 @@ class TCRef(Scalar):
                 Scalar.from_json(op),
                 Scalar.from_json(state),
             )
-        if key == URI.of(Scalar, "ref", "for_each"):
+        if key == str(URI(TCRef, "for_each")):
             if not isinstance(value, list) or len(value) != 3:
                 raise TypeError("invalid ForEach ref encoding")
             items, op, item_name = value
@@ -114,7 +118,7 @@ class OpRef(TCRef):
     This is distinct from the runtime `tinychain.OpRef` request stub (HTTP method/path/body).
     """
 
-    __uri__: URI = URI(path=URI.of(TCRef, "op"))
+    __uri__: URI = URI(TCRef, "op")
 
     METHOD: str = ""
 
@@ -178,7 +182,7 @@ class OpRef(TCRef):
             raise TypeError("expected an OpRef map")
 
         (key, value), = obj.items()
-        if key == URI.of(TCRef, "op", "delete"):
+        if key == str(URI(OpRef, "delete")):
             if not isinstance(value, list) or len(value) != 2:
                 raise TypeError("invalid DELETE opref encoding")
             subject, raw_key = value
@@ -208,10 +212,11 @@ class OpRef(TCRef):
 class GetOpRef(OpRef):
     METHOD = "GET"
 
-    def __init__(self, subject: str, key: "Scalar | Value | object" = None):
+    def __init__(self, subject: str | URI, key: "Scalar | Value | object" = None):
         from . import autobox
 
         super().__init__()
+        subject = _subject_str(subject)
         if not isinstance(subject, str):
             raise TypeError(f"expected op subject to be str, got {type(subject).__name__}")
         self._subject = subject
@@ -232,10 +237,11 @@ class GetOpRef(OpRef):
 class PutOpRef(OpRef):
     METHOD = "PUT"
 
-    def __init__(self, subject: str, key: "Scalar | Value | object", value: "Scalar | Value | object"):
+    def __init__(self, subject: str | URI, key: "Scalar | Value | object", value: "Scalar | Value | object"):
         from . import autobox
 
         super().__init__()
+        subject = _subject_str(subject)
         if not isinstance(subject, str):
             raise TypeError(f"expected op subject to be str, got {type(subject).__name__}")
         self._subject = subject
@@ -257,7 +263,7 @@ class PutOpRef(OpRef):
 class PostOpRef(OpRef):
     METHOD = "POST"
 
-    def __init__(self, subject: str, params: Mapping[str, "Scalar | Value | object"]):
+    def __init__(self, subject: str | URI, params: Mapping[str, "Scalar | Value | object"]):
         from . import autobox
 
         super().__init__()
@@ -265,6 +271,7 @@ class PostOpRef(OpRef):
         for key, value in _sorted_items(params):
             encoded[key] = autobox(value)
 
+        subject = _subject_str(subject)
         if not isinstance(subject, str):
             raise TypeError(f"expected op subject to be str, got {type(subject).__name__}")
         self._subject = subject
@@ -285,10 +292,11 @@ class PostOpRef(OpRef):
 class DeleteOpRef(OpRef):
     METHOD = "DELETE"
 
-    def __init__(self, subject: str, key: "Scalar | Value | object" = None):
+    def __init__(self, subject: str | URI, key: "Scalar | Value | object" = None):
         from . import autobox
 
         super().__init__()
+        subject = _subject_str(subject)
         if not isinstance(subject, str):
             raise TypeError(f"expected op subject to be str, got {type(subject).__name__}")
         self._subject = subject
@@ -303,7 +311,7 @@ class DeleteOpRef(OpRef):
         return self._key.to_json()
 
     def to_json(self) -> dict[str, object]:
-        return {URI.of(TCRef, "op", "delete"): [self.subject, self.args]}
+        return {str(URI(OpRef, "delete")): [self.subject, self.args]}
 
 
 class IdRef(TCRef):
@@ -347,7 +355,7 @@ class While(ControlRef):
 
     def to_json(self) -> dict[str, object]:
         return {
-            URI.of(Scalar, "ref", "while"): [
+            str(URI(TCRef, "while")): [
                 self.cond.to_json(),
                 self.op.to_json(),
                 self.state.to_json(),
@@ -376,7 +384,7 @@ class Cond(ControlRef):
 
     def to_json(self) -> dict[str, object]:
         return {
-            URI.of(Scalar, "ref", "cond"): [
+            str(URI(TCRef, "cond")): [
                 self.cond.to_json(),
                 self.then.to_json(),
                 self.or_else.to_json(),
@@ -405,7 +413,7 @@ class ForEach(ControlRef):
 
     def to_json(self) -> dict[str, object]:
         return {
-            URI.of(Scalar, "ref", "for_each"): [
+            str(URI(TCRef, "for_each")): [
                 self.items.to_json(),
                 self.op.to_json(),
                 self.item_name,

@@ -24,6 +24,10 @@ from .schema import TensorStorageLayout, TensorStorageSchema, TensorViewSchema
 from .view_ops import BroadcastViewOp, ReshapeViewOp, SliceViewOp, TensorViewOp, TransposeViewOp
 from .view_spec import TensorViewSpec
 
+_F32_DTYPE_URI = URI("state", "scalar", "value", "number", "float", "32")
+_F64_DTYPE_URI = URI("state", "scalar", "value", "number", "float", "64")
+_U64_DTYPE_URI = URI("state", "scalar", "value", "number", "uint", "64")
+
 
 class Tensor(Comparable):
     """TinyChain tensor.
@@ -444,16 +448,14 @@ class Tensor(Comparable):
 
         dtype = self.dtype
         if isinstance(dtype, str):
-            from ...state.value import Number
-
             normalized = dtype.strip().lower()
             dtype = {
-                "f32": URI.of(Number, "float", "32"),
-                "float32": URI.of(Number, "float", "32"),
-                "f64": URI.of(Number, "float", "64"),
-                "float64": URI.of(Number, "float", "64"),
-                "u64": URI.of(Number, "uint", "64"),
-                "uint64": URI.of(Number, "uint", "64"),
+                "f32": str(_F32_DTYPE_URI),
+                "float32": str(_F32_DTYPE_URI),
+                "f64": str(_F64_DTYPE_URI),
+                "float64": str(_F64_DTYPE_URI),
+                "u64": str(_U64_DTYPE_URI),
+                "uint64": str(_U64_DTYPE_URI),
             }.get(normalized, dtype)
 
         return {

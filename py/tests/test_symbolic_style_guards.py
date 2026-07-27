@@ -329,6 +329,96 @@ def test_runtime_uri_composition_bans_local_uri_constructors_and_constant_tables
     assert not violations, "forbidden runtime URI constructor/table patterns found:\n" + "\n".join(violations)
 
 
+def test_runtime_bans_uri_constructor_path_extraction() -> None:
+    violations: list[str] = []
+
+    for path in sorted(_SRC_ROOT.rglob("*.py")):
+        relative_path = path.relative_to(_SRC_ROOT).as_posix()
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Attribute):
+                continue
+            if node.attr != "path":
+                continue
+            if not isinstance(node.value, ast.Call):
+                continue
+            if _call_name(node.value.func) != "URI":
+                continue
+
+            line = getattr(node, "lineno", 0)
+            segment = ast.get_source_segment(source, node) or "URI(...).path"
+            violations.append(f"{relative_path}:{line}: {segment}")
+
+    assert not violations, "forbidden URI(...).path extraction found; use URI values in domain logic and str(URI(...)) at boundaries:\n" + "\n".join(violations)
+
+
+def test_runtime_bans_redundant_str_uri_wraps() -> None:
+    violations: list[str] = []
+
+    for path in sorted(_SRC_ROOT.rglob("*.py")):
+        relative_path = path.relative_to(_SRC_ROOT).as_posix()
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            if _call_name(node.func) != "str" or len(node.args) != 1:
+                continue
+
+            inner = node.args[0]
+            if not isinstance(inner, ast.Call) or _call_name(inner.func) != "URI":
+                continue
+            if len(inner.args) != 1 or inner.keywords:
+                continue
+
+            subject = inner.args[0]
+            if isinstance(subject, ast.Name) and subject.id.endswith("_URI"):
+                line = getattr(node, "lineno", 0)
+                segment = ast.get_source_segment(source, node) or "str(URI(...))"
+                violations.append(f"{relative_path}:{line}: {segment}")
+            elif isinstance(subject, ast.Attribute) and subject.attr.endswith("_URI"):
+                line = getattr(node, "lineno", 0)
+                segment = ast.get_source_segment(source, node) or "str(URI(...))"
+                violations.append(f"{relative_path}:{line}: {segment}")
+
+    assert not violations, "forbidden redundant str(URI(<..._URI>)) wrappers found; use str(<..._URI>) directly:\n" + "\n".join(violations)
+
+
+def test_runtime_bans_uri_parse_str_wraps() -> None:
+    violations: list[str] = []
+
+    for path in sorted(_SRC_ROOT.rglob("*.py")):
+        relative_path = path.relative_to(_SRC_ROOT).as_posix()
+        if relative_path == "uri.py":
+            continue
+
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            if not isinstance(node.func, ast.Attribute):
+                continue
+            if node.func.attr != "parse":
+                continue
+            if _call_name(node.func.value) != "URI":
+                continue
+            if len(node.args) != 1:
+                continue
+
+            arg = node.args[0]
+            if isinstance(arg, ast.Call) and _call_name(arg.func) == "str":
+                line = getattr(node, "lineno", 0)
+                segment = ast.get_source_segment(source, node) or "URI.parse(str(...))"
+                violations.append(f"{relative_path}:{line}: {segment}")
+
+    assert not violations, "forbidden URI.parse(str(...)) wrappers found; pass URI values directly (URI(...)) or parse raw strings at boundaries:\n" + "\n".join(violations)
+
+
 def _is_isinstance_call(test: ast.AST) -> bool:
     if not isinstance(test, ast.Call):
         return False

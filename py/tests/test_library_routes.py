@@ -27,12 +27,12 @@ def test_library_routes_return_typed_refs():
         hello = a.hello()
         assert isinstance(hello, tc.String)
         assert hello.op.method == "GET"
-        assert hello.op.path == tc.URI.of(a, "hello")
+        assert hello.op.path == tc.URI(a, "hello").path
 
         raw = a.raw()
         assert isinstance(raw, tc.OpRef)
         assert raw.method == "GET"
-        assert raw.path == tc.URI.of(a, "raw")
+        assert raw.path == tc.URI(a, "raw").path
 
 
 def test_route_type_hints_resolve_to_runtime_value_types():
@@ -130,7 +130,7 @@ def test_library_routes_preserve_all_dict_return_keys():
 
     ir = compile_ir(A)
     route = next(route for route in ir["routes"] if route["path"] == "/stats")
-    opdef = route["opdef"][tc.URI.of("state", "scalar", "op", "post")]
+    opdef = route["opdef"][tc.URI("state", "scalar", "op", "post").path]
 
     assert [name for name, _ in opdef] == ["min", "max"]
 
@@ -147,7 +147,7 @@ def test_library_routes_ref_typed_mapping_return_is_result_value():
 
     ir = compile_ir(A)
     route = next(route for route in ir["routes"] if route["path"] == "/stats")
-    opdef = route["opdef"][tc.URI.of("state", "scalar", "op", "post")]
+    opdef = route["opdef"][tc.URI("state", "scalar", "op", "post").path]
 
     names = [name for name, _ in opdef]
     assert "result" in names
@@ -219,7 +219,7 @@ def test_grad_cannot_be_used_as_route_metadata_decorator():
 
     definition = library_definition(A)
     route = definition[A.class_id().path]["identity"]
-    assert tc.URI.of("state", "scalar", "op", "post") in route
+    assert tc.URI("state", "scalar", "op", "post").path in route
 
 
 def test_grad_tensor_target_fails_until_route_tracing_is_implemented():
@@ -260,7 +260,7 @@ def test_library_routes_use_decorator_time_source_capture(monkeypatch):
     assert "opdef" in route
 
 
-def test_library_routes_reject_non_string_opref_subjects():
+def test_library_routes_accept_uri_subjects_for_oprefs():
     class A(tc.Library):
         publisher = "example-devco"
         resource_name = "a"
@@ -268,13 +268,13 @@ def test_library_routes_reject_non_string_opref_subjects():
 
         @tc.post
         def bad(self):
-            subject = tc.state.subject_of(tc.state.id("foo"))
+            subject = tc.URI("state", "scalar", "value")
             opref = tc.state.GetOpRef(subject)
             return tc.state.Scalar(ref=tc.state.TCRef(opref))
 
     a = A()
-    with pytest.raises(TypeError, match="expected op subject to be str"):
-        compile_ir(a)
+    ir = compile_ir(a)
+    assert any(route["path"] == "/bad" for route in ir["routes"])
 
 
 def test_route_decorators_do_not_accept_name_override():
@@ -438,7 +438,7 @@ def test_library_instances_do_not_accept_dependency_overrides():
         publisher = "example-devco"
         resource_name = "a"
         version = "0.1.0"
-        dependencies = (tc.URI(path=tc.URI.of("lib", "example-devco", "b", "0.1.0")),)
+        dependencies = (tc.URI(path=tc.URI("lib", "example-devco", "b", "0.1.0")),)
 
     with pytest.raises(TypeError, match="dependencies"):
         A(dependencies=())

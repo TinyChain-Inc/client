@@ -58,7 +58,7 @@ class ArtifactPublicIdentity:
 
     def to_uri(self) -> URI:
         try:
-            resolved = URI(path=URI.of("lib", self.publisher, self.name, self.version))
+            resolved = URI("lib", self.publisher, self.name, self.version)
         except ValueError as exc:
             raise ArtifactError("invalid_manifest", str(exc)) from exc
         if not isinstance(resolved, URI):
@@ -340,7 +340,7 @@ def source_library_dependency_uri(
         )
     publisher, name = parts
     try:
-        dependency = URI(path=URI.of("lib", publisher, name, source_library_version))
+        dependency = URI("lib", publisher, name, source_library_version)
     except ValueError as exc:
         raise ArtifactError("invalid_manifest", str(exc)) from exc
     if not isinstance(dependency, URI):

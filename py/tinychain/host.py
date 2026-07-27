@@ -47,12 +47,7 @@ class Host:
         if target.host is not None:
             return target
 
-        return URI(
-            path=target.path,
-            scheme=self.__uri__.scheme,
-            host=self.__uri__.host,
-            port=self.__uri__.port,
-        )
+        return target.with_authority(self.__uri__)
 
     def execute(self, opref: OpRef | Ref) -> object:
         if hasattr(opref, "op"):
@@ -70,12 +65,7 @@ class Host:
         _reject_transaction_query(query)
         target_uri = self.link(target)
         if route:
-            target_uri = URI(
-                path=URI.of(target_uri, route),
-                scheme=target_uri.scheme,
-                host=target_uri.host,
-                port=target_uri.port,
-            )
+            target_uri = target_uri.child(route)
         target = target_uri.absolute()
         _reject_transaction_control(target)
         if not query:

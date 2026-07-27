@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Iterator, Sequence
 
-from ...uri import URI, uri
+from ...uri import URI
 from ..base import State
 
 if TYPE_CHECKING:
@@ -13,6 +13,7 @@ class OpDef:
     __slots__ = ()
 
     METHOD: str = ""
+    __uri__: URI = URI(State, "scalar", "op")
 
     @property
     def method(self) -> str:
@@ -45,13 +46,13 @@ class OpDef:
         return Scalar(ref=PostOpRef(subject, {"op": self}))
 
     def reflect_form(self) -> "Scalar":
-        return self._reflect(URI.of(State, "scalar", "op", "reflect", "form"))
+        return self._reflect(str(URI(type(self), "reflect", "form")))
 
     def reflect_last_id(self) -> "Scalar":
-        return self._reflect(URI.of(State, "scalar", "op", "reflect", "last_id"))
+        return self._reflect(str(URI(type(self), "reflect", "last_id")))
 
     def reflect_scalars(self) -> "Scalar":
-        return self._reflect(URI.of(State, "scalar", "op", "reflect", "scalars"))
+        return self._reflect(str(URI(type(self), "reflect", "scalars")))
 
     def class_(self) -> "Scalar":
         from . import Scalar
@@ -72,7 +73,7 @@ class OpDef:
         if not isinstance(key, str):
             raise TypeError("expected OpDef map key to be a string")
 
-        if key == URI.of(State, "scalar", "op", "get"):
+        if key == str(URI(OpDef, "get")):
             if not isinstance(value, list) or len(value) != 2:
                 raise TypeError("invalid GET opdef encoding")
             key_name, form = value
@@ -80,7 +81,7 @@ class OpDef:
                 raise TypeError("expected GET key name to be a string")
             return GetOpDef(key_name, _decode_form(form))
 
-        if key == URI.of(State, "scalar", "op", "put"):
+        if key == str(URI(OpDef, "put")):
             if not isinstance(value, list) or len(value) != 3:
                 raise TypeError("invalid PUT opdef encoding")
             key_name, value_name, form = value
@@ -88,10 +89,10 @@ class OpDef:
                 raise TypeError("expected PUT key/value names to be strings")
             return PutOpDef(key_name, value_name, _decode_form(form))
 
-        if key == URI.of(State, "scalar", "op", "post"):
+        if key == str(URI(OpDef, "post")):
             return PostOpDef(_decode_form(value))
 
-        if key == URI.of(State, "scalar", "op", "delete"):
+        if key == str(URI(OpDef, "delete")):
             if not isinstance(value, list) or len(value) != 2:
                 raise TypeError("invalid DELETE opdef encoding")
             key_name, form = value
@@ -123,7 +124,7 @@ class GetOpDef(OpDef):
     def to_json(self) -> dict[str, object]:
         from . import _encode_form
 
-        return {URI.of(State, "scalar", "op", "get"): [self.key, _encode_form(self.form)]}
+        return {str(URI(OpDef, "get")): [self.key, _encode_form(self.form)]}
 
 
 class PutOpDef(OpDef):
@@ -148,7 +149,7 @@ class PutOpDef(OpDef):
     def to_json(self) -> dict[str, object]:
         from . import _encode_form
 
-        return {URI.of(State, "scalar", "op", "put"): [self.key, self.value, _encode_form(self.form)]}
+        return {str(URI(OpDef, "put")): [self.key, self.value, _encode_form(self.form)]}
 
 
 class PostOpDef(OpDef):
@@ -168,7 +169,7 @@ class PostOpDef(OpDef):
     def to_json(self) -> dict[str, object]:
         from . import _encode_form
 
-        return {URI.of(State, "scalar", "op", "post"): _encode_form(self.form)}
+        return {str(URI(OpDef, "post")): _encode_form(self.form)}
 
 
 class DeleteOpDef(OpDef):
@@ -192,4 +193,4 @@ class DeleteOpDef(OpDef):
     def to_json(self) -> dict[str, object]:
         from . import _encode_form
 
-        return {URI.of(State, "scalar", "op", "delete"): [self.key, _encode_form(self.form)]}
+        return {str(URI(OpDef, "delete")): [self.key, _encode_form(self.form)]}

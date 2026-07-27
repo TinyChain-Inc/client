@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Iterable, Optional
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class URI:
     """
     A canonical TinyChain path with an optional authority.
@@ -14,10 +14,39 @@ class URI:
     - Authority (scheme/host/port) is deployment configuration used for routing remote dependencies.
     """
 
-    path: str = ""
-    scheme: str = "http"
-    host: Optional[str] = None
-    port: Optional[int] = None
+    path: str
+    scheme: str
+    host: Optional[str]
+    port: Optional[int]
+
+    def __init__(
+        self,
+        subject: object | None = None,
+        *parts: str,
+        path: str | "URI" | None = None,
+        scheme: str = "http",
+        host: Optional[str] = None,
+        port: Optional[int] = None,
+    ) -> None:
+        if path is not None and (subject is not None or parts):
+            raise TypeError("URI accepts either path=... or subject/parts, not both")
+
+        if path is None:
+            if subject is None:
+                resolved_path = ""
+            else:
+                resolved_path = _path_from_subject(subject, *parts)
+        else:
+            if isinstance(path, URI):
+                resolved_path = path.path
+            else:
+                resolved_path = path
+
+        object.__setattr__(self, "path", resolved_path)
+        object.__setattr__(self, "scheme", scheme)
+        object.__setattr__(self, "host", host)
+        object.__setattr__(self, "port", port)
+        self.__post_init__()
 
     def __post_init__(self) -> None:
         if self.path and not self.path.startswith("/"):
@@ -77,31 +106,6 @@ class URI:
     def __str__(self) -> str:
         return self.absolute()
 
-    @classmethod
-    def of(cls, subject: object, *parts: str) -> str:
-        if isinstance(subject, str):
-            if subject.startswith("/"):
-                base = cls.parse(subject)
-                return base.child(*parts).path if parts else base.path
-            if subject.startswith("$") or "://" in subject:
-                base = cls.parse(subject)
-                return base.child(*parts).path if parts else base.path
-
-            segments = [_segment("path", subject), *_path_segments(parts)]
-            return cls(path=_join_path(segments)).path
-
-        resolved = uri(subject)
-        if isinstance(resolved, URI):
-            return resolved.child(*parts).path if parts else resolved.path
-
-        if parts:
-            raise TypeError("cannot append path segments to a Scalar URI")
-
-        raw: object = resolved
-        if hasattr(raw, "to_json"):
-            raw = raw.to_json()
-        return cls.parse(str(raw)).path
-
     def child(self, *parts: str) -> "URI":
         if not parts:
             return self
@@ -110,6 +114,12 @@ class URI:
         base_path = self.path.rstrip("/")
         new_path = _join_path([base_path.lstrip("/")] + segments) if base_path else _join_path(segments)
         return URI(path=new_path, scheme=self.scheme, host=self.host, port=self.port)
+
+    def with_authority(self, authority: "URI | str") -> "URI":
+        parsed = authority if isinstance(authority, URI) else URI.parse(authority)
+        if parsed.host is None:
+            raise ValueError("authority URI must include a host")
+        return URI(path=self.path, scheme=parsed.scheme, host=parsed.host, port=parsed.port)
 
 
 def _segment(label: str, value: str) -> str:
@@ -169,6 +179,28 @@ def _join_path(segments: Iterable[str]) -> str:
     return f"/{joined}" if joined else "/"
 
 
+def _path_from_subject(subject: object, *parts: str) -> str:
+    if isinstance(subject, str):
+        if subject.startswith("/") or subject.startswith("$") or "://" in subject:
+            base = URI.parse(subject)
+            return base.child(*parts).path if parts else base.path
+
+        segments = [_segment("path", subject), *_path_segments(parts)]
+        return _join_path(segments)
+
+    resolved = uri(subject)
+    if isinstance(resolved, URI):
+        return resolved.child(*parts).path if parts else resolved.path
+
+    if parts:
+        raise TypeError("cannot append path segments to a Scalar URI")
+
+    raw: object = resolved
+    if hasattr(raw, "to_json"):
+        raw = raw.to_json()
+    return URI.parse(str(raw)).path
+
+
 def uri(subject: object) -> URI | "Scalar":
     if isinstance(subject, URI):
         return subject
@@ -191,7 +223,7 @@ def uri(subject: object) -> URI | "Scalar":
     if isinstance(subject, str):
         if subject.startswith("/") or subject.startswith("$") or "://" in subject:
             return URI.parse(subject)
-        raise TypeError("uri(...) is an accessor; construct via URI(path=URI.of(...))")
+        raise TypeError("uri(...) is an accessor; construct via URI(...)")
 
     raise TypeError(f"unsupported URI subject: {type(subject).__name__}")
 

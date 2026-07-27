@@ -2,28 +2,28 @@ import tinychain as tc
 
 
 def test_uri_library_builder():
-    root = tc.URI(path=tc.URI.of("lib", "example-devco", "math", "1.2.3"))
+    root = tc.URI("lib", "example-devco", "math", "1.2.3")
     assert root.path == "/lib/example-devco/math/1.2.3"
 
-    route = tc.URI(path=tc.URI.of("lib", "example-devco", "math", "1.2.3", "add"))
+    route = tc.URI("lib", "example-devco", "math", "1.2.3", "add")
     assert route.path == "/lib/example-devco/math/1.2.3/add"
 
 
 def test_uri_service_builder():
-    root = tc.URI(path=tc.URI.of("service", "example-devco", "ml", "trainer", "0.1.0"))
+    root = tc.URI("service", "example-devco", "ml", "trainer", "0.1.0")
     assert root.path == "/service/example-devco/ml/trainer/0.1.0"
 
 
 def test_uri_state_builder():
-    root = tc.URI(path=tc.URI.of("state", "demo", "users"))
+    root = tc.URI("state", "demo", "users")
     assert root.path == "/state/demo/users"
 
-    media = tc.URI(path=tc.URI.of("state", "media", "images", "cats"))
+    media = tc.URI("state", "media", "images", "cats")
     assert media.path == "/state/media/images/cats"
 
 
 def test_uri_healthz_builder():
-    assert tc.URI.of("healthz") == "/healthz"
+    assert tc.URI("healthz").path == "/healthz"
 
 
 def test_authority_and_origin_helpers():

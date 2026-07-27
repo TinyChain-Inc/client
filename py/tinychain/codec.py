@@ -6,13 +6,6 @@ from .state.base import State
 from .state.value import Number
 from .uri import URI
 
-
-_COLLECTION_TENSOR = URI.of(State, "collection", "tensor")
-_DTYPE_F32 = URI.of(Number, "float", "32")
-_DTYPE_F64 = URI.of(Number, "float", "64")
-_DTYPE_U64 = URI.of(Number, "uint", "64")
-
-
 def _decode_tensor(payload: object) -> object:
     if not (isinstance(payload, list) and len(payload) == 2):
         return payload
@@ -42,16 +35,20 @@ def _decode_tensor(payload: object) -> object:
 
     if native_tensor is not None and tensor_type is not None:
         try:
-            if dtype == _DTYPE_F32:
+            if dtype == str(URI(Number, "float", "32")):
                 return tensor_type(native=native_tensor.dense_f32(shape, [float(value) for value in decoded_values]))
-            if dtype == _DTYPE_F64:
+            if dtype == str(URI(Number, "float", "64")):
                 return tensor_type(native=native_tensor.dense_f64(shape, [float(value) for value in decoded_values]))
-            if dtype == _DTYPE_U64:
+            if dtype == str(URI(Number, "uint", "64")):
                 return tensor_type(native=native_tensor.dense_u64(shape, [int(value) for value in decoded_values]))
         except (AttributeError, TypeError, ValueError):
             pass
 
-    if dtype in (_DTYPE_F32, _DTYPE_F64, _DTYPE_U64):
+    if dtype in (
+        str(URI(Number, "float", "32")),
+        str(URI(Number, "float", "64")),
+        str(URI(Number, "uint", "64")),
+    ):
         raise TypeError(f"cannot decode tensor dtype {dtype} into local Tensor backend")
 
     raise TypeError(f"unsupported tensor dtype {dtype}")
@@ -60,7 +57,7 @@ def _decode_tensor(payload: object) -> object:
 def _decode_collections(payload: object) -> object:
     if isinstance(payload, dict) and len(payload) == 1:
         (key, value), = payload.items()
-        if key == _COLLECTION_TENSOR:
+        if key == str(URI(State, "collection", "tensor")):
             return _decode_tensor(value)
     if isinstance(payload, dict):
         return {k: _decode_collections(v) for k, v in payload.items()}
@@ -93,7 +90,7 @@ def decode_payload(payload: object) -> object:
     if isinstance(unwrapped, dict):
         if len(unwrapped) == 1:
             (key, _value), = unwrapped.items()
-            if isinstance(key, str) and key.startswith(URI.of(State, "scalar", "op")):
+            if isinstance(key, str) and key.startswith(str(URI(State, "scalar", "op"))):
                 try:
                     return OpDef.from_json(unwrapped)
                 except (TypeError, ValueError):

@@ -449,10 +449,10 @@ def _typed_from_op_ref(op_ref: OpRef) -> Scalar:
     ref = op_ref
 
     exact_dispatch: dict[str, type[Scalar]] = {
-        URI.of(State, "scalar", "reflect", "ref_parts"): Tuple,
-        URI.of(State, "scalar", "op", "reflect", "form"): Tuple,
-        URI.of(State, "scalar", "op", "reflect", "scalars"): Tuple,
-        URI.of(State, "scalar", "op", "reflect", "last_id"): String,
+        str(URI(Scalar, "reflect", "ref_parts")): Tuple,
+        str(URI(OpDef, "reflect", "form")): Tuple,
+        str(URI(OpDef, "reflect", "scalars")): Tuple,
+        str(URI(OpDef, "reflect", "last_id")): String,
     }
     wrapper = exact_dispatch.get(subject)
     if wrapper is not None:
@@ -571,7 +571,7 @@ class Scalar(State):
     - scalar op defs (typed `/state/scalar/op/*` maps)
     """
 
-    __uri__: URI = URI(path=URI.of(State, "scalar"))
+    __uri__: URI = URI(State, "scalar")
 
     def __init__(self, form: object = None, *, ref: TCRef | None = None, ctx: "Context | None" = None):
         super().__init__(form, ref=ref, ctx=ctx)
@@ -583,19 +583,19 @@ class Scalar(State):
         return rtype._post_ref(subject, {payload_key: payload_value}, ctx=self._ctx)
 
     def class_(self) -> "Scalar":
-        return self._reflect(URI.of(State, "scalar", "reflect", "class"), "scalar", self, rtype=Scalar)
+        return self._reflect(str(URI(Scalar, "reflect", "class")), "scalar", self, rtype=Scalar)
 
     def ref_parts(self) -> "Tuple":
-        return cast(Tuple, self._reflect(URI.of(State, "scalar", "reflect", "ref_parts"), "scalar", self, rtype=Tuple))
+        return cast(Tuple, self._reflect(str(URI(Scalar, "reflect", "ref_parts")), "scalar", self, rtype=Tuple))
 
     def reflect_form(self) -> "Tuple":
-        return cast(Tuple, self._reflect(URI.of(State, "scalar", "op", "reflect", "form"), "op", self, rtype=Tuple))
+        return cast(Tuple, self._reflect(str(URI(OpDef, "reflect", "form")), "op", self, rtype=Tuple))
 
     def reflect_last_id(self) -> "String":
-        return cast(String, self._reflect(URI.of(State, "scalar", "op", "reflect", "last_id"), "op", self, rtype=String))
+        return cast(String, self._reflect(str(URI(OpDef, "reflect", "last_id")), "op", self, rtype=String))
 
     def reflect_scalars(self) -> "Tuple":
-        return cast(Tuple, self._reflect(URI.of(State, "scalar", "op", "reflect", "scalars"), "op", self, rtype=Tuple))
+        return cast(Tuple, self._reflect(str(URI(OpDef, "reflect", "scalars")), "op", self, rtype=Tuple))
 
     @staticmethod
     def from_json(obj: Any) -> "Scalar":
@@ -614,7 +614,7 @@ class Scalar(State):
 
             if len(obj) == 1:
                 (key, _), = obj.items()
-                if isinstance(key, str) and key.startswith(URI.of(State, "scalar", "op")):
+                if isinstance(key, str) and key.startswith(str(URI(OpDef))):
                     return Scalar(OpDef.from_json(obj))
 
             # Decode TCRef/OpRef maps before generic Value maps to avoid

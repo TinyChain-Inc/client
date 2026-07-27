@@ -95,4 +95,4 @@ def test_mint_rjwt_token_requires_claims():
 def test_auth_context_helper_uses_host_route():
     context_ref = tc.auth.context()
     assert isinstance(context_ref, tc.Ref)
-    assert context_ref.op.path == tc.URI.of("host", "auth", "context")
+    assert context_ref.op.path == tc.URI("host", "auth", "context").path

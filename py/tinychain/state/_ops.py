@@ -101,11 +101,11 @@ def _state_subject(owner: object, form: object, *, ctx: "Context | None" = None)
             return subject
 
         if isinstance(ref_form, Cond):
-            return URI.of(TCRef, "cond")
+            return str(URI(TCRef, "cond"))
         if isinstance(ref_form, While):
-            return URI.of(TCRef, "while")
+            return str(URI(TCRef, "while"))
         if isinstance(ref_form, ForEach):
-            return URI.of(TCRef, "for_each")
+            return str(URI(TCRef, "for_each"))
 
     if isinstance(form, Mapping) and len(form) == 1:
         (key, _value), = form.items()

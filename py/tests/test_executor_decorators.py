@@ -86,7 +86,7 @@ def test_stub_route_dispatch(monkeypatch):
         op = a.hello()
         assert isinstance(op, tc.OpRef)
         assert op.method == "GET"
-        expected = tc.URI.of(a, "hello")
+        expected = tc.URI(a, "hello").path
         assert op.path == expected
 
     with tc.backend(kernel):
@@ -116,7 +116,7 @@ def test_stub_route_dispatch_forwards_bearer(monkeypatch):
     with tc.backend(kernel, token=_token("t")):
         assert b.hello() == "ok"
 
-    expected = tc.URI.of(b, "hello")
+    expected = tc.URI(b, "hello").path
     assert len(kernel.dispatched) == 1
     method, path, headers, _body = kernel.dispatched[0]
     assert (method, path) == ("GET", expected)
@@ -166,7 +166,7 @@ def test_stub_route_accepts_body_and_dispatches(monkeypatch):
 
     with tc.backend(kernel):
         assert d.hello("World") == "ok"
-    expected = tc.URI.of(d, "hello")
+    expected = tc.URI(d, "hello").path
     assert len(kernel.dispatched) == 1
     method, path, _headers, body = kernel.dispatched[0]
     assert (method, path) == ("GET", expected)
@@ -192,7 +192,7 @@ def test_backend_eager_mode_executes_stub_calls_by_default(monkeypatch):
     with tc.backend(kernel, token=_token("token-auto")):
         assert e.hello() == "ok"
 
-    expected = tc.URI.of(e, "hello")
+    expected = tc.URI(e, "hello").path
     assert len(kernel.dispatched) == 1
     method, path, headers, _body = kernel.dispatched[0]
     assert (method, path) == ("GET", expected)
@@ -220,7 +220,7 @@ def test_backend_mode_deferred_returns_plan(monkeypatch):
         assert isinstance(deferred, tc.String)
         assert tc.execute(deferred) == "ok"
 
-    expected = tc.URI.of(f, "hello")
+    expected = tc.URI(f, "hello").path
     assert len(kernel.dispatched) == 1
     method, path, _headers, _body = kernel.dispatched[0]
     assert (method, path) == ("GET", expected)
@@ -254,7 +254,7 @@ def test_backend_mode_can_be_switched_by_nested_backend_context(monkeypatch):
         eager_again = g.hello()
         assert eager_again == "ok"
 
-    expected = tc.URI.of(g, "hello")
+    expected = tc.URI(g, "hello").path
     assert len(kernel.dispatched) == 3
     for method, path, headers, _body in kernel.dispatched:
         assert (method, path) == ("GET", expected)
@@ -332,7 +332,7 @@ def test_backend_mode_deferred_preserves_cross_library_dependency_paths(monkeypa
         assert tc.execute(local_plan) == "ok"
         assert tc.execute(remote_plan) == {"remote": "ok"}
 
-    local_path = tc.URI.of(local, "hello")
+    local_path = tc.URI(local, "hello").path
     assert any(path == local_path for _, path, _, _ in kernel.dispatched)
     assert any(path.startswith("https://api.example.test/") for _, path, _, _ in remote.calls)
 

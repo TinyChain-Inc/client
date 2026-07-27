@@ -12,10 +12,10 @@ from .uri import URI
 
 DType = Literal["i64", "u64", "f32", "f64"]
 
-TENSOR_CLASS_URI = URI(path=URI.of(State, "collection", "tensor"))
-NUMBER_CLASS_URI = URI(path=URI.of(Number))
+TENSOR_CLASS_URI = URI(State, "collection", "tensor")
+NUMBER_CLASS_URI = URI(Number)
 
-NUMERIC_OPS_CLASS_ROOT_URI = URI(path=URI.of("class", "tinychain", "numeric", "0.1.0"))
+NUMERIC_OPS_CLASS_ROOT_URI = URI("class", "tinychain", "numeric", "0.1.0")
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,7 +72,7 @@ class ScalarType:
 
     def to_json(self) -> dict:
         return {
-            "class": URI.of(NUMBER_CLASS_URI),
+            "class": str(NUMBER_CLASS_URI),
             "params": {"dtype": self.dtype, "encoding": self.encoding.to_json()},
         }
 
@@ -85,7 +85,7 @@ class TensorType:
 
     def to_json(self) -> dict:
         return {
-            "class": URI.of(TENSOR_CLASS_URI),
+            "class": str(TENSOR_CLASS_URI),
             "params": {
                 "dtype": self.dtype,
                 "shape": list(self.shape),
@@ -178,7 +178,7 @@ class OpGraph:
     _next_value: int = 0
     _next_node: int = 0
 
-    TYPE_TAG_URI = URI(path=URI.of(Value, "op_graph"))
+    TYPE_TAG_URI = URI(Value, "op_graph")
 
     def _alloc_value(self, name: str) -> int:
         if name in self._values:
@@ -212,7 +212,7 @@ class OpGraph:
         transpose_a: bool = False,
         transpose_b: bool = False,
         out_type: Optional[TensorType] = None,
-        operator: str = f"{URI.of(NUMERIC_OPS_CLASS_ROOT_URI)}/matmul",
+        operator: str = f"{NUMERIC_OPS_CLASS_ROOT_URI}/matmul",
     ) -> "OpGraph":
         out_id = self._alloc_value(out)
         op = {operator: {"transpose_a": transpose_a, "transpose_b": transpose_b}}
@@ -236,7 +236,7 @@ class OpGraph:
         bits: int,
         scale_pow2: int,
         out_type: Optional[ValueType] = None,
-        operator: str = f"{URI.of(NUMERIC_OPS_CLASS_ROOT_URI)}/quantize",
+        operator: str = f"{NUMERIC_OPS_CLASS_ROOT_URI}/quantize",
     ) -> "OpGraph":
         out_id = self._alloc_value(out)
         op = {operator: {"signed": signed, "bits": bits, "scale_pow2": scale_pow2}}
@@ -258,7 +258,7 @@ class OpGraph:
             "nodes": [n.to_json() for n in self._nodes],
             "outputs": [o.to_json() for o in self._outputs],
         }
-        return {URI.of(self.TYPE_TAG_URI): payload}
+        return {str(self.TYPE_TAG_URI): payload}
 
 
 def analyze_opref(
@@ -276,7 +276,7 @@ def analyze_opref(
     if target:
         body["target"] = target.to_json()
 
-    route_path = URI.of("lib", publisher, "compute", compute_version, "analyze")
+    route_path = str(URI("lib", publisher, "compute", compute_version, "analyze"))
 
     return opref_post(route_path, body=body)
 
@@ -292,7 +292,7 @@ def run_opref(
     publisher: str = "tinychain",
     headers: Optional[Iterable[tuple[str, str]]] = None,
 ) -> OpRef[Any]:
-    route_path = URI.of("lib", publisher, "compute", compute_version, "run")
+    route_path = str(URI("lib", publisher, "compute", compute_version, "run"))
 
     op = opref_post(route_path, body={"graph": graph.to_json(), "inputs": dict(inputs)})
     return op.with_headers(headers)

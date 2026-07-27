@@ -68,7 +68,7 @@ def test_scalar_roundtrip_nested_map_and_tuple():
 
 
 def test_scalar_opref_encoding_get_put_post_delete():
-    subject = tc.URI.of("lib", "acme", "foo", "1.0.0")
+    subject = tc.URI("lib", "acme", "foo", "1.0.0").path
     get = tc.state.Get(subject)(tc.state.Null()).to_json()
     assert get == {subject: [None]}
 
@@ -80,7 +80,7 @@ def test_scalar_opref_encoding_get_put_post_delete():
         ]
     }
 
-    matmul = tc.URI.of("class", "tinychain", "numeric", "0.1.0", "matmul")
+    matmul = tc.URI("class", "tinychain", "numeric", "0.1.0", "matmul").path
     post = tc.state.Post(matmul)({"transpose_a": tc.Number(False)}).to_json()
     assert post == {
         matmul: {"transpose_a": False}
@@ -88,7 +88,7 @@ def test_scalar_opref_encoding_get_put_post_delete():
 
     delete = tc.state.Delete(subject)(tc.String("k")).to_json()
     assert delete == {
-        tc.URI.of("state", "scalar", "ref", "op", "delete"): [
+        tc.URI("state", "scalar", "ref", "op", "delete").path: [
             subject,
             "k",
         ]
@@ -96,7 +96,7 @@ def test_scalar_opref_encoding_get_put_post_delete():
 
 
 def test_scalar_method_handles_have_distinct_hashes_and_typed_args():
-    subject = tc.URI.of("lib", "acme", "foo", "1.0.0")
+    subject = tc.URI("lib", "acme", "foo", "1.0.0").path
 
     assert hash(tc.state.Get(subject)) != hash(tc.state.Put(subject))
     assert hash(tc.state.Post(subject)) != hash(tc.state.Delete(subject))
@@ -199,12 +199,12 @@ def test_complex_methods_are_subclass_only():
 
 
 def test_value_type_uri_hierarchy_is_parent_appended():
-    assert tc.state.Value.__uri__.path == tc.URI.of("state", "scalar", "value")
-    assert tc.state.Number.__uri__.path == tc.URI.of(tc.state.Value, "number")
-    assert tc.state.Float.__uri__.path == tc.URI.of(tc.state.Number, "float")
-    assert tc.state.F32.__uri__.path == tc.URI.of(tc.state.Float, "32")
-    assert tc.state.Complex.__uri__.path == tc.URI.of(tc.state.Number, "complex")
-    assert tc.state.C128.__uri__.path == tc.URI.of(tc.state.Complex, "128")
+    assert tc.state.Value.__uri__.path == tc.URI("state", "scalar", "value").path
+    assert tc.state.Number.__uri__.path == tc.URI(tc.state.Value, "number").path
+    assert tc.state.Float.__uri__.path == tc.URI(tc.state.Number, "float").path
+    assert tc.state.F32.__uri__.path == tc.URI(tc.state.Float, "32").path
+    assert tc.state.Complex.__uri__.path == tc.URI(tc.state.Number, "complex").path
+    assert tc.state.C128.__uri__.path == tc.URI(tc.state.Complex, "128").path
 
 
 def test_value_from_json_delegates_by_uri_to_concrete_subclass():
@@ -304,5 +304,5 @@ def test_autobox_numpy_array_to_tensor_state():
 
     assert isinstance(boxed, tc.Tensor)
     assert boxed.to_json() == {
-        tc.URI.of(tc.Tensor): [[matrix.dtype, matrix.shape], [1.0, 2.0, 3.0, 4.0]]
+        tc.URI(tc.Tensor).path: [[matrix.dtype, matrix.shape], [1.0, 2.0, 3.0, 4.0]]
     }

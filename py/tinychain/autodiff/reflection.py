@@ -34,7 +34,7 @@ def tensor_typespec_to_type_spec(typespec_dict: dict) -> TypeSpec:
             "invalid_type_spec",
             f"tensor_typespec must be a dict, got {type(typespec_dict).__name__}",
         )
-    return TypeSpec(class_uri=URI.of(State, "collection", "tensor"), params=dict(typespec_dict))
+    return TypeSpec(class_uri=str(URI(State, "collection", "tensor")), params=dict(typespec_dict))
 
 
 def reflect_derivative_program(program: DerivativeProgram) -> list[TypedValueRef]:
@@ -62,7 +62,7 @@ def reflect_derivative_program(program: DerivativeProgram) -> list[TypedValueRef
         if node.output_typespec is not None:
             value_type = tensor_typespec_to_type_spec(node.output_typespec)
         else:
-            value_type = TypeSpec(class_uri=URI.of(State, "collection", "tensor"), params={})
+            value_type = TypeSpec(class_uri=str(URI(State, "collection", "tensor")), params={})
         ref = TypedValueRef(
             namespace=namespace,
             value=node.output_value_id,

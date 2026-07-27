@@ -128,6 +128,11 @@ staying thin and well-documented for new users.
   returns a typed symbolic scalar ref.
 - Keep URI values structured until the serialization/transport boundary; avoid
   extracting `.path` in symbolic wrappers.
+- Treat `.path` as a boundary-only escape hatch. In runtime/domain code, pass
+  `URI` values directly and prefer `str(uri_value)` at encode/transport boundaries
+  (JSON keys, HTTP/kernel request paths) instead of `URI(...).path` extraction.
+  Do not introduce new `URI(...).path` constructions outside explicit boundary
+  adapters.
 - For runtime URI composition, use `uri(TypeOrInstance, ...)` and `URI(...)`
   directly. `uri(...)` is the generic type/instance accessor and path builder;
   `URI(...)` is the explicit constructor. Do not define local URI-constructor

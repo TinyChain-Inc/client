@@ -46,13 +46,6 @@ def _as_request_target(value: object) -> RequestTarget:
     )
 
 
-def _path_from_opref(op_path: object) -> str:
-    path = str(op_path)
-    if not path:
-        raise ValueError("OpRef path must be non-empty")
-    return path
-
-
 @dataclass(frozen=True, slots=True)
 class _RemoteRoute:
     target: RequestTarget
@@ -223,24 +216,16 @@ def _as_headers(value: object) -> Optional[Iterable[tuple[str, str]]]:
 def _encode_body(body: Any) -> "object":
     if body is None or _is_state_handle(body):
         return body
-    return _encode_json_body(body)
-
-
-def _encode_dispatch_body(body: Any) -> "object":
-    if body is None or _is_state_handle(body):
-        return body
-
-    from . import _local
 
     if isinstance(body, (bytes, bytearray)):
+        from . import _local
+
         try:
             return _local.state_handle(bytes(body))
         except ImportError:
-            return _encode_body(body)
-    if isinstance(body, str):
-        return _encode_body(body)
+            pass
 
-    return _encode_body(body)
+    return _encode_json_body(body)
 
 
 def _kernel_dispatch(kernel: object, method: str, path: str, headers, body) -> object:
@@ -286,7 +271,7 @@ def execute(opref: "object", *, executor: "Executor | None" = None) -> object:
     if not isinstance(opref, OpRef):
         raise TypeError(f"expected OpRef or Ref, got {type(opref).__name__}")
 
-    path = _path_from_opref(opref.path)
+    path = opref.path
     exec_ctx = executor or try_current()
     if exec_ctx is None:
         exec_ctx = _default_executor_for_path(path)
@@ -319,7 +304,7 @@ def execute(opref: "object", *, executor: "Executor | None" = None) -> object:
             method,
             path,
             headers,
-            _encode_dispatch_body(opref.body),
+            _encode_body(opref.body),
         )
 
     if isinstance(opref, (PutOpRef, PostOpRef, DeleteOpRef)):

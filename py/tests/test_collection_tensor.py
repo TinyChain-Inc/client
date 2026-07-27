@@ -41,19 +41,19 @@ def test_tensor_v1_surface_helpers_are_available():
     y = tc.Tensor(ref=tc.state.TCRef(tc.state.IdRef("y")))
 
     assert _json(tc.einsum("ij,jk->ik", [x, y])) == {
-        str(tc.URI(path=tc.URI.of("state", "collection", "tensor", "einsum"))): {
+        str(tc.URI("state", "collection", "tensor", "einsum")): {
             "format": "ij,jk->ik",
             "tensors": [{"$x": []}, {"$y": []}],
         }
     }
     assert _json(tc.concatenate([x, y], axis=0)) == {
-        str(tc.URI(path=tc.URI.of("state", "collection", "tensor", "concatenate"))): {
+        str(tc.URI("state", "collection", "tensor", "concatenate")): {
             "axis": 0,
             "tensors": [{"$x": []}, {"$y": []}],
         }
     }
     assert _json(tc.tile(x, [2, 1])) == {
-        str(tc.URI(path=tc.URI.of("state", "collection", "tensor", "tile"))): {
+        str(tc.URI("state", "collection", "tensor", "tile")): {
             "multiples": [2, 1],
             "tensor": {"$x": []},
         }

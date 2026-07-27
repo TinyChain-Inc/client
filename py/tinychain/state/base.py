@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 
 class State:
     __slots__ = ("_form", "_ctx")
-    __uri__: URI = URI(path=URI.of("state"))
+    __uri__: URI = URI("state")
 
     def __init__(self, form: object = None, *, ref: TCRef | None = None, ctx: "Context | None" = None):
         if form is not None and ref is not None:
