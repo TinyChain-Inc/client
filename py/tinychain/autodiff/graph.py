@@ -8,7 +8,8 @@ from typing import Optional
 
 from ..serialize import serialize
 
-# Differentiable dtypes accepted by TensorGraphBuilder.input(...) (spec §7.3.4).
+# Differentiable dtypes accepted by TensorGraphBuilder.input(...)
+# (spec §7.3.4; https://github.com/TinyChain-Inc/client/issues/95).
 _INPUT_DTYPES: tuple[str, ...] = ("f32", "f64")
 
 
@@ -182,7 +183,8 @@ class TensorGraphBuilder:
         self._value_map: dict[int, str] = {}
         self._outputs: list[str] = []
         self._token: Optional[contextvars.Token[Optional[TensorGraphBuilder]]] = None
-        # Builder-owned typed-tracing side tables (client ADR-004). These are
+        # Builder-owned typed-tracing side tables (client ADR-004; issue 95
+        # https://github.com/TinyChain-Inc/client/issues/95). These are
         # never exposed to public callers and are separate from `_value_map`
         # (Invariant 10): `_value_map` only resolves `id(obj) -> value_id`,
         # while `_retained_values` keeps the object itself alive so a GC'd
@@ -274,8 +276,9 @@ class TensorGraphBuilder:
         """Declare a named, typed graph input and return an ordinary symbolic `Tensor`.
 
         Requires this builder to be the active trace context (client ADR-004,
-        spec §7.3). The returned `Tensor` is built through the canonical
-        state-reference builders; no raw type-spec dict is ever exposed.
+        spec §7.3; https://github.com/TinyChain-Inc/client/issues/95). The
+        returned `Tensor` is built through the canonical state-reference
+        builders; no raw type-spec dict is ever exposed.
         """
         if get_active_builder() is not self:
             raise RuntimeError("TensorGraphBuilder.input(...) requires this builder to be the active trace context")
@@ -344,5 +347,6 @@ class TensorGraphBuilder:
             _active_builder.reset(self._token)
             self._token = None
         # Retention/metadata persist after exit; only discarding the builder
-        # instance releases them (spec §8.3, §12.5).
+        # instance releases them (spec §8.3, §12.5;
+        # https://github.com/TinyChain-Inc/client/issues/95).
         self._completed = True
