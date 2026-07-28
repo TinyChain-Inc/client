@@ -58,6 +58,7 @@ def test_autodiff_error_categories_cover_spec_codes():
         "malformed_derivative_ir",
         "side_effecting_route_unsupported",
         "autodiff_not_implemented",
+        "dtype_mismatch",
     }
 
     assert set(AUTODIFF_ERROR_CATEGORIES) == expected

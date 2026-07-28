@@ -26,6 +26,7 @@ AUTODIFF_ERROR_CATEGORIES: tuple[str, ...] = (
     "malformed_derivative_ir",
     "side_effecting_route_unsupported",
     "autodiff_not_implemented",
+    "dtype_mismatch",
 )
 
 
