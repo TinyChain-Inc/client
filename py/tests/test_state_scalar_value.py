@@ -1,3 +1,5 @@
+import json
+
 import tinychain as tc
 import pytest
 
@@ -303,6 +305,8 @@ def test_autobox_numpy_array_to_tensor_state():
     boxed = tc.state.autobox(matrix)
 
     assert isinstance(boxed, tc.Tensor)
-    assert boxed.to_json() == {
-        tc.URI(tc.Tensor).path: [[matrix.dtype, matrix.shape], [1.0, 2.0, 3.0, 4.0]]
+    encoded = boxed.to_json()
+    assert encoded == {
+        tc.URI(tc.Tensor).path: [[tc.URI(tc.Number, "float", "32").path, matrix.shape], [1.0, 2.0, 3.0, 4.0]]
     }
+    assert isinstance(json.dumps(encoded), str)

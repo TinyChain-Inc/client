@@ -447,17 +447,16 @@ class Tensor(Comparable):
         if self._native is None:
             return super().to_json()
 
-        dtype = self.dtype
-        if isinstance(dtype, str):
-            normalized = dtype.strip().lower()
-            dtype = {
-                "f32": str(_F32_DTYPE_URI),
-                "float32": str(_F32_DTYPE_URI),
-                "f64": str(_F64_DTYPE_URI),
-                "float64": str(_F64_DTYPE_URI),
-                "u64": str(_U64_DTYPE_URI),
-                "uint64": str(_U64_DTYPE_URI),
-            }.get(normalized, dtype)
+        dtype_text = str(self.dtype)
+        normalized = dtype_text.strip().lower()
+        dtype = {
+            "f32": str(_F32_DTYPE_URI),
+            "float32": str(_F32_DTYPE_URI),
+            "f64": str(_F64_DTYPE_URI),
+            "float64": str(_F64_DTYPE_URI),
+            "u64": str(_U64_DTYPE_URI),
+            "uint64": str(_U64_DTYPE_URI),
+        }.get(normalized, dtype_text)
 
         return {
             str(TENSOR_CLASS_URI): [
