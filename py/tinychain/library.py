@@ -15,10 +15,12 @@ from .ref import Ref
 from . import _autograph
 from .state import Collection, ContextResult, DeleteOpDef, DeleteOpRef, GetOpDef, GetOpRef, IdRef, OpDef, OpRef as StateOpRef, PostOpDef, PostOpRef, PutOpDef, PutOpRef, Scalar, TCRef, autobox, context, current_context, form_of, map_of as scalar_map_of, scalar_for_hint, scoped_context, tuple_of as scalar_tuple_of
 from .state.value import Bool, Map, Number, String, Tuple, Value
-from .uri import URI, _segment, uri as _uri, validate_resource_name
+from .uri import URI, _segment, validate_resource_name
 
 
 _INJECTED_ROUTE_PARAM_NAMES = {"cxt", "ctx", "txn"}
+_LIB_ROOT_URI = URI("lib")
+_LIB_WASM_URI = URI("lib", "wasm")
 
 def _is_method(form: Callable[..., Any]) -> bool:
     names = list(getattr(form, "__code__", None).co_varnames or ())
@@ -970,7 +972,7 @@ def _submit_remote_library_definition(
         host = remote if token is None else Host(remote.__uri__.absolute(), token=token)
     else:
         host = Host(str(remote), token=token)
-    return host.request("PUT", _uri("lib").path, body=definition)
+    return host.request("PUT", _LIB_ROOT_URI.path, body=definition)
 
 
 def _kernel_for_library_install(
@@ -1020,7 +1022,7 @@ def _header_value(response: object, name: str) -> str | None:
 def _submit_local_library_definition(kernel: object, definition: dict, *, bearer_token: str) -> object:
     from . import _local
 
-    install_path = _uri("lib").path
+    install_path = _LIB_ROOT_URI.path
     body = json.dumps(definition, separators=(",", ":"))
     headers = [("authorization", f"Bearer {bearer_token}")]
     request = _local.kernel_request("PUT", install_path, headers, _local.state_handle(body))
@@ -1046,7 +1048,7 @@ def _compiled_library_package_for_wasm(
         "schema": schema,
         "artifacts": [
             {
-                "path": _uri("lib", "wasm").path,
+                "path": _LIB_WASM_URI.path,
                 "content_type": "application/wasm",
                 "bytes": _read_wasm_b64(wasm_path),
             }

@@ -294,10 +294,10 @@ class TensorGraphBuilder:
             raise ValueError(f"TensorGraphBuilder.input(...) dtype must be one of {_INPUT_DTYPES}, got {dtype!r}")
         normalized_shape = self._normalize_input_shape(shape)
 
-        from ..state.scalar import IdRef, TCRef
+        from ..state.scalar import IdRef
         from ..collection.tensor import Tensor
 
-        value = Tensor(ref=TCRef(IdRef(name)))
+        value = Tensor(ref=IdRef(name))
         value_id = self.register_value(value)
         self._set_value_metadata(value_id, dtype=dtype, shape=normalized_shape)
         self._input_value_ids.append(value_id)

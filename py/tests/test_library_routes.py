@@ -138,6 +138,7 @@ def test_library_routes_preserve_all_dict_return_keys():
 def test_library_routes_ref_typed_mapping_return_is_result_value():
     class A(tc.Library):
         publisher = "example-devco"
+        resource_name = "a"
         version = "0.1.0"
 
         @tc.post
@@ -157,6 +158,7 @@ def test_library_routes_ref_typed_mapping_return_is_result_value():
 def test_library_route_symbolic_post_body_skips_eager_execute(monkeypatch):
     class A(tc.Library):
         publisher = "example-devco"
+        resource_name = "a"
         version = "0.1.0"
 
         @tc.post
