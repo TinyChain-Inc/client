@@ -8,7 +8,7 @@ from typing import ClassVar
 
 from ..library import Library, Route, get
 from ..serialize import serialize
-from ..uri import URI, _python_name_to_resource, uri
+from ..uri import URI, _python_name_to_resource
 from .compile import compile_derivative_program
 from .protocol import DerivativeMetadata
 
@@ -58,7 +58,7 @@ class ArtifactPublicIdentity:
 
     def to_uri(self) -> URI:
         try:
-            resolved = uri("lib", self.publisher, self.name, self.version)
+            resolved = URI("lib", self.publisher, self.name, self.version)
         except ValueError as exc:
             raise ArtifactError("invalid_manifest", str(exc)) from exc
         if not isinstance(resolved, URI):
@@ -138,9 +138,7 @@ class DerivativeArtifactManifest:
             seed_contract=str(data["seed_contract"]),
             visibility=str(data.get("visibility", "public")),
             digest_algorithm=str(data.get("digest_algorithm", "sha256")),
-            artifact_digest=_optional_string(
-                data.get("artifact_digest", data.get("digest"))
-            ),
+            artifact_digest=_optional_string(data.get("artifact_digest")),
             source_library=_optional_string(
                 data.get("source_library", data.get("source_library_id"))
             ),
@@ -342,7 +340,7 @@ def source_library_dependency_uri(
         )
     publisher, name = parts
     try:
-        dependency = uri("lib", publisher, name, source_library_version)
+        dependency = URI("lib", publisher, name, source_library_version)
     except ValueError as exc:
         raise ArtifactError("invalid_manifest", str(exc)) from exc
     if not isinstance(dependency, URI):
@@ -670,4 +668,3 @@ def _validate_library_dependency_path(dependency: URI, expected_version: str) ->
             "invalid_manifest",
             "source_library dependency version must match source_library_version",
         )
-

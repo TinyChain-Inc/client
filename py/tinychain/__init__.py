@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import importlib
+import importlib.util
+
 from .autodiff.callsite import grad
 from .library import Library, delete, get, install, post, put
 from .codec import decode_response_body
@@ -77,6 +80,10 @@ globals().pop("wasm", None)
 def execute(op: "OpRef | Ref") -> object:
     if hasattr(op, "op"):
         op = op.op
+    elif hasattr(op, "_form"):
+        form = getattr(op, "_form")
+        if isinstance(form, (OpRef, Ref)):
+            op = form
     if not isinstance(op, (OpRef, Ref)):
         raise TypeError(f"expected OpRef or Ref, got {type(op).__name__}")
 
@@ -106,9 +113,8 @@ def execute(op: "OpRef | Ref") -> object:
 
 # Optional local (PyO3) backend. Keep bridge-specific classes private to
 # `tinychain_local`; public Python APIs use `tc.backend`, `tc.kernel`, and `tc.Host`.
-try:  # pragma: no cover
-    import tinychain_local as local  # type: ignore
-
+if importlib.util.find_spec("tinychain_local") is not None:  # pragma: no cover
+    local = importlib.import_module("tinychain_local")  # type: ignore
     Backend = local.Backend
     KernelHandle = local.KernelHandle
     KernelRequest = local.KernelRequest
@@ -116,7 +122,7 @@ try:  # pragma: no cover
     State = local.State
     StateHandle = local.StateHandle
     LocalTensor = local.Tensor
-except ImportError:  # pragma: no cover
+else:  # pragma: no cover
     local = None
 
     class _MissingBackend:

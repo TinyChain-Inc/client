@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from .state import autobox
-from .state.context import current_context
+from .state.context import resolve_context
 
 
 def after(dependency, then):
@@ -12,7 +12,7 @@ def after(dependency, then):
     helper binds `dependency` into the current context form so `then` is evaluated
     after it. Returning `then` preserves the caller's type wrapper for method chaining.
     """
-    ctx = current_context()
+    ctx = resolve_context()
     if ctx is not None:
         ctx.bind_auto(autobox(dependency), prefix="_after")
     return then

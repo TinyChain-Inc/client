@@ -88,8 +88,8 @@ def test_execute_decodes_canonical_scalar_array(monkeypatch):
 
 def test_execute_decodes_typed_tensor_when_available(monkeypatch):
     payload = {
-        tc.uri("state", "collection", "tensor").path: [
-            [tc.uri("state", "scalar", "value", "number", "uint", "64").path, [2]],
+        tc.URI("state", "collection", "tensor").path: [
+            [tc.URI("state", "scalar", "value", "number", "uint", "64").path, [2]],
             [10, 11],
         ]
     }
@@ -114,8 +114,8 @@ def test_execute_decodes_typed_tensor_when_available(monkeypatch):
 
 def test_execute_decodes_f64_tensor_when_available(monkeypatch):
     payload = {
-        tc.uri("state", "collection", "tensor").path: [
-            [tc.uri("state", "scalar", "value", "number", "float", "64").path, [2]],
+        tc.URI("state", "collection", "tensor").path: [
+            [tc.URI("state", "scalar", "value", "number", "float", "64").path, [2]],
             [1.25, 2.5],
         ]
     }
@@ -140,8 +140,8 @@ def test_execute_decodes_f64_tensor_when_available(monkeypatch):
 
 def test_execute_rejects_unknown_tensor_dtype(monkeypatch):
     payload = {
-        tc.uri("state", "collection", "tensor").path: [
-            [tc.uri("state", "scalar", "value", "number", "int", "64").path, [2]],
+        tc.URI("state", "collection", "tensor").path: [
+            [tc.URI("state", "scalar", "value", "number", "int", "64").path, [2]],
             [1, 2],
         ]
     }

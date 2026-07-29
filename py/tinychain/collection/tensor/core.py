@@ -4,7 +4,7 @@ from collections.abc import Callable
 from numbers import Number as NumberABC
 from typing import Literal
 
-from ...uri import URI, path
+from ...uri import URI
 from ...state.scalar import (
     Bool,
     Comparable,
@@ -15,6 +15,7 @@ from ...state.scalar import (
     autobox,
     tcref_form_of,
 )
+from ...state.value import Number as ValueNumber
 from ...autodiff.graph import AddOperator, MatmulOperator, TensorNodeRecord, TransposeOperator, get_active_builder
 from ._common import infer_broadcast_axes, normalize_permutation, normalize_shape, params, reduce_args
 from ._wire import encode_view_schema
@@ -23,6 +24,10 @@ from .routes import TENSOR_CLASS_URI, tensor_route
 from .schema import TensorStorageLayout, TensorStorageSchema, TensorViewSchema
 from .view_ops import BroadcastViewOp, ReshapeViewOp, SliceViewOp, TensorViewOp, TransposeViewOp
 from .view_spec import TensorViewSpec
+
+_F32_DTYPE_URI = URI(ValueNumber, "float", "32")
+_F64_DTYPE_URI = URI(ValueNumber, "float", "64")
+_U64_DTYPE_URI = URI(ValueNumber, "uint", "64")
 
 
 class Tensor(Comparable):
@@ -442,17 +447,16 @@ class Tensor(Comparable):
         if self._native is None:
             return super().to_json()
 
-        dtype = self.dtype
-        if isinstance(dtype, str):
-            normalized = dtype.strip().lower()
-            dtype = {
-                "f32": path("state", "scalar", "value", "number", "float", "32"),
-                "float32": path("state", "scalar", "value", "number", "float", "32"),
-                "f64": path("state", "scalar", "value", "number", "float", "64"),
-                "float64": path("state", "scalar", "value", "number", "float", "64"),
-                "u64": path("state", "scalar", "value", "number", "uint", "64"),
-                "uint64": path("state", "scalar", "value", "number", "uint", "64"),
-            }.get(normalized, dtype)
+        dtype_text = str(self.dtype)
+        normalized = dtype_text.strip().lower()
+        dtype = {
+            "f32": str(_F32_DTYPE_URI),
+            "float32": str(_F32_DTYPE_URI),
+            "f64": str(_F64_DTYPE_URI),
+            "float64": str(_F64_DTYPE_URI),
+            "u64": str(_U64_DTYPE_URI),
+            "uint64": str(_U64_DTYPE_URI),
+        }.get(normalized, dtype_text)
 
         return {
             str(TENSOR_CLASS_URI): [

@@ -4,15 +4,18 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Literal, Mapping, Optional
 
 from .opref import OpRef, post as opref_post
-from .uri import path
+from .state.base import State
+from .state.value import Number
+from .state.value import Value
+from .uri import URI
 
 
 DType = Literal["i64", "u64", "f32", "f64"]
 
-TENSOR_CLASS: str = path("state", "collection", "tensor")
-NUMBER_CLASS: str = path("state", "scalar", "value", "number")
+TENSOR_CLASS_URI = URI(State, "collection", "tensor")
+NUMBER_CLASS_URI = URI(Number)
 
-NUMERIC_OPS_CLASS_ROOT: str = path("class", "tinychain", "numeric", "0.1.0")
+NUMERIC_OPS_CLASS_ROOT_URI = URI("class", "tinychain", "numeric", "0.1.0")
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,7 +72,7 @@ class ScalarType:
 
     def to_json(self) -> dict:
         return {
-            "class": NUMBER_CLASS,
+            "class": str(NUMBER_CLASS_URI),
             "params": {"dtype": self.dtype, "encoding": self.encoding.to_json()},
         }
 
@@ -82,7 +85,7 @@ class TensorType:
 
     def to_json(self) -> dict:
         return {
-            "class": TENSOR_CLASS,
+            "class": str(TENSOR_CLASS_URI),
             "params": {
                 "dtype": self.dtype,
                 "shape": list(self.shape),
@@ -164,7 +167,7 @@ class OpGraph:
     contracts.
 
     The helpers in this file default to the standard numeric operator URIs under
-    `NUMERIC_OPS_CLASS_ROOT`, but callers can override `operator=...` per node.
+    `NUMERIC_OPS_CLASS_ROOT_URI`, but callers can override `operator=...` per node.
     """
 
     version: str = "0.1.0"
@@ -175,7 +178,7 @@ class OpGraph:
     _next_value: int = 0
     _next_node: int = 0
 
-    TYPE_TAG: str = path("state", "scalar", "value", "op_graph")
+    TYPE_TAG_URI = URI(Value, "op_graph")
 
     def _alloc_value(self, name: str) -> int:
         if name in self._values:
@@ -209,7 +212,7 @@ class OpGraph:
         transpose_a: bool = False,
         transpose_b: bool = False,
         out_type: Optional[TensorType] = None,
-        operator: str = f"{NUMERIC_OPS_CLASS_ROOT}/matmul",
+        operator: str = f"{NUMERIC_OPS_CLASS_ROOT_URI}/matmul",
     ) -> "OpGraph":
         out_id = self._alloc_value(out)
         op = {operator: {"transpose_a": transpose_a, "transpose_b": transpose_b}}
@@ -233,7 +236,7 @@ class OpGraph:
         bits: int,
         scale_pow2: int,
         out_type: Optional[ValueType] = None,
-        operator: str = f"{NUMERIC_OPS_CLASS_ROOT}/quantize",
+        operator: str = f"{NUMERIC_OPS_CLASS_ROOT_URI}/quantize",
     ) -> "OpGraph":
         out_id = self._alloc_value(out)
         op = {operator: {"signed": signed, "bits": bits, "scale_pow2": scale_pow2}}
@@ -255,7 +258,7 @@ class OpGraph:
             "nodes": [n.to_json() for n in self._nodes],
             "outputs": [o.to_json() for o in self._outputs],
         }
-        return {self.TYPE_TAG: payload}
+        return {str(self.TYPE_TAG_URI): payload}
 
 
 def analyze_opref(
@@ -273,7 +276,7 @@ def analyze_opref(
     if target:
         body["target"] = target.to_json()
 
-    route_path = path("lib", publisher, "compute", compute_version, "analyze")
+    route_path = str(URI("lib", publisher, "compute", compute_version, "analyze"))
 
     return opref_post(route_path, body=body)
 
@@ -289,7 +292,7 @@ def run_opref(
     publisher: str = "tinychain",
     headers: Optional[Iterable[tuple[str, str]]] = None,
 ) -> OpRef[Any]:
-    route_path = path("lib", publisher, "compute", compute_version, "run")
+    route_path = str(URI("lib", publisher, "compute", compute_version, "run"))
 
     op = opref_post(route_path, body={"graph": graph.to_json(), "inputs": dict(inputs)})
     return op.with_headers(headers)
