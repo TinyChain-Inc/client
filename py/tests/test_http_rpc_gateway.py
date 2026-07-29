@@ -43,12 +43,12 @@ def test_pyo3_kernel_resolves_opref_over_http_gateway(tmp_path):
         # The local kernel should not proxy arbitrary dependency paths directly.
         with pytest.raises(ValueError):
             kernel.resolve_get(
-                b_hello,
+                b_hello.path,
                 tc_local.state_handle(json.dumps("World").encode("utf-8")),
             )
 
         with pytest.raises(ValueError):
-            kernel.resolve_get(tc.URI("service"))
+            kernel.resolve_get(tc.URI("service").path)
     finally:
         proc.kill()
 

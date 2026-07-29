@@ -4,7 +4,6 @@ import re
 from dataclasses import dataclass
 from typing import Iterable, Optional
 
-
 @dataclass(frozen=True, slots=True, init=False)
 class URI:
     """
@@ -24,28 +23,59 @@ class URI:
         subject: object | None = None,
         *parts: str,
         path: str | "URI" | None = None,
-        scheme: str = "http",
+        scheme: str | None = None,
         host: Optional[str] = None,
         port: Optional[int] = None,
     ) -> None:
         if path is not None and (subject is not None or parts):
             raise TypeError("URI accepts either path=... or subject/parts, not both")
 
+        inherited_scheme: str | None = None
+        inherited_host: str | None = None
+        inherited_port: int | None = None
+
         if path is None:
             if subject is None:
                 resolved_path = ""
+            elif isinstance(subject, URI):
+                resolved = subject.child(*parts)
+                resolved_path = resolved.path
+                inherited_scheme = resolved.scheme
+                inherited_host = resolved.host
+                inherited_port = resolved.port
+            elif isinstance(subject, str) and (subject.startswith("/") or subject.startswith("$") or "://" in subject):
+                resolved = URI.parse(subject).child(*parts)
+                resolved_path = resolved.path
+                inherited_scheme = resolved.scheme
+                inherited_host = resolved.host
+                inherited_port = resolved.port
             else:
                 resolved_path = _path_from_subject(subject, *parts)
         else:
             if isinstance(path, URI):
                 resolved_path = path.path
+                inherited_scheme = path.scheme
+                inherited_host = path.host
+                inherited_port = path.port
+            elif isinstance(path, str) and "://" in path:
+                parsed = URI.parse(path)
+                resolved_path = parsed.path
+                inherited_scheme = parsed.scheme
+                inherited_host = parsed.host
+                inherited_port = parsed.port
             else:
                 resolved_path = path
 
+        resolved_scheme = inherited_scheme if scheme is None else str(scheme)
+        if resolved_scheme is None:
+            resolved_scheme = "http"
+        resolved_host = inherited_host if host is None else host
+        resolved_port = inherited_port if port is None else port
+
         object.__setattr__(self, "path", resolved_path)
-        object.__setattr__(self, "scheme", scheme)
-        object.__setattr__(self, "host", host)
-        object.__setattr__(self, "port", port)
+        object.__setattr__(self, "scheme", resolved_scheme)
+        object.__setattr__(self, "host", resolved_host)
+        object.__setattr__(self, "port", resolved_port)
         self.__post_init__()
 
     def __post_init__(self) -> None:

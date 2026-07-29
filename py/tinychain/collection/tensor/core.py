@@ -15,6 +15,7 @@ from ...state.scalar import (
     autobox,
     tcref_form_of,
 )
+from ...state.value import Number as ValueNumber
 from ...autodiff.graph import AddOperator, MatmulOperator, TensorNodeRecord, TransposeOperator, get_active_builder
 from ._common import infer_broadcast_axes, normalize_permutation, normalize_shape, params, reduce_args
 from ._wire import encode_view_schema
@@ -24,9 +25,9 @@ from .schema import TensorStorageLayout, TensorStorageSchema, TensorViewSchema
 from .view_ops import BroadcastViewOp, ReshapeViewOp, SliceViewOp, TensorViewOp, TransposeViewOp
 from .view_spec import TensorViewSpec
 
-_F32_DTYPE_URI = URI("state", "scalar", "value", "number", "float", "32")
-_F64_DTYPE_URI = URI("state", "scalar", "value", "number", "float", "64")
-_U64_DTYPE_URI = URI("state", "scalar", "value", "number", "uint", "64")
+_F32_DTYPE_URI = URI(ValueNumber, "float", "32")
+_F64_DTYPE_URI = URI(ValueNumber, "float", "64")
+_U64_DTYPE_URI = URI(ValueNumber, "uint", "64")
 
 
 class Tensor(Comparable):

@@ -198,6 +198,39 @@ def test_native_state_paths_use_type_uri_subjects() -> None:
     assert not violations, "forbidden direct state-root URI/path construction found:\n" + "\n".join(violations)
 
 
+def test_uri_constructor_bans_multi_component_state_literals() -> None:
+    violations: list[str] = []
+
+    for path in sorted(_SRC_ROOT.rglob("*.py")):
+        relative_path = path.relative_to(_SRC_ROOT).as_posix()
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            if _call_name(node.func) != "URI" or not node.args:
+                continue
+
+            first = node.args[0]
+            if not (isinstance(first, ast.Constant) and isinstance(first.value, str) and first.value == "state"):
+                continue
+
+            # Allow canonical state root declarations like URI("state").
+            if len(node.args) == 1:
+                continue
+
+            line = getattr(node, "lineno", 0)
+            segment = ast.get_source_segment(source, node) or ""
+            violations.append(f"{relative_path}:{line}: {segment}")
+
+    assert not violations, (
+        'forbidden URI("state", ...) multi-component construction found; '
+        "use type-based URI subjects (e.g. URI(Tensor), URI(Number, ...)) and reserve URI(\"state\") for the state root only:\n"
+        + "\n".join(violations)
+    )
+
+
 def _import_root_from_node(node: ast.AST) -> str | None:
     if isinstance(node, ast.Import):
         if not node.names:
@@ -417,6 +450,41 @@ def test_runtime_bans_uri_parse_str_wraps() -> None:
                 violations.append(f"{relative_path}:{line}: {segment}")
 
     assert not violations, "forbidden URI.parse(str(...)) wrappers found; pass URI values directly (URI(...)) or parse raw strings at boundaries:\n" + "\n".join(violations)
+
+
+def test_runtime_bans_single_entry_lru_cache_helpers() -> None:
+    violations: list[str] = []
+
+    for path in sorted(_SRC_ROOT.rglob("*.py")):
+        relative_path = path.relative_to(_SRC_ROOT).as_posix()
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+
+            for decorator in node.decorator_list:
+                if not isinstance(decorator, ast.Call):
+                    continue
+                if _call_name(decorator.func) != "lru_cache":
+                    continue
+
+                maxsize_is_one = False
+                if decorator.args and isinstance(decorator.args[0], ast.Constant) and decorator.args[0].value == 1:
+                    maxsize_is_one = True
+                for kw in decorator.keywords:
+                    if kw.arg == "maxsize" and isinstance(kw.value, ast.Constant) and kw.value.value == 1:
+                        maxsize_is_one = True
+
+                if maxsize_is_one:
+                    line = getattr(node, "lineno", 0)
+                    violations.append(f"{relative_path}:{line}: def {node.name}(...)")
+
+    assert not violations, (
+        "forbidden @lru_cache(maxsize=1) helper indirection found; inline direct code paths instead:\n"
+        + "\n".join(violations)
+    )
 
 
 def _is_isinstance_call(test: ast.AST) -> bool:

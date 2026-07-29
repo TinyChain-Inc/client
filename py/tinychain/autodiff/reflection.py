@@ -9,8 +9,7 @@ from autodiff — preserving domain neutrality.
 from __future__ import annotations
 
 from ..graph_reflection import ReflectionError, TypeSpec, TypedValueRef
-from ..state.base import State
-from ..uri import URI, uri
+from ..uri import URI
 from .reverse import DerivativeProgram
 
 
@@ -34,7 +33,9 @@ def tensor_typespec_to_type_spec(typespec_dict: dict) -> TypeSpec:
             "invalid_type_spec",
             f"tensor_typespec must be a dict, got {type(typespec_dict).__name__}",
         )
-    return TypeSpec(class_uri=str(URI(State, "collection", "tensor")), params=dict(typespec_dict))
+    from ..collection.tensor import Tensor
+
+    return TypeSpec(class_uri=str(URI(Tensor)), params=dict(typespec_dict))
 
 
 def reflect_derivative_program(program: DerivativeProgram) -> list[TypedValueRef]:
@@ -56,13 +57,15 @@ def reflect_derivative_program(program: DerivativeProgram) -> list[TypedValueRef
         - value_type: TypeSpec("/state/collection/tensor", ...) from node.output_typespec,
           or an empty-params TypeSpec when output_typespec is None.
     """
+    from ..collection.tensor import Tensor
+
     namespace = program.metadata.source_graph_id
     refs: list[TypedValueRef] = []
     for node in program.nodes:
         if node.output_typespec is not None:
             value_type = tensor_typespec_to_type_spec(node.output_typespec)
         else:
-            value_type = TypeSpec(class_uri=str(URI(State, "collection", "tensor")), params={})
+            value_type = TypeSpec(class_uri=str(URI(Tensor)), params={})
         ref = TypedValueRef(
             namespace=namespace,
             value=node.output_value_id,

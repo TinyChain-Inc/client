@@ -8,6 +8,8 @@ import time
 from dataclasses import dataclass
 from typing import Sequence
 
+from .uri import URI
+
 
 @dataclass(frozen=True, slots=True)
 class SignedBearerToken:
@@ -79,7 +81,7 @@ def mint_rjwt_token(
     *,
     host: str,
     actor_id: str,
-    libs: Sequence[str],
+    libs: Sequence[object],
     ttl_secs: int = 3600,
     secret_key_b64: str | None = None,
     alg: str = "falcon512",
@@ -95,7 +97,7 @@ def mint_rjwt_token(
     alg = alg.strip().lower()
     actor = _actor(rjwt, actor_id, secret_key_b64, alg)
     now = time.time()
-    claims = {lib: 0o200 for lib in libs}
+    claims = {_lib_claim(lib): 0o200 for lib in libs}
     token = rjwt.Token(host, now, float(ttl_secs), actor_id, claims)
     signed = actor.sign_token(token)
     secret_key_b64 = secret_key_b64 or (
@@ -112,3 +114,18 @@ def mint_rjwt_token(
         secret_key_b64=secret_key_b64,
         bearer_token=signed.jwt(),
     )
+
+
+def _lib_claim(lib: object) -> str:
+    if isinstance(lib, URI):
+        return lib.path
+    if isinstance(lib, str):
+        parsed = URI.parse(lib)
+        return parsed.path
+    if hasattr(lib, "id") and callable(getattr(lib, "id")):
+        resolved = lib.id()
+        if isinstance(resolved, URI):
+            return resolved.path
+        resolved_uri = URI(resolved)
+        return resolved_uri.path
+    raise TypeError(f"unsupported library claim type: {type(lib).__name__}")

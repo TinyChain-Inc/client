@@ -31,3 +31,25 @@ def test_authority_and_origin_helpers():
     assert tc.authority("http://127.0.0.1:8702/lib/example-devco/x/0.1.0") == "127.0.0.1:8702"
     assert tc.origin("127.0.0.1:8702") == "http://127.0.0.1:8702"
     assert tc.origin("https://api.example.com:443/lib/x") == "https://api.example.com:443"
+
+
+def test_uri_composition_preserves_authority():
+    base = tc.URI.parse("https://api.example.com:443/lib/example-devco/math/1.2.3")
+    child = tc.URI(base, "add")
+    assert child.path == "/lib/example-devco/math/1.2.3/add"
+    assert str(child) == "https://api.example.com:443/lib/example-devco/math/1.2.3/add"
+
+    copied = tc.URI(path=base)
+    assert copied.path == base.path
+    assert str(copied) == str(base)
+
+    child_from_text = tc.URI("https://api.example.com:443/lib/example-devco/math/1.2.3", "mul")
+    assert child_from_text.path == "/lib/example-devco/math/1.2.3/mul"
+    assert str(child_from_text) == "https://api.example.com:443/lib/example-devco/math/1.2.3/mul"
+
+
+def test_uri_composition_explicit_authority_override_wins():
+    base = tc.URI.parse("https://api.example.com:443/lib/example-devco/math/1.2.3")
+    overridden = tc.URI(base, "add", scheme="http", host="localhost", port=8702)
+    assert overridden.path == "/lib/example-devco/math/1.2.3/add"
+    assert str(overridden) == "http://localhost:8702/lib/example-devco/math/1.2.3/add"

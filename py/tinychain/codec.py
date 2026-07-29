@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 
-from .state.base import State
 from .state.value import Number
 from .uri import URI
 
@@ -55,9 +54,11 @@ def _decode_tensor(payload: object) -> object:
 
 
 def _decode_collections(payload: object) -> object:
+    from .collection.tensor import Tensor
+
     if isinstance(payload, dict) and len(payload) == 1:
         (key, value), = payload.items()
-        if key == str(URI(State, "collection", "tensor")):
+        if key == str(URI(Tensor)):
             return _decode_tensor(value)
     if isinstance(payload, dict):
         return {k: _decode_collections(v) for k, v in payload.items()}
@@ -90,7 +91,7 @@ def decode_payload(payload: object) -> object:
     if isinstance(unwrapped, dict):
         if len(unwrapped) == 1:
             (key, _value), = unwrapped.items()
-            if isinstance(key, str) and key.startswith(str(URI(State, "scalar", "op"))):
+            if isinstance(key, str) and key.startswith(str(URI(OpDef))):
                 try:
                     return OpDef.from_json(unwrapped)
                 except (TypeError, ValueError):
