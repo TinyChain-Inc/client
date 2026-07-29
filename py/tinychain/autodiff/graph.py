@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import contextvars
+import keyword
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Optional
 
 from ..serialize import serialize
+
+# Differentiable dtypes accepted by TensorGraphBuilder.input(...)
+# (spec §7.3.4; https://github.com/TinyChain-Inc/client/issues/95).
+_INPUT_DTYPES: tuple[str, ...] = ("f32", "f64")
 
 
 @dataclass(frozen=True)
@@ -177,6 +183,17 @@ class TensorGraphBuilder:
         self._value_map: dict[int, str] = {}
         self._outputs: list[str] = []
         self._token: Optional[contextvars.Token[Optional[TensorGraphBuilder]]] = None
+        # Builder-owned typed-tracing side tables (client ADR-004; issue 95
+        # https://github.com/TinyChain-Inc/client/issues/95). These are
+        # never exposed to public callers and are separate from `_value_map`
+        # (Invariant 10): `_value_map` only resolves `id(obj) -> value_id`,
+        # while `_retained_values` keeps the object itself alive so a GC'd
+        # intermediate cannot have its `id()` reused and corrupt identity.
+        self._value_metadata: dict[str, dict[str, object]] = {}
+        self._retained_values: dict[str, object] = {}
+        self._input_value_ids: list[str] = []
+        self._input_names: set[str] = set()
+        self._completed: bool = False
 
     # TODO(issue-13-followup): introduce scoped opaque NodeId/ValueId namespaces
     # to prevent accidental cross-graph/context id reuse.
@@ -192,7 +209,100 @@ class TensorGraphBuilder:
         if key not in self._value_map:
             vid = value_id if value_id is not None else self._next_value_id()
             self._value_map[key] = vid
-        return self._value_map[key]
+        resolved = self._value_map[key]
+        # Retain a strong reference so identity survives GC/`id()` reuse (Invariant 6).
+        self._retained_values[resolved] = obj
+        return resolved
+
+    def _describe_value_role(self, value: object) -> str:
+        """Best-effort human-readable role for an untraced *value*, for error messages."""
+        subject_root = getattr(value, "_subject_root", None)
+        if isinstance(subject_root, str) and subject_root.startswith("$"):
+            return f" (named {subject_root[1:]!r})"
+        return ""
+
+    def value_id(self, value: object) -> str:
+        """Resolve a previously traced Python object to its stable ValueId.
+
+        Raises `ValueError` (naming the object's role when determinable) if
+        *value* was never traced by this builder.
+        """
+        resolved = self._value_map.get(id(value))
+        if resolved is None:
+            raise ValueError(
+                f"object was never traced by this TensorGraphBuilder{self._describe_value_role(value)}"
+            )
+        return resolved
+
+    def _set_value_metadata(self, value_id: str, *, dtype: str, shape: tuple[object, ...]) -> None:
+        self._value_metadata[value_id] = {"dtype": dtype, "shape": tuple(shape)}
+
+    def _get_value_metadata(self, value_id: str) -> Optional[dict[str, object]]:
+        """Return a defensive copy of the normalized metadata for *value_id*, if present."""
+        metadata = self._value_metadata.get(value_id)
+        if metadata is None:
+            return None
+        return {"dtype": metadata["dtype"], "shape": tuple(metadata["shape"])}
+
+    def _value_metadata_to_boundary_dict(self, value_id: str) -> Optional[dict[str, object]]:
+        """Convert normalized metadata to the `{"dtype", "shape": list(...)}` graph-boundary form."""
+        metadata = self._get_value_metadata(value_id)
+        if metadata is None:
+            return None
+        return {"dtype": metadata["dtype"], "shape": list(metadata["shape"])}
+
+    @staticmethod
+    def _normalize_input_shape(shape: object) -> tuple[object, ...]:
+        if isinstance(shape, str) or not isinstance(shape, Sequence):
+            raise ValueError("TensorGraphBuilder.input(...) shape must be a non-string sequence of dimensions")
+        normalized: list[object] = []
+        for dim in shape:
+            if isinstance(dim, bool):
+                raise ValueError(f"TensorGraphBuilder.input(...) shape dimension must not be a bool, got {dim!r}")
+            if isinstance(dim, int):
+                if dim < 0:
+                    raise ValueError(f"TensorGraphBuilder.input(...) shape dimension must be non-negative, got {dim!r}")
+                normalized.append(dim)
+            elif isinstance(dim, str) and dim.isidentifier():
+                normalized.append(dim)
+            else:
+                raise ValueError(
+                    "TensorGraphBuilder.input(...) shape dimension must be a non-negative int "
+                    f"or a valid identifier symbol, got {dim!r}"
+                )
+        return tuple(normalized)
+
+    def input(self, name: str, *, dtype: str, shape: Sequence[object]) -> "Tensor":
+        """Declare a named, typed graph input and return an ordinary symbolic `Tensor`.
+
+        Requires this builder to be the active trace context (client ADR-004,
+        spec §7.3; https://github.com/TinyChain-Inc/client/issues/95). The
+        returned `Tensor` is built through the canonical state-reference
+        builders; no raw type-spec dict is ever exposed.
+        """
+        if get_active_builder() is not self:
+            raise RuntimeError("TensorGraphBuilder.input(...) requires this builder to be the active trace context")
+        if not isinstance(name, str) or not name:
+            raise TypeError("TensorGraphBuilder.input(...) name must be a non-empty string")
+        if not name.isidentifier() or keyword.iskeyword(name):
+            raise ValueError(
+                f"TensorGraphBuilder.input(...) name {name!r} must be a valid, non-keyword Python identifier"
+            )
+        if name in self._input_names:
+            raise ValueError(f"TensorGraphBuilder.input(...) duplicate input name {name!r}")
+        if dtype not in _INPUT_DTYPES:
+            raise ValueError(f"TensorGraphBuilder.input(...) dtype must be one of {_INPUT_DTYPES}, got {dtype!r}")
+        normalized_shape = self._normalize_input_shape(shape)
+
+        from ..state.scalar import IdRef, TCRef
+        from ..collection.tensor import Tensor
+
+        value = Tensor(ref=TCRef(IdRef(name)))
+        value_id = self.register_value(value)
+        self._set_value_metadata(value_id, dtype=dtype, shape=normalized_shape)
+        self._input_value_ids.append(value_id)
+        self._input_names.add(name)
+        return value
 
     def record(self, node: TensorNodeRecord) -> None:
         self._nodes.append(node)
@@ -225,6 +335,8 @@ class TensorGraphBuilder:
         return TensorGraph(nodes=self._nodes, inputs=inputs, outputs=outputs)
 
     def __enter__(self) -> TensorGraphBuilder:
+        if self._completed:
+            raise RuntimeError("TensorGraphBuilder instances are single-trace; this builder already completed a trace")
         if _active_builder.get() is not None:
             raise RuntimeError("Nested TensorGraphBuilder contexts are not supported")
         self._token = _active_builder.set(self)
@@ -234,3 +346,7 @@ class TensorGraphBuilder:
         if self._token is not None:
             _active_builder.reset(self._token)
             self._token = None
+        # Retention/metadata persist after exit; only discarding the builder
+        # instance releases them (spec §8.3, §12.5;
+        # https://github.com/TinyChain-Inc/client/issues/95).
+        self._completed = True
