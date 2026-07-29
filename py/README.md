@@ -375,6 +375,140 @@ expressions. Names must resolve to route parameters, prior local bindings,
 `self`, or `tc`; non-TinyChain globals (for example `urllib`, `tensorflow`/`tf`,
 `jax`) are rejected at compile time with an `AutographNameError`.
 
+### Public typed Tensor tracing (experimental)
+
+`tc.autodiff.TensorGraphBuilder` can capture an ordinary typed Tensor expression
+directly, so application code no longer needs to hand-build graph records,
+operator descriptors, or raw type-spec dictionaries to reach `generate(...)`.
+This surface is **experimental** and lives under `tinychain.autodiff` only;
+there is no top-level `tinychain` alias for it, and it does not carry a
+post-0.x stability guarantee.
+
+#### Typed inputs and the linear-MSE example
+
+Declare each traced input with `input(name, *, dtype, shape)` while the builder
+is the active trace context, then write the forward computation with ordinary
+Tensor expressions:
+
+```python
+import tinychain as tc
+
+# A trace that chains intermediate results (for example `predictions - labels`)
+# must run inside an active binding context so each intermediate becomes a
+# referenceable id — this is the ordinary symbolic-IR requirement, not specific
+# to tracing.
+with tc.state.scoped_context():
+    with tc.autodiff.TensorGraphBuilder() as trace:
+        images = trace.input("images", dtype="f64", shape=(4, 65))
+        weights = trace.input("weights", dtype="f64", shape=(65, 10))
+        labels = trace.input("labels", dtype="f64", shape=(4, 10))
+
+        predictions = images @ weights
+        residual = predictions - labels
+        loss = (residual * residual).mean([0, 1])
+
+# `vjp(...)` runs after the trace context has exited; it reads recorded metadata
+# and does not need the binding context.
+weight_vjp = trace.vjp(
+    loss,
+    wrt=(weights,),
+    seed="loss_seed",
+    graph_id="typed-linear-mse",
+)
+```
+
+`input(...)` returns an ordinary symbolic `Tensor`; `name` must be a unique,
+non-empty, non-keyword Python identifier (generated derivative route parameters
+use it), and graph input order is declaration order. The public call accepts
+`dtype` and `shape` directly and never accepts a raw type-spec dictionary.
+
+#### Direct `generate(...)` interoperability
+
+`build(outputs=...)` and `value_id(...)` produce a graph and value IDs that work
+with the existing module-level `generate(...)` signature, so the high-level
+`trace.vjp(...)` above is equivalent to:
+
+```python
+graph = trace.build(outputs=loss)
+weight_vjp = tc.autodiff.generate(
+    graph,
+    graph.outputs[0],
+    [trace.value_id(weights)],
+    "loss_seed",
+    graph_id="typed-linear-mse",
+)
+```
+
+Both paths return a `DerivativeProgram`; neither creates graph records, operator
+objects, or raw type-spec dictionaries in application code. The generated weight
+gradient path carries the framework-owned transpose/matmul derivative structure.
+
+#### Trace lifecycle
+
+- **Enter/exit:** capture is active only inside the `with ... as trace:` block.
+  The active builder is stored in a `ContextVar`; `tc.autodiff.get_active_builder()`
+  is `None` before entry and after exit (including after an exception unwinds the
+  block).
+- **Single-trace reuse:** a `TensorGraphBuilder` records exactly one trace.
+  Re-entering the same builder after its context has exited raises `RuntimeError`.
+- **Nested rejection:** entering any builder while another builder is already
+  active raises `RuntimeError`; only one trace is active at a time.
+- **`vjp(...)` / `build(outputs=...)` after exit:** the high-level `trace.vjp(...)`
+  surface is callable only after the trace context has exited successfully. It
+  re-runs typed finalization on the selected path each call and never mutates the
+  recorded forward graph, so repeated VJP generation with different `wrt` subsets
+  is deterministic. `value_id(...)` on an object the active or most-recent
+  completed builder never traced raises `ValueError`.
+
+#### Supported operations and metadata
+
+While a trace is active, the recorder captures exactly six operations —
+**Add, Sub, Mul, Matmul, Mean, and Transpose** — as concrete operator nodes in
+evaluation order. `Div`, `Sum`, and `Reshape` have VJP rules but are the
+documented deferred subset and are **not** source-captured in this release; their
+intentional absence is enforced by the capture-vs-VJP registry parity test.
+`tc.autodiff.captured_route_operators()` returns the route-name → concrete
+operator allowlist, and `tc.autodiff.captured_operator_types()` returns the
+captured operator types (used by the FR-013 parity check).
+
+Forward dtype and shape are inferred for every captured node:
+
+- **Add/Sub/Mul:** NumPy-style broadcasting; the output dtype matches the
+  (equal) operand dtypes.
+- **Matmul:** standard rank-≥2 matmul with a shared inner dimension and optional
+  leading batch dimensions.
+- **Mean:** reduction over **explicit** axes. `Tensor.mean(axes)` for a traced
+  input must pass explicit integer axes (for example `loss.mean([0, 1])`);
+  `axes=None` is rejected. A full reduction yields a rank-0 (`shape=()`) output.
+- **Transpose:** axis permutation; the default reverses all axes.
+
+#### Dtype and shape limits
+
+- Only differentiable floating dtypes `f32` and `f64` are accepted. Non-floating
+  dtypes fail with `AutodiffError("dtype_not_differentiable", ...)`.
+- There is **no dtype promotion and no mixed-dtype arithmetic**: operands with
+  different dtypes fail with `AutodiffError("dtype_mismatch", ...)`. Literal /
+  scalar tensor constants are not supported in traced expressions.
+- Shapes must be ranked. Each dimension is a non-negative `int` or a symbolic
+  identifier string; rank zero is `shape=()`. Symbolic dimensions are supported
+  and are only compatible when provably equal — unprovable broadcast, matmul, or
+  reduction constraints fail with the corresponding existing categories (for
+  example `matmul_inner_dim_mismatch`, `unresolved_symbolic_shape`).
+- Typed finalization is **fail-closed**: any reachable input or captured output
+  that lacks complete dtype/shape metadata raises before `generate(...)` runs,
+  rather than silently returning a partial derivative.
+
+#### Inactive behavior
+
+When no builder is active, every one of these operations emits exactly the same
+symbolic form, return type, and view metadata as before — tracing has zero effect
+on payloads, dispatch, or eager/deferred execution outside a trace context. In
+particular, `Tensor.mean(...)` still returns its usual value type when no trace
+is active.
+
+The later `ilc-api` migration to this surface (Issue 86 `T-03d`) owns replacing
+the manual fixed-helper graph construction with a typed trace.
+
 ### Route derivative discovery
 
 Route autodiff is a discovery and planning layer for library authors. A
