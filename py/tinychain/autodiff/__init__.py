@@ -35,6 +35,7 @@ from .protocol import (
 from .reflection import reflect_derivative_program, tensor_typespec_to_type_spec
 from .reverse import DerivativeProgram, ReverseTraversal
 from .seed import SeedValidator
+from .tracing import captured_operator_types, captured_route_operators
 from .vjp import (
     AddVjpRule,
     BroadcastReductionPlanner,
@@ -250,6 +251,8 @@ __all__ = [
     "TensorGraphBuilder",
     "TensorNodeRecord",
     "VjpRegistry",
+    "captured_operator_types",
+    "captured_route_operators",
     "generate",
     "grad",
     "get_active_builder",
