@@ -15,7 +15,7 @@ from ...state.scalar import (
     autobox,
     tcref_form_of,
 )
-from ...autodiff.graph import AddOperator, MatmulOperator, TensorNodeRecord, TransposeOperator, get_active_builder
+from ...autodiff.tracing import record_operation
 from ._common import infer_broadcast_axes, normalize_permutation, normalize_shape, params, reduce_args
 from ._wire import encode_view_schema
 from .backend import TensorBackend, TensorWireTensorBackend
@@ -233,6 +233,26 @@ class Tensor(Comparable):
     def cond(self, then: object, or_else: object) -> "Tensor":
         return self._post("cond", {"then": autobox(then), "or_else": autobox(or_else)}, rtype=Tensor)
 
+    def _reduction_post(
+        self,
+        operator_segment: str,
+        axes: object,
+        keepdims: bool,
+        *,
+        capture_operation: str | None = None,
+    ) -> Scalar:
+        """Build the canonical reduction result, then record it if capture is requested.
+
+        Shared choke point for reduction operations: the symbolic/eager result is
+        constructed exactly as before via the ordinary route helper, so inactive
+        behavior is unchanged. When ``capture_operation`` is given and a trace is
+        active, the recorder captures one node after the result is built.
+        """
+        result = self._post(operator_segment, reduce_args(axes, keepdims), rtype=Scalar)
+        if capture_operation is not None:
+            record_operation(capture_operation, (self,), result, {"axes": axes, "keepdims": keepdims})
+        return result
+
     def max(self, axes: object = None, keepdims: bool = False) -> Scalar:
         """Returns Scalar. Autodiff (VJP) for reductions is unsupported in Phase 1."""
         return self._post("max", reduce_args(axes, keepdims), rtype=Scalar)
@@ -242,8 +262,10 @@ class Tensor(Comparable):
         return self._post("min", reduce_args(axes, keepdims), rtype=Scalar)
 
     def mean(self, axes: object = None, keepdims: bool = False) -> Scalar:
-        """Returns Scalar. Autodiff (VJP) for reductions is unsupported in Phase 1."""
-        return self._post("mean", reduce_args(axes, keepdims), rtype=Scalar)
+        """Returns Scalar. Under an active typed trace, mean is captured as a
+        MeanOperator node with normalized axes/keepdims (issue #95); the public
+        return type is still Scalar."""
+        return self._reduction_post("mean", axes, keepdims, capture_operation="mean")
 
     def norm(self, axis: object = None, keepdims: bool = False) -> Scalar:
         """Returns Scalar. Autodiff (VJP) for reductions is unsupported in Phase 1."""
@@ -284,18 +306,7 @@ class Tensor(Comparable):
     def transpose(self, permutation: object = None) -> "Tensor":
         op = TransposeViewOp(kind="transpose", permutation=normalize_permutation(permutation))
         result = self._apply_view_transform(method="transpose", arg=permutation, op=op)
-        _builder = get_active_builder()
-        if _builder is not None:
-            in_vid = _builder.register_value(self)
-            out_vid = _builder.register_value(result)
-            perm_list = list(permutation) if permutation is not None else []
-            _builder.record(TensorNodeRecord(
-                node_id=_builder._next_node_id(),
-                output_value_id=out_vid,
-                operator=TransposeOperator(),
-                op_params={"perm": perm_list},
-                input_value_ids=[in_vid],
-            ))
+        record_operation("transpose", (self,), result, {"permutation": permutation})
         return result
 
     def materialize_view_spec(self) -> "Tensor":
@@ -343,18 +354,7 @@ class Tensor(Comparable):
     def matmul(self, other: object) -> "Tensor":
         right = autobox(other)
         result = self._tensor_post("matmul", {"r": right}, rtype=Tensor)
-        _builder = get_active_builder()
-        if _builder is not None:
-            lhs_vid = _builder.register_value(self)
-            rhs_vid = _builder.register_value(other) if isinstance(other, Tensor) else f"const_{id(other)}"
-            out_vid = _builder.register_value(result)
-            _builder.record(TensorNodeRecord(
-                node_id=_builder._next_node_id(),
-                output_value_id=out_vid,
-                operator=MatmulOperator(),
-                op_params={},
-                input_value_ids=[lhs_vid, rhs_vid],
-            ))
+        record_operation("matmul", (self, other), result)
         return result
 
     def logical_and(self, other: object) -> "Tensor":
@@ -386,25 +386,18 @@ class Tensor(Comparable):
 
     def __add__(self, other: object) -> "Tensor":
         result = self._binary_tensor("add", other)
-        _builder = get_active_builder()
-        if _builder is not None:
-            lhs_vid = _builder.register_value(self)
-            rhs_vid = _builder.register_value(other) if isinstance(other, Tensor) else f"const_{id(other)}"
-            out_vid = _builder.register_value(result)
-            _builder.record(TensorNodeRecord(
-                node_id=_builder._next_node_id(),
-                output_value_id=out_vid,
-                operator=AddOperator(),
-                op_params={},
-                input_value_ids=[lhs_vid, rhs_vid],
-            ))
+        record_operation("add", (self, other), result)
         return result
 
     def __sub__(self, other: object) -> "Tensor":
-        return self._binary_tensor("sub", other)
+        result = self._binary_tensor("sub", other)
+        record_operation("sub", (self, other), result)
+        return result
 
     def __mul__(self, other: object) -> "Tensor":
-        return self._binary_tensor("mul", other)
+        result = self._binary_tensor("mul", other)
+        record_operation("mul", (self, other), result)
+        return result
 
     def __truediv__(self, other: object) -> "Tensor":
         return self._binary_tensor("div", other)
