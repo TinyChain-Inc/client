@@ -194,6 +194,7 @@ class TensorGraphBuilder:
         self._input_value_ids: list[str] = []
         self._input_names: set[str] = set()
         self._completed: bool = False
+        self._exited_cleanly: bool = False
 
     # TODO(issue-13-followup): introduce scoped opaque NodeId/ValueId namespaces
     # to prevent accidental cross-graph/context id reuse.
@@ -320,8 +321,48 @@ class TensorGraphBuilder:
         if value_id not in self._outputs:
             self._outputs.append(value_id)
 
-    def build(self) -> TensorGraph:
-        """Assemble and return the recorded TensorGraph."""
+    @staticmethod
+    def _as_output_sequence(outputs: object) -> list[object]:
+        """Normalize a single traced value or a sequence of them to a list.
+
+        A lone traced ``Tensor`` (which is not a ``Sequence``) is wrapped in a
+        one-element list; strings/bytes are never treated as sequences of
+        outputs.
+        """
+        if isinstance(outputs, (str, bytes)) or not isinstance(outputs, Sequence):
+            return [outputs]
+        return list(outputs)
+
+    def _resolve_output_value_ids(self, outputs: object) -> list[str]:
+        """Resolve traced output values to ValueIds in caller order.
+
+        Later duplicate ValueIds are silently dropped (first occurrence kept);
+        an untraced output raises ``ValueError`` naming the role when
+        determinable (via :meth:`value_id`).
+        """
+        resolved: list[str] = []
+        seen: set[str] = set()
+        for output in self._as_output_sequence(outputs):
+            value_id = self.value_id(output)
+            if value_id not in seen:
+                seen.add(value_id)
+                resolved.append(value_id)
+        return resolved
+
+    def build(self, outputs: object | Sequence[object] | None = None) -> TensorGraph:
+        """Assemble and return the recorded TensorGraph.
+
+        With no argument this preserves the low-level experimental behavior:
+        graph inputs carry no typespec (``None``) and outputs default to the
+        explicitly marked outputs, else the last recorded node. When ``outputs``
+        is supplied the typed application path is taken (client ADR-004, spec
+        §8.3; https://github.com/TinyChain-Inc/client/issues/95): each traced
+        output value is resolved to its ValueId in caller order with later
+        duplicates silently dropped (first occurrence kept), untraced outputs
+        raise, graph input typespecs are populated from the builder metadata
+        table, and the graph is run through typed finalization, which rejects any
+        reachable input or node output with incomplete dtype/shape metadata.
+        """
         produced: set[str] = {rec.output_value_id for rec in self._nodes}
         seen: set[str] = set()
         input_value_ids: list[str] = []
@@ -330,9 +371,107 @@ class TensorGraphBuilder:
                 if vid not in produced and vid not in seen:
                     input_value_ids.append(vid)
                     seen.add(vid)
-        inputs = [(vid, None) for vid in input_value_ids]
-        outputs = list(self._outputs) if self._outputs else [self._nodes[-1].output_value_id] if self._nodes else []
-        return TensorGraph(nodes=self._nodes, inputs=inputs, outputs=outputs)
+
+        if outputs is None:
+            inputs = [(vid, None) for vid in input_value_ids]
+            graph_outputs = (
+                list(self._outputs)
+                if self._outputs
+                else [self._nodes[-1].output_value_id]
+                if self._nodes
+                else []
+            )
+            return TensorGraph(nodes=self._nodes, inputs=inputs, outputs=graph_outputs)
+
+        graph_outputs = self._resolve_output_value_ids(outputs)
+        # A declared typed input selected directly as an output has no producing
+        # node, so the node-operand walk above never lists it. Add such leaf
+        # outputs to the graph inputs so their side-table metadata is preserved
+        # (FR-005/FR-007; a passthrough graph names the value as both input and
+        # output). Genuinely untyped leaves still surface with `None` and fail
+        # closed at finalization.
+        for output_value_id in graph_outputs:
+            if output_value_id not in produced and output_value_id not in seen:
+                input_value_ids.append(output_value_id)
+                seen.add(output_value_id)
+        inputs = [(vid, self._value_metadata_to_boundary_dict(vid)) for vid in input_value_ids]
+        graph = TensorGraph(nodes=self._nodes, inputs=inputs, outputs=graph_outputs)
+        from .tracing import finalize_typed_graph
+
+        return finalize_typed_graph(graph)
+
+    def vjp(
+        self,
+        output: object,
+        *,
+        wrt: Sequence[object],
+        seed: str = "seed",
+        graph_id: str | None = None,
+    ) -> "DerivativeProgram":
+        """Generate the vector-Jacobian product for ``output`` with respect to ``wrt``.
+
+        Callable only after this builder's trace context has exited successfully
+        (client ADR-004, spec §10.6/§12/§13.1;
+        https://github.com/TinyChain-Inc/client/issues/95). It resolves the
+        selected ``output`` and each ``wrt`` value to ValueIds (preserving
+        ``wrt`` order), runs typed finalization on the selected path, infers the
+        seed typespec verbatim from the selected output's dtype and ranked shape
+        (no promotion, broadcasting, scalar expansion, or rank normalization),
+        and delegates to the existing ``generate(...)``. It performs no second
+        reverse traversal and does not mutate the recorded forward graph, so
+        repeated calls with different ``wrt`` subsets are deterministic.
+
+        ``seed`` is the ValueId of the upstream cotangent used to start reverse
+        traversal; ``graph_id`` is forwarded verbatim as the source graph id.
+        """
+        if not (self._completed and self._exited_cleanly):
+            raise RuntimeError(
+                "TensorGraphBuilder.vjp(...) is only callable after the trace context has exited successfully"
+            )
+
+        if isinstance(wrt, (str, bytes)) or not isinstance(wrt, Sequence):
+            raise TypeError("TensorGraphBuilder.vjp(...) wrt must be a non-string sequence of traced values")
+        wrt_objects = list(wrt)
+        if not wrt_objects:
+            raise ValueError("TensorGraphBuilder.vjp(...) wrt must not be empty")
+
+        output_value_id = self.value_id(output)
+
+        wrt_value_ids: list[str] = []
+        seen_wrt: set[str] = set()
+        for position, wrt_object in enumerate(wrt_objects):
+            wrt_value_id = self.value_id(wrt_object)
+            if wrt_value_id in seen_wrt:
+                raise ValueError(
+                    "TensorGraphBuilder.vjp(...) duplicate wrt value"
+                    f"{self._describe_value_role(wrt_object)} at position {position}"
+                )
+            seen_wrt.add(wrt_value_id)
+            wrt_value_ids.append(wrt_value_id)
+
+        # Typed finalization of the selected path (rejects incomplete metadata);
+        # rebuilt from `self._nodes` each call, so the forward graph is never mutated.
+        graph = self.build(outputs=output)
+
+        seed_typespec = self._value_metadata_to_boundary_dict(output_value_id)
+        if seed_typespec is None or not seed_typespec.get("dtype"):
+            from .protocol import AutodiffError
+
+            raise AutodiffError(
+                "missing_dtype_metadata",
+                f"selected vjp output {output_value_id!r} is missing dtype metadata for seed inference",
+            )
+
+        from . import generate
+
+        return generate(
+            graph,
+            output_value_id,
+            wrt_value_ids,
+            seed,
+            seed_typespec=seed_typespec,
+            graph_id=graph_id,
+        )
 
     def __enter__(self) -> TensorGraphBuilder:
         if self._completed:
@@ -350,3 +489,7 @@ class TensorGraphBuilder:
         # instance releases them (spec §8.3, §12.5;
         # https://github.com/TinyChain-Inc/client/issues/95).
         self._completed = True
+        # Track whether the context exited without a propagating exception so
+        # `vjp(...)` can require a *successful* exit (spec §13.1).
+        exc_type = args[0] if args else None
+        self._exited_cleanly = exc_type is None
