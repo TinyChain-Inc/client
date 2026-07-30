@@ -7,6 +7,13 @@ T = TypeVar("T")
 _MISSING = object()
 
 
+def _normalize_path(path: object) -> str:
+    value = str(path)
+    if not value:
+        raise ValueError("OpRef path must be non-empty")
+    return value
+
+
 class OpRef(Generic[T]):
     __slots__ = ()
 
@@ -65,12 +72,12 @@ class GetOpRef(OpRef[T]):
 
     def __init__(
         self,
-        path: str,
+        path: object,
         *,
         headers: Optional[Iterable[tuple[str, str]]] = None,
         body: Any = None,
     ):
-        self._path = path
+        self._path = _normalize_path(path)
         self._headers = tuple(headers or ())
         self._body = body
 
@@ -107,12 +114,12 @@ class PutOpRef(OpRef[T]):
 
     def __init__(
         self,
-        path: str,
+        path: object,
         *,
         headers: Optional[Iterable[tuple[str, str]]] = None,
         body: Any = None,
     ):
-        self._path = path
+        self._path = _normalize_path(path)
         self._headers = tuple(headers or ())
         self._body = body
 
@@ -149,12 +156,12 @@ class PostOpRef(OpRef[T]):
 
     def __init__(
         self,
-        path: str,
+        path: object,
         *,
         headers: Optional[Iterable[tuple[str, str]]] = None,
         body: Any = None,
     ):
-        self._path = path
+        self._path = _normalize_path(path)
         self._headers = tuple(headers or ())
         self._body = body
 
@@ -191,12 +198,12 @@ class DeleteOpRef(OpRef[T]):
 
     def __init__(
         self,
-        path: str,
+        path: object,
         *,
         headers: Optional[Iterable[tuple[str, str]]] = None,
         body: Any = None,
     ):
-        self._path = path
+        self._path = _normalize_path(path)
         self._headers = tuple(headers or ())
         self._body = body
 
@@ -226,17 +233,17 @@ class DeleteOpRef(OpRef[T]):
         )
 
 
-def get(path: str, *, headers: Optional[Iterable[tuple[str, str]]] = None, body: Any = None) -> OpRef[Any]:
+def get(path: object, *, headers: Optional[Iterable[tuple[str, str]]] = None, body: Any = None) -> OpRef[Any]:
     return GetOpRef(path, headers=headers, body=body)
 
 
-def put(path: str, *, headers: Optional[Iterable[tuple[str, str]]] = None, body: Any = None) -> OpRef[Any]:
+def put(path: object, *, headers: Optional[Iterable[tuple[str, str]]] = None, body: Any = None) -> OpRef[Any]:
     return PutOpRef(path, headers=headers, body=body)
 
 
-def post(path: str, *, headers: Optional[Iterable[tuple[str, str]]] = None, body: Any = None) -> OpRef[Any]:
+def post(path: object, *, headers: Optional[Iterable[tuple[str, str]]] = None, body: Any = None) -> OpRef[Any]:
     return PostOpRef(path, headers=headers, body=body)
 
 
-def delete(path: str, *, headers: Optional[Iterable[tuple[str, str]]] = None, body: Any = None) -> OpRef[Any]:
+def delete(path: object, *, headers: Optional[Iterable[tuple[str, str]]] = None, body: Any = None) -> OpRef[Any]:
     return DeleteOpRef(path, headers=headers, body=body)

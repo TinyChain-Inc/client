@@ -7,14 +7,10 @@ from typing import Any, Iterable, Mapping
 
 from ..graph_reflection import TypeSpec
 from ..library import Library, _class_identity
-from ..uri import uri
+from ..uri import URI
 from ..serialize import serialize
 from .protocol import AutodiffError
 from .seed import FLOAT_DTYPES, SeedValidator
-
-
-TENSOR_TYPESPEC_CLASS_URI = "/state/collection/tensor"
-
 ROUTE_DERIVATIVE_SOURCE_ARTIFACT = "artifact"
 ROUTE_DERIVATIVE_SOURCE_UNSUPPORTED = "unsupported"
 ROUTE_DERIVATIVE_SOURCE_NON_DIFFERENTIABLE = "non_differentiable"
@@ -278,15 +274,17 @@ def extract_route_identity(target: object) -> RouteDerivativeIdentity:
     publisher, resource_name, version = _validate_library_identity_fields(route_instance)
 
     library_path = route_instance.id().path
+    route_base = route_instance.link()
+    route_uri = URI(route_base, "path", route_name).absolute()
     return RouteDerivativeIdentity(
         publisher=publisher,
         library_name=resource_name,
         library_version=version,
         library_path=library_path,
-        library_uri=route_instance.link().absolute(),
+        library_uri=route_base.absolute(),
         route_name=route_name,
         route_path=f"/{route_name}",
-        route_uri=uri(route_instance.link(), "path", route_name).absolute(),
+        route_uri=route_uri,
         http_method=http_method.upper(),
     )
 
@@ -522,7 +520,9 @@ def _validate_tensor_type_spec(
     identity: RouteDerivativeIdentity,
     type_spec: TypeSpec,
 ) -> None:
-    if type_spec.class_uri != TENSOR_TYPESPEC_CLASS_URI:
+    from ..collection.tensor import Tensor
+
+    if type_spec.class_uri != str(URI(Tensor)):
         raise AutodiffError(
             "non_differentiable_route",
             f"route {identity.route_uri} derivative signatures must use tensor TypeSpec values",

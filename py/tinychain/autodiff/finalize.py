@@ -20,10 +20,19 @@ if TYPE_CHECKING:
 
 def _require_complete_typespec(typespec: Optional[Mapping[str, object]], *, label: str) -> None:
     """Fail closed unless *typespec* carries both a dtype and a ranked shape."""
-    if typespec is None or not typespec.get("dtype"):
+    if not isinstance(typespec, Mapping) or not isinstance(typespec.get("dtype"), str) or not typespec["dtype"]:
         raise AutodiffError("missing_dtype_metadata", f"{label} is missing dtype metadata")
-    # Raises `missing_shape_metadata` when the shape is absent or malformed.
-    typespec_ranked_shape(dict(typespec))
+    try:
+        # `typespec_ranked_shape` converts absent, unranked, and malformed
+        # shapes to the documented category. Do not let malformed boundary
+        # metadata leak a raw container exception.
+        typespec_ranked_shape({"shape": typespec.get("shape")})
+    except AutodiffError:
+        raise
+    except (IndexError, TypeError, ValueError) as exc:
+        raise AutodiffError(
+            "missing_shape_metadata", f"{label} is missing ranked shape metadata"
+        ) from exc
 
 
 def finalize_typed_graph(graph: TensorGraph) -> TensorGraph:
