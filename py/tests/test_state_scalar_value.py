@@ -1,23 +1,25 @@
+import json
+
 import tinychain as tc
 import pytest
 
 
 def test_value_roundtrip_typed_maps():
     v = tc.Number(7)
-    assert tc.state.Value.from_json(v.to_json()) == v
+    assert tc.state.Value.from_json(v.to_json()).to_json() == v.to_json()
 
     s = tc.String("x")
-    assert tc.state.Value.from_json(s.to_json()) == s
+    assert tc.state.Value.from_json(s.to_json()).to_json() == s.to_json()
 
     n = tc.state.Null()
-    assert tc.state.Value.from_json(n.to_json()) == n
+    assert tc.state.Value.from_json(n.to_json()).to_json() == n.to_json()
     assert isinstance(n, tc.state.Null)
     assert isinstance(tc.state.Value.from_json(None), tc.state.Null)
 
 
 def test_value_bool_decodes_as_number():
     b = tc.Number(True)
-    assert tc.state.Value.from_json(b.to_json()) == b
+    assert tc.state.Value.from_json(b.to_json()).to_json() == b.to_json()
     assert isinstance(tc.state.Value.from_json(True), tc.Number)
     assert isinstance(tc.state.Value.from_json(1), tc.Number)
 
@@ -32,7 +34,7 @@ def test_value_map_and_tuple_roundtrip():
     )
 
     decoded = tc.state.Value.from_json(value.to_json())
-    assert decoded == value
+    assert decoded.to_json() == value.to_json()
 
 
 def test_value_subtype_constructors_and_from_json_types():
@@ -64,11 +66,11 @@ def test_scalar_roundtrip_nested_map_and_tuple():
         "shape": ["N", "D"],
     })
     decoded = tc.state.Scalar.from_json(scalar.to_json())
-    assert decoded == scalar
+    assert decoded.to_json() == scalar.to_json()
 
 
 def test_scalar_opref_encoding_get_put_post_delete():
-    subject = tc.uri("lib", "acme", "foo", "1.0.0").path
+    subject = tc.URI("lib", "acme", "foo", "1.0.0").path
     get = tc.state.Get(subject)(tc.state.Null()).to_json()
     assert get == {subject: [None]}
 
@@ -80,7 +82,7 @@ def test_scalar_opref_encoding_get_put_post_delete():
         ]
     }
 
-    matmul = tc.uri("class", "tinychain", "numeric", "0.1.0", "matmul").path
+    matmul = tc.URI("class", "tinychain", "numeric", "0.1.0", "matmul").path
     post = tc.state.Post(matmul)({"transpose_a": tc.Number(False)}).to_json()
     assert post == {
         matmul: {"transpose_a": False}
@@ -88,7 +90,7 @@ def test_scalar_opref_encoding_get_put_post_delete():
 
     delete = tc.state.Delete(subject)(tc.String("k")).to_json()
     assert delete == {
-        tc.uri("state", "scalar", "ref", "op", "delete").path: [
+        tc.URI("state", "scalar", "ref", "op", "delete").path: [
             subject,
             "k",
         ]
@@ -96,7 +98,7 @@ def test_scalar_opref_encoding_get_put_post_delete():
 
 
 def test_scalar_method_handles_have_distinct_hashes_and_typed_args():
-    subject = tc.uri("lib", "acme", "foo", "1.0.0").path
+    subject = tc.URI("lib", "acme", "foo", "1.0.0").path
 
     assert hash(tc.state.Get(subject)) != hash(tc.state.Put(subject))
     assert hash(tc.state.Post(subject)) != hash(tc.state.Delete(subject))
@@ -155,7 +157,7 @@ def test_scalar_tcref_id_roundtrip():
     assert encoded == {"$foo": []}
 
     decoded = tc.state.Scalar.from_json(encoded)
-    assert decoded == scalar
+    assert tc.state.form_of(decoded) == tc.state.form_of(scalar)
 
 
 def test_number_literal_arithmetic_methods():
@@ -199,12 +201,12 @@ def test_complex_methods_are_subclass_only():
 
 
 def test_value_type_uri_hierarchy_is_parent_appended():
-    assert tc.state.Value.__uri__.path == tc.uri("state", "scalar", "value").path
-    assert tc.state.Number.__uri__.path == tc.uri(tc.state.Value, "number").path
-    assert tc.state.Float.__uri__.path == tc.uri(tc.state.Number, "float").path
-    assert tc.state.F32.__uri__.path == tc.uri(tc.state.Float, "32").path
-    assert tc.state.Complex.__uri__.path == tc.uri(tc.state.Number, "complex").path
-    assert tc.state.C128.__uri__.path == tc.uri(tc.state.Complex, "128").path
+    assert tc.state.Value.__uri__.path == tc.URI("state", "scalar", "value").path
+    assert tc.state.Number.__uri__.path == tc.URI(tc.state.Value, "number").path
+    assert tc.state.Float.__uri__.path == tc.URI(tc.state.Number, "float").path
+    assert tc.state.F32.__uri__.path == tc.URI(tc.state.Float, "32").path
+    assert tc.state.Complex.__uri__.path == tc.URI(tc.state.Number, "complex").path
+    assert tc.state.C128.__uri__.path == tc.URI(tc.state.Complex, "128").path
 
 
 def test_value_from_json_delegates_by_uri_to_concrete_subclass():
@@ -226,9 +228,10 @@ def test_number_deferred_arithmetic_builds_oprefs():
         x = tc.state.id("x")
         deferred_form = tc.state.form_of(x.add(1))
         assert isinstance(deferred_form, tc.state.TCRef)
-        deferred_ref_form = tc.state.tcref_form_of(deferred_form)
+        deferred_ref_form = tc.state.form_of(deferred_form)
         assert isinstance(deferred_ref_form, tc.state.OpRef)
         deferred = tc.Number(deferred_ref_form)
+        deferred._ctx = cxt
 
         add = deferred + 2
         sub = deferred - 2
@@ -285,3 +288,25 @@ def test_reduce_rejects_ambiguous_item_binding():
 
         with pytest.raises(TypeError, match="ambiguous"):
             items.reduce(op=op, value={})
+
+
+def test_autobox_preserves_non_scalar_state_instances():
+    collection = tc.state.Collection({"k": tc.Number(1)})
+    boxed = tc.state.autobox(collection)
+
+    assert isinstance(boxed, tc.state.Collection)
+    assert boxed is collection
+
+
+def test_autobox_numpy_array_to_tensor_state():
+    import numpy as np
+
+    matrix = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
+    boxed = tc.state.autobox(matrix)
+
+    assert isinstance(boxed, tc.Tensor)
+    encoded = boxed.to_json()
+    assert encoded == {
+        tc.URI(tc.Tensor).path: [[tc.URI(tc.Number, "float", "32").path, matrix.shape], [1.0, 2.0, 3.0, 4.0]]
+    }
+    assert isinstance(json.dumps(encoded), str)

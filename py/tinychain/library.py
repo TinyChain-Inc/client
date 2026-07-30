@@ -6,16 +6,21 @@ import logging
 import pathlib
 import base64
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional, get_args, get_origin, get_type_hints
+from typing import Any, Callable, Mapping, Optional, get_args, get_origin, get_type_hints
 
 from .auth import bearer_token as _bearer_token
 from . import opref as runtime_opref
 from .opref import OpRef
 from .ref import Ref
 from . import _autograph
-from .state import ContextResult, DeleteOpDef, DeleteOpRef, GetOpDef, GetOpRef, IdRef, OpDef, OpRef as StateOpRef, PostOpDef, PostOpRef, PutOpDef, PutOpRef, Scalar, TCRef, autobox, context, current_context, form_of, map_of as scalar_map_of, scalar_for_hint, scoped_context, tcref_form_of, tuple_of as scalar_tuple_of
+from .state import Collection, ContextResult, DeleteOpDef, DeleteOpRef, GetOpDef, GetOpRef, IdRef, OpDef, OpRef as StateOpRef, PostOpDef, PostOpRef, PutOpDef, PutOpRef, Scalar, TCRef, autobox, context, current_context, form_of, map_of as scalar_map_of, scalar_for_hint, scoped_context, tuple_of as scalar_tuple_of
 from .state.value import Bool, Map, Number, String, Tuple, Value
-from .uri import URI, _segment, uri as _uri, validate_resource_name
+from .uri import URI, _segment, validate_resource_name
+
+
+_INJECTED_ROUTE_PARAM_NAMES = {"cxt", "ctx", "txn"}
+_LIB_ROOT_URI = URI("lib")
+_LIB_WASM_URI = URI("lib", "wasm")
 
 def _is_method(form: Callable[..., Any]) -> bool:
     names = list(getattr(form, "__code__", None).co_varnames or ())
@@ -64,6 +69,8 @@ def _runtime_type_hint(type_hint: object, default: type = Value) -> type:
         return _greatest_common_superclass(*resolved)
 
     if isinstance(type_hint, type):
+        if issubclass(type_hint, Collection):
+            return type_hint
         if issubclass(type_hint, Ref):
             return type_hint
         if issubclass(type_hint, Value):
@@ -100,6 +107,8 @@ def _route_path(subject: object, route_name: str) -> str:
             ]
         )
     )
+    if not isinstance(route_uri, URI):
+        raise TypeError("expected URI route path")
 
     authority = getattr(subject, "authority", None)
     authority_uri: URI | None = None
@@ -118,6 +127,93 @@ def _route_path(subject: object, route_name: str) -> str:
         return route_uri.absolute()
 
     return route_uri.path
+
+
+def _contains_symbolic(value: object) -> bool:
+    if isinstance(value, Scalar) and getattr(value, "_ctx", None) is not None:
+        return True
+
+    if isinstance(value, dict):
+        return any(_contains_symbolic(v) for v in value.values())
+
+    if isinstance(value, (list, tuple)):
+        return any(_contains_symbolic(v) for v in value)
+
+    return False
+
+
+def _route_arg_param_names(params: list[inspect.Parameter], *, skip_first_self: bool) -> list[str]:
+    iterable = params[1:] if skip_first_self else params
+    return [
+        param.name
+        for param in iterable
+        if param.kind in (param.POSITIONAL_ONLY, param.POSITIONAL_OR_KEYWORD, param.KEYWORD_ONLY)
+        and param.name not in _INJECTED_ROUTE_PARAM_NAMES
+    ]
+
+
+def _route_body_from_call(route: "Route", args: tuple[object, ...], kwargs: dict[str, object]) -> object:
+    body = None
+    if args and kwargs:
+        raise TypeError("TinyChain route stubs accept either args or kwargs, not both")
+
+    if args:
+        if route.method == "POST":
+            sig = inspect.signature(route.form)
+            params = list(sig.parameters.values())
+            param_names = _route_arg_param_names(params, skip_first_self=True)
+            if len(args) != len(param_names):
+                raise TypeError(
+                    "TinyChain POST stubs require one positional argument per parameter"
+                )
+            body = dict(zip(param_names, args, strict=True))
+        else:
+            if len(args) != 1:
+                raise TypeError("TinyChain route stubs accept at most one positional argument")
+            body = args[0]
+    elif kwargs:
+        if route.method == "POST" and not (len(kwargs) == 1 and "body" in kwargs):
+            body = kwargs
+        else:
+            if len(kwargs) != 1 or "body" not in kwargs:
+                raise TypeError("TinyChain route stubs accept only the keyword argument `body`")
+            body = kwargs["body"]
+
+    return body
+
+
+def _execute_route_result_if_needed(result: object, body: object) -> object:
+    if getattr(result, "_ctx", None) is not None:
+        return result
+
+    if _contains_symbolic(body):
+        return result
+
+    from .executor import try_current
+
+    exec_ctx = try_current()
+    if exec_ctx is not None and not exec_ctx.is_eager():
+        return result
+
+    import tinychain as tc
+
+    return tc.execute(result)
+
+
+def _append_context_result_form(route: "Route", form: list[tuple[str, Scalar]], raw_result: object) -> None:
+    # Contract: mapping return values become named OpDef entries unless the route
+    # is explicitly typed as generic Ref, in which case we preserve the mapping
+    # as a single value under "result".
+    if isinstance(raw_result, Mapping):
+        declared_rtype = route._return_type()
+        if declared_rtype is Ref:
+            form.append(("result", autobox(raw_result)))
+            return
+
+        form.extend((key, autobox(value)) for key, value in raw_result.items())
+        return
+
+    form.append(("result", autobox(raw_result)))
 
 
 def _library_class(library: "Library | type[Library]") -> type["Library"]:
@@ -203,6 +299,15 @@ class Route:
         if isinstance(rtype, type) and issubclass(rtype, Ref):
             return rtype
         resolved = _runtime_type_hint(rtype, default=Value)
+
+        if (
+            isinstance(resolved, type)
+            and issubclass(resolved, Collection)
+            and resolved is not Collection
+        ):
+            return resolved
+        if isinstance(resolved, type) and issubclass(resolved, Scalar) and resolved is not Scalar:
+            return resolved
         if isinstance(resolved, type) and issubclass(resolved, Value) and resolved is not Value:
             return resolved
 
@@ -259,41 +364,7 @@ class Route:
             return self
 
         def bound(*args, **kwargs):
-            body = None
-            if args and kwargs:
-                raise TypeError("TinyChain route stubs accept either args or kwargs, not both")
-
-            if args:
-                if self.method == "POST":
-                    sig = inspect.signature(self.form)
-                    params = list(sig.parameters.values())
-                    injected = {"cxt", "ctx", "txn"}
-                    param_names = [
-                        param.name
-                        for param in params[1:]
-                        if param.kind in (
-                            param.POSITIONAL_ONLY,
-                            param.POSITIONAL_OR_KEYWORD,
-                            param.KEYWORD_ONLY,
-                        )
-                        and param.name not in injected
-                    ]
-                    if len(args) != len(param_names):
-                        raise TypeError(
-                            "TinyChain POST stubs require one positional argument per parameter"
-                        )
-                    body = dict(zip(param_names, args, strict=True))
-                else:
-                    if len(args) != 1:
-                        raise TypeError("TinyChain route stubs accept at most one positional argument")
-                    body = args[0]
-            elif kwargs:
-                if self.method == "POST" and not (len(kwargs) == 1 and "body" in kwargs):
-                    body = kwargs
-                else:
-                    if len(kwargs) != 1 or "body" not in kwargs:
-                        raise TypeError("TinyChain route stubs accept only the keyword argument `body`")
-                    body = kwargs["body"]
+            body = _route_body_from_call(self, args, kwargs)
 
             opref = self._opref(instance)
             if body is not None:
@@ -301,22 +372,7 @@ class Route:
             rtype = self._return_type()
             result = rtype(opref) if rtype is not None else opref
 
-            if current_context() is not None:
-                return result
-
-            from .executor import try_current
-
-            exec_ctx = try_current()
-            if exec_ctx is not None and exec_ctx.is_eager():
-                import tinychain as tc
-
-                return tc.execute(result)
-            if exec_ctx is None:
-                import tinychain as tc
-
-                return tc.execute(result)
-
-            return result
+            return _execute_route_result_if_needed(result, body)
 
         bound.__name__ = self.name or self.form.__name__
         bound.__doc__ = self.form.__doc__
@@ -393,9 +449,9 @@ def _compile_opdef_callable(form: Callable[..., Any], *, method: str) -> OpDef:
     if params and params[0].name == "self":
         raise TypeError("expected a standalone callable, not a method")
 
-    injected_names = {"cxt", "ctx", "txn"}
+    injected_names = _INJECTED_ROUTE_PARAM_NAMES
     arg_names = []
-    with scoped_context():
+    with scoped_context() as cxt:
         args: list[Scalar] = []
         kwargs: dict[str, Scalar] = {}
         for param in params:
@@ -405,6 +461,7 @@ def _compile_opdef_callable(form: Callable[..., Any], *, method: str) -> OpDef:
                 raise TypeError(f"reserved parameter '{param.name}' is not supported in opdef callables")
             annotation = hints.get(param.name, param.annotation)
             placeholder = scalar_for_hint(param.name, _runtime_type_hint(annotation, default=Value))
+            placeholder._ctx = cxt
             arg_names.append(param.name)
             if param.kind == param.KEYWORD_ONLY:
                 kwargs[param.name] = placeholder
@@ -412,9 +469,8 @@ def _compile_opdef_callable(form: Callable[..., Any], *, method: str) -> OpDef:
                 args.append(placeholder)
 
         result = form(*args, **kwargs)
-        ctx = current_context()
-        if ctx is not None and ctx.form() and not isinstance(result, ContextResult):
-            result = ctx.result(result)
+        if cxt.form() and not isinstance(result, ContextResult):
+            result = cxt.result(result)
 
     if isinstance(result, OpDef):
         _validate_opdef_method(method, result)
@@ -620,7 +676,7 @@ def _compile_route(route: Route, library: type[Library]) -> object:
         return _compile_opdef_route(route, compile_subject, params)
 
     result = route.form(compile_subject)
-    if isinstance(result, (OpDef, Scalar)):
+    if isinstance(result, (OpDef, Scalar, Collection)):
         return _compile_opdef_route(route, compile_subject, params)
 
     return result
@@ -637,19 +693,15 @@ def _compile_opdef_route(
     except (NameError, TypeError):
         hints = {}
 
-    injected_names = {"cxt", "ctx", "txn"}
+    injected_names = _INJECTED_ROUTE_PARAM_NAMES
     form = route.form
-    if not any(param.name in injected_names for param in params[1:]):
+    uses_autograph = not any(param.name in injected_names for param in params[1:])
+    if uses_autograph:
         form = _autograph.transform(route.form, source=route.source)
 
-    arg_names = [
-        param.name
-        for param in params[1:]
-        if param.kind in (param.POSITIONAL_ONLY, param.POSITIONAL_OR_KEYWORD, param.KEYWORD_ONLY)
-        and param.name not in injected_names
-    ]
+    arg_names = _route_arg_param_names(params, skip_first_self=True)
 
-    with scoped_context():
+    with scoped_context() as cxt:
         args: list[Scalar] = []
         kwargs: dict[str, Scalar] = {}
         for idx, param in enumerate(params[1:], start=1):
@@ -660,7 +712,7 @@ def _compile_opdef_route(
                     raise TypeError(
                         f"reserved parameter '{param.name}' must be the first argument after self"
                     )
-                injected = context()
+                injected = cxt
                 if param.kind == param.KEYWORD_ONLY:
                     kwargs[param.name] = injected
                 else:
@@ -668,14 +720,16 @@ def _compile_opdef_route(
                 continue
             annotation = hints.get(param.name, param.annotation)
             placeholder = scalar_for_hint(param.name, _runtime_type_hint(annotation, default=Value))
+            placeholder._ctx = cxt
             if param.kind == param.KEYWORD_ONLY:
                 kwargs[param.name] = placeholder
             else:
                 args.append(placeholder)
         result = form(library, *args, **kwargs)
-        ctx = current_context()
-        if ctx is not None and ctx.form() and not isinstance(result, ContextResult):
-            result = ctx.result(result)
+        if uses_autograph and isinstance(result, ContextResult) and cxt.form():
+            result = ContextResult(list(cxt.form()) + list(result.form), result.result)
+        if cxt.form() and not isinstance(result, ContextResult):
+            result = cxt.result(result)
 
     if isinstance(result, OpDef):
         result = _inline_opref_refs(result)
@@ -685,8 +739,7 @@ def _compile_opdef_route(
 
     if isinstance(result, ContextResult):
         form = list(result.form)
-        scalar = autobox(result.result)
-        form.append(("result", scalar))
+        _append_context_result_form(route, form, result.result)
         opdef = _opdef_from_method(route.method, arg_names, form)
         opdef = _inline_opref_refs(opdef)
         _validate_opdef(opdef, set(arg_names))
@@ -721,11 +774,7 @@ def _validate_opdef_method(method: str, opdef: OpDef) -> None:
 
 
 def _allowed_inputs_from_params(route: Route, params: list[inspect.Parameter]) -> set[str]:
-    arg_names = [
-        param.name
-        for param in params[1:]
-        if param.kind in (param.POSITIONAL_ONLY, param.POSITIONAL_OR_KEYWORD, param.KEYWORD_ONLY)
-    ]
+    arg_names = _route_arg_param_names(params, skip_first_self=True)
 
     if route.method == "GET":
         return {arg_names[0]} if arg_names else {"key"}
@@ -766,8 +815,8 @@ def _inline_opref_refs(opdef: OpDef) -> OpDef:
     def resolve_scalar(scalar: Scalar) -> Scalar:
         scalar_form = form_of(scalar)
         if isinstance(scalar_form, TCRef):
-            ref_form = tcref_form_of(scalar_form)
-            if isinstance(ref_form, Scalar):
+            ref_form = form_of(scalar_form)
+            if isinstance(ref_form, Scalar) and not isinstance(ref_form, TCRef):
                 op_scalar = ref_form
             else:
                 op_scalar = None
@@ -776,12 +825,12 @@ def _inline_opref_refs(opdef: OpDef) -> OpDef:
 
         if isinstance(op_scalar, Scalar):
             op_form = form_of(op_scalar)
-            if isinstance(op_form, TCRef) and isinstance(tcref_form_of(op_form), IdRef):
-                target_id = tcref_form_of(op_form)
+            if isinstance(op_form, TCRef) and isinstance(form_of(op_form), IdRef):
+                target_id = form_of(op_form)
                 target = form_map.get(target_id.name)
                 target_form = form_of(target) if target is not None else None
-                if isinstance(target_form, TCRef) and isinstance(tcref_form_of(target_form), StateOpRef):
-                    return Scalar(ref=TCRef(tcref_form_of(target_form)))
+                if isinstance(target_form, TCRef) and isinstance(form_of(target_form), StateOpRef):
+                    return Scalar(ref=TCRef(form_of(target_form)))
 
         if isinstance(scalar_form, OpDef):
             return Scalar(_inline_opref_refs(scalar_form))
@@ -805,7 +854,7 @@ def _inline_opref_refs(opdef: OpDef) -> OpDef:
 
 
 def _validate_tcref(tcref, allowed: set[str], form_map: dict[str, Scalar]) -> None:
-    ref_form = tcref_form_of(tcref)
+    ref_form = form_of(tcref)
     if isinstance(ref_form, IdRef):
         name = ref_form.name
         if name not in allowed:
@@ -829,7 +878,7 @@ def _validate_opref(opref: StateOpRef) -> None:
 def _resolve_opref_ref(value: Scalar, form_map: dict[str, Scalar]) -> StateOpRef | None:
     value_form = form_of(value)
     if isinstance(value_form, TCRef):
-        ref_form = tcref_form_of(value_form)
+        ref_form = form_of(value_form)
         if isinstance(ref_form, StateOpRef):
             return ref_form
         if isinstance(ref_form, IdRef):
@@ -923,7 +972,7 @@ def _submit_remote_library_definition(
         host = remote if token is None else Host(remote.__uri__.absolute(), token=token)
     else:
         host = Host(str(remote), token=token)
-    return host.request("PUT", _uri("lib").path, body=definition)
+    return host.request("PUT", _LIB_ROOT_URI.path, body=definition)
 
 
 def _kernel_for_library_install(
@@ -973,7 +1022,7 @@ def _header_value(response: object, name: str) -> str | None:
 def _submit_local_library_definition(kernel: object, definition: dict, *, bearer_token: str) -> object:
     from . import _local
 
-    install_path = _uri("lib").path
+    install_path = _LIB_ROOT_URI.path
     body = json.dumps(definition, separators=(",", ":"))
     headers = [("authorization", f"Bearer {bearer_token}")]
     request = _local.kernel_request("PUT", install_path, headers, _local.state_handle(body))
@@ -999,7 +1048,7 @@ def _compiled_library_package_for_wasm(
         "schema": schema,
         "artifacts": [
             {
-                "path": _uri("lib", "wasm").path,
+                "path": _LIB_WASM_URI.path,
                 "content_type": "application/wasm",
                 "bytes": _read_wasm_b64(wasm_path),
             }

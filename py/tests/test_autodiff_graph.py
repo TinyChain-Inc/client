@@ -2,14 +2,19 @@ import pytest
 import tinychain as tc
 from tinychain.autodiff import (
     AddOperator,
+    AutodiffError,
     BroadcastReduceOperator,
     MatmulOperator,
     TensorGraph,
+    MeanOperator,
+    MulOperator,
+    SubOperator,
     TensorGraphBuilder,
     TensorNodeRecord,
     TransposeOperator,
     get_active_builder,
 )
+from tinychain.autodiff.tracing import _infer_transpose, finalize_typed_graph
 
 
 def _make_tensor(name: str) -> tc.Tensor:
@@ -64,6 +69,73 @@ def test_tensor_node_requires_operator_instance():
             op_params={},
             input_value_ids=["v0"],
         )
+
+
+@pytest.mark.parametrize(
+    "permutation",
+    [object(), tc.state.IdRef("permutation"), "01", b"01", [0, 1.0], [True, 0]],
+)
+def test_typed_transpose_rejects_runtime_or_non_integer_permutation(permutation):
+    with pytest.raises(AutodiffError) as error:
+        _infer_transpose(
+            [{"dtype": "f32", "shape": (2, 3)}], {"permutation": permutation}
+        )
+
+    assert error.value.category == "invalid_permutation"
+
+
+def test_typed_transpose_preserves_static_and_default_permutations():
+    metadata = [{"dtype": "f32", "shape": (2, 3)}]
+
+    static_params, static_typespec = _infer_transpose(metadata, {"permutation": [1, 0]})
+    default_params, default_typespec = _infer_transpose(metadata, {"permutation": None})
+
+    assert static_params == default_params == {"perm": [1, 0]}
+    assert static_typespec == default_typespec == {"dtype": "f32", "shape": [3, 2]}
+
+
+def test_typed_transpose_does_not_infer_from_unranked_operand_metadata():
+    params, typespec = _infer_transpose(
+        [{"dtype": "f32", "shape": None}], {"permutation": [1, 0]}
+    )
+
+    assert params == {"perm": [1, 0]}
+    assert typespec is None
+
+
+@pytest.mark.parametrize(
+    "typespec",
+    [{"dtype": "f32"}, {"dtype": "f32", "shape": None}, {"dtype": "f32", "shape": "runtime"}],
+)
+def test_finalizer_rejects_missing_or_unranked_shape_metadata(typespec):
+    graph = TensorGraph(nodes=[], inputs=[("runtime_value", typespec)], outputs=["runtime_value"])
+
+    with pytest.raises(AutodiffError) as error:
+        finalize_typed_graph(graph)
+
+    assert error.value.category == "missing_shape_metadata"
+
+
+def test_finalizer_rejects_opaque_intermediate_on_selected_output_path():
+    graph = TensorGraph(
+        nodes=[
+            TensorNodeRecord(
+                node_id="n0",
+                output_value_id="v1",
+                operator=AddOperator(),
+                op_params={},
+                input_value_ids=["runtime_value"],
+                output_typespec={"dtype": "f32", "shape": [2, 3]},
+            )
+        ],
+        inputs=[("runtime_value", None)],
+        outputs=["v1"],
+    )
+
+    with pytest.raises(AutodiffError) as error:
+        finalize_typed_graph(graph)
+
+    assert error.value.category == "missing_dtype_metadata"
 
 
 class TestBuilderContext:
@@ -197,6 +269,26 @@ class TestTransposeRecording:
 
 
 class TestMultiNodeGraph:
+    def test_typed_linear_mse_records_supported_operations_in_order(self):
+        with TensorGraphBuilder() as builder:
+            features = builder.input("features", dtype="f32", shape=[2, 3])
+            weights = builder.input("weights", dtype="f32", shape=[3, 1])
+            targets = builder.input("targets", dtype="f32", shape=[2, 1])
+            with tc.state.scoped_context():
+                prediction = features @ weights
+                error = prediction - targets
+                loss = (error * error).mean(axes=[0], keepdims=False)
+            builder.mark_output(loss)
+
+        graph = builder.build()
+        assert [type(node.operator) for node in graph.nodes] == [
+            MatmulOperator,
+            SubOperator,
+            MulOperator,
+            MeanOperator,
+        ]
+        assert graph.nodes[-1].op_params == {"axes": [0], "keepdims": False}
+
     def test_two_ops_produce_two_nodes(self, x, y, w):
         with TensorGraphBuilder() as builder:
             x + y
@@ -243,3 +335,51 @@ def test_symbolic_form_unchanged_outside_builder(op_fn, expected_json):
     x = _make_tensor("x")
     y = _make_tensor("y")
     assert _json(op_fn(x, y)) == expected_json
+
+
+def test_add_and_transpose_are_recorded_by_the_active_builder():
+    with TensorGraphBuilder() as builder:
+        x = builder.input("x", dtype="f32", shape=[2, 3])
+        y = builder.input("y", dtype="f32", shape=[2, 3])
+        with tc.state.scoped_context():
+            result = (x + y).transpose([1, 0])
+        builder.mark_output(result)
+
+    graph = builder.build()
+    assert [type(node.operator) for node in graph.nodes] == [AddOperator, TransposeOperator]
+    assert graph.nodes[1].input_value_ids == [graph.nodes[0].output_value_id]
+
+
+def test_div_and_logical_operations_are_not_captured():
+    with TensorGraphBuilder() as builder:
+        x = builder.input("x", dtype="f32", shape=[2, 3])
+        y = builder.input("y", dtype="f32", shape=[2, 3])
+        quotient = x / y
+        conjunction = x.logical_and(y)
+
+    graph = builder.build()
+    assert isinstance(quotient, tc.Tensor)
+    assert isinstance(conjunction, tc.Tensor)
+    assert graph.nodes == []
+    assert graph.outputs == []
+
+
+def test_inactive_supported_operations_preserve_return_types_without_records():
+    x = _make_tensor("x")
+    y = _make_tensor("y")
+
+    results = [x + y, x - y, x * y, x @ y, x.transpose([1, 0])]
+    mean = x.mean(axes=[0], keepdims=False)
+
+    assert get_active_builder() is None
+    assert all(isinstance(result, tc.Tensor) for result in results)
+    assert isinstance(mean, tc.state.Scalar)
+
+
+def test_active_typed_transpose_rejects_runtime_permutation_through_recorder():
+    with TensorGraphBuilder() as builder:
+        x = builder.input("x", dtype="f32", shape=[2, 3])
+        with pytest.raises(AutodiffError) as error:
+            x.transpose(tc.state.IdRef("runtime_permutation"))
+
+    assert error.value.category == "invalid_permutation"

@@ -32,26 +32,23 @@ def _as_uri(value: object) -> URI:
         linked = value.link()
         if isinstance(linked, URI):
             return linked
-        return URI.parse(str(linked))
+        if isinstance(linked, str):
+            return URI.parse(linked)
+        return URI(linked)
     if hasattr(value, "id") and callable(getattr(value, "id")):
         base = value.id()
-        base_uri = base if isinstance(base, URI) else URI.parse(str(base))
+        if isinstance(base, URI):
+            base_uri = base
+        elif isinstance(base, str):
+            base_uri = URI.parse(base)
+        else:
+            base_uri = URI(base)
         authority = getattr(value, "authority", None)
         if isinstance(authority, URI):
-            return URI(
-                path=base_uri.path,
-                scheme=authority.scheme,
-                host=authority.host,
-                port=authority.port,
-            )
+            return base_uri.with_authority(authority) if authority.host is not None else base_uri
         if isinstance(authority, str):
             authority_uri = URI.parse(authority)
-            return URI(
-                path=base_uri.path,
-                scheme=authority_uri.scheme,
-                host=authority_uri.host,
-                port=authority_uri.port,
-            )
+            return base_uri.with_authority(authority_uri) if authority_uri.host is not None else base_uri
         return base_uri
     raise TypeError(f"unsupported dependency type: {type(value).__name__}")
 
