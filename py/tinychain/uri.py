@@ -4,8 +4,7 @@ import re
 from dataclasses import dataclass
 from typing import Iterable, Optional
 
-
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class URI:
     """
     A canonical TinyChain path with an optional authority.
@@ -14,10 +13,70 @@ class URI:
     - Authority (scheme/host/port) is deployment configuration used for routing remote dependencies.
     """
 
-    path: str = ""
-    scheme: str = "http"
-    host: Optional[str] = None
-    port: Optional[int] = None
+    path: str
+    scheme: str
+    host: Optional[str]
+    port: Optional[int]
+
+    def __init__(
+        self,
+        subject: object | None = None,
+        *parts: str,
+        path: str | "URI" | None = None,
+        scheme: str | None = None,
+        host: Optional[str] = None,
+        port: Optional[int] = None,
+    ) -> None:
+        if path is not None and (subject is not None or parts):
+            raise TypeError("URI accepts either path=... or subject/parts, not both")
+
+        inherited_scheme: str | None = None
+        inherited_host: str | None = None
+        inherited_port: int | None = None
+
+        if path is None:
+            if subject is None:
+                resolved_path = ""
+            elif isinstance(subject, URI):
+                resolved = subject.child(*parts)
+                resolved_path = resolved.path
+                inherited_scheme = resolved.scheme
+                inherited_host = resolved.host
+                inherited_port = resolved.port
+            elif isinstance(subject, str) and (subject.startswith("/") or subject.startswith("$") or "://" in subject):
+                resolved = URI.parse(subject).child(*parts)
+                resolved_path = resolved.path
+                inherited_scheme = resolved.scheme
+                inherited_host = resolved.host
+                inherited_port = resolved.port
+            else:
+                resolved_path = _path_from_subject(subject, *parts)
+        else:
+            if isinstance(path, URI):
+                resolved_path = path.path
+                inherited_scheme = path.scheme
+                inherited_host = path.host
+                inherited_port = path.port
+            elif isinstance(path, str) and "://" in path:
+                parsed = URI.parse(path)
+                resolved_path = parsed.path
+                inherited_scheme = parsed.scheme
+                inherited_host = parsed.host
+                inherited_port = parsed.port
+            else:
+                resolved_path = path
+
+        resolved_scheme = inherited_scheme if scheme is None else str(scheme)
+        if resolved_scheme is None:
+            resolved_scheme = "http"
+        resolved_host = inherited_host if host is None else host
+        resolved_port = inherited_port if port is None else port
+
+        object.__setattr__(self, "path", resolved_path)
+        object.__setattr__(self, "scheme", resolved_scheme)
+        object.__setattr__(self, "host", resolved_host)
+        object.__setattr__(self, "port", resolved_port)
+        self.__post_init__()
 
     def __post_init__(self) -> None:
         if self.path and not self.path.startswith("/"):
@@ -77,6 +136,21 @@ class URI:
     def __str__(self) -> str:
         return self.absolute()
 
+    def child(self, *parts: str) -> "URI":
+        if not parts:
+            return self
+
+        segments = _path_segments(parts)
+        base_path = self.path.rstrip("/")
+        new_path = _join_path([base_path.lstrip("/")] + segments) if base_path else _join_path(segments)
+        return URI(path=new_path, scheme=self.scheme, host=self.host, port=self.port)
+
+    def with_authority(self, authority: "URI | str") -> "URI":
+        parsed = authority if isinstance(authority, URI) else URI.parse(authority)
+        if parsed.host is None:
+            raise ValueError("authority URI must include a host")
+        return URI(path=self.path, scheme=parsed.scheme, host=parsed.host, port=parsed.port)
+
 
 def _segment(label: str, value: str) -> str:
     if not isinstance(value, str) or not value:
@@ -135,57 +209,53 @@ def _join_path(segments: Iterable[str]) -> str:
     return f"/{joined}" if joined else "/"
 
 
-def uri(subject: object, *path: str) -> URI | "Scalar":
-    if isinstance(subject, URI):
-        base = subject
-    elif hasattr(subject, "__uri__"):
-        base_value = subject.__uri__
-        base = base_value if isinstance(base_value, URI) else URI.parse(str(base_value))
-    elif hasattr(subject, "class_") and callable(getattr(subject, "class_")):
-        if path:
-            raise TypeError("cannot append path segments to a Scalar URI")
-        return subject.class_()
-    elif hasattr(subject, "id") and callable(getattr(subject, "id")):
-        base_value = subject.id()
-        base = base_value if isinstance(base_value, URI) else URI.parse(str(base_value))
-    elif isinstance(subject, str):
+def _path_from_subject(subject: object, *parts: str) -> str:
+    if isinstance(subject, str):
         if subject.startswith("/") or subject.startswith("$") or "://" in subject:
             base = URI.parse(subject)
-        else:
-            segments = [subject, *_path_segments(path)]
-            return URI(_join_path(segments))
-    else:
-        raise TypeError(f"unsupported URI subject: {type(subject).__name__}")
+            return base.child(*parts).path if parts else base.path
 
-    if not path:
-        return base
+        segments = [_segment("path", subject), *_path_segments(parts)]
+        return _join_path(segments)
 
-    segments = _path_segments(path)
-    if not segments:
-        return base
-
-    base_path = base.path.rstrip("/")
-    new_path = _join_path([base_path.lstrip("/")] + segments) if base_path else _join_path(segments)
-
-    return URI(path=new_path, scheme=base.scheme, host=base.host, port=base.port)
-
-
-def path(subject: object, *parts: str) -> str:
-    resolved = uri(subject, *parts)
+    resolved = uri(subject)
     if isinstance(resolved, URI):
-        return resolved.path
+        return resolved.child(*parts).path if parts else resolved.path
 
-    # Scalar URIs should only appear when asking for a class URI without extra segments.
     if parts:
-        raise TypeError("cannot derive a path from a Scalar URI with path segments")
+        raise TypeError("cannot append path segments to a Scalar URI")
 
-    scalar_uri = resolved
-    if hasattr(scalar_uri, "to_json"):
-        raw = scalar_uri.to_json()
-        if isinstance(raw, str):
-            return raw
+    raw: object = resolved
+    if hasattr(raw, "to_json"):
+        raw = raw.to_json()
+    return URI.parse(str(raw)).path
 
-    return str(scalar_uri)
+
+def uri(subject: object) -> URI | "Scalar":
+    if isinstance(subject, URI):
+        return subject
+
+    if hasattr(subject, "__uri__"):
+        base_value = getattr(subject, "__uri__")
+        if isinstance(base_value, URI):
+            return base_value
+        if isinstance(base_value, str):
+            return URI.parse(base_value)
+        raise TypeError(f"expected __uri__ to be URI or str, got {type(base_value).__name__}")
+
+    if hasattr(subject, "class_") and callable(getattr(subject, "class_")):
+        return subject.class_()
+
+    if hasattr(subject, "id") and callable(getattr(subject, "id")):
+        base_value = subject.id()
+        return base_value if isinstance(base_value, URI) else URI.parse(str(base_value))
+
+    if isinstance(subject, str):
+        if subject.startswith("/") or subject.startswith("$") or "://" in subject:
+            return URI.parse(subject)
+        raise TypeError("uri(...) is an accessor; construct via URI(...)")
+
+    raise TypeError(f"unsupported URI subject: {type(subject).__name__}")
 
 
 def authority(value: str | URI) -> str:
