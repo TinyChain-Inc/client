@@ -16,6 +16,9 @@ construction. It is the sole extension point for future supported operations.
 The capture allowlist is explicit and reviewable (spec §9.1, FR-013):
 Add, Sub, Mul, Matmul, Mean, and Transpose are captured; Div, Sum, and Reshape
 are deliberately NOT captured in this issue even though they have VJP rules.
+Tracing is limited to operations and metadata observable by the Python client.
+It neither queries nor evaluates an opaque runtime graph; an unavailable dtype
+or rank therefore fails closed during typed finalization.
 """
 
 from __future__ import annotations
@@ -132,8 +135,10 @@ def _infer_transpose(
     permutation = params.get("permutation")
     metadata = operand_metadata[0]
     if metadata is None:
-        stored = list(permutation) if permutation is not None else []
-        return {"perm": stored}, None
+        # Do not derive a default permutation without an observed rank, nor
+        # evaluate an opaque runtime permutation. Finalization rejects this
+        # untyped path before it can be used to generate a derivative.
+        return {"perm": permutation}, None
     shape = tuple(metadata["shape"])
     rank = len(shape)
     perm = tuple(permutation) if permutation is not None else tuple(reversed(range(rank)))
@@ -224,10 +229,19 @@ def record_operation(
 
 def _require_complete_typespec(typespec: Optional[Mapping[str, object]], *, label: str) -> None:
     """Fail closed unless *typespec* carries both a dtype and a ranked shape."""
-    if typespec is None or not typespec.get("dtype"):
+    if not isinstance(typespec, Mapping) or not isinstance(typespec.get("dtype"), str) or not typespec["dtype"]:
         raise AutodiffError("missing_dtype_metadata", f"{label} is missing dtype metadata")
-    # Raises `missing_shape_metadata` when the shape is absent or malformed.
-    typespec_ranked_shape(dict(typespec))
+    try:
+        # `typespec_ranked_shape` converts absent, unranked, and malformed
+        # shapes to the documented category. Do not let malformed boundary
+        # metadata leak a raw container exception.
+        typespec_ranked_shape({"shape": typespec.get("shape")})
+    except AutodiffError:
+        raise
+    except (IndexError, TypeError, ValueError) as exc:
+        raise AutodiffError(
+            "missing_shape_metadata", f"{label} is missing ranked shape metadata"
+        ) from exc
 
 
 def finalize_typed_graph(graph: TensorGraph) -> TensorGraph:
@@ -235,10 +249,11 @@ def finalize_typed_graph(graph: TensorGraph) -> TensorGraph:
 
     Every graph input and node output reachable from ``graph.outputs`` must carry
     a dtype (``missing_dtype_metadata``) and a ranked shape
-    (``missing_shape_metadata``). An unsupported/untraced intermediate on the
-    selected path surfaces here as a graph input with no metadata, so it can
-    never be silently omitted from the derivative. The graph is returned
-    unchanged on success to support ``graph = finalize_typed_graph(builder.build())``.
+    (``missing_shape_metadata``). Capture covers only operations and metadata
+    observable by the Python client: opaque runtime-built intermediates, unknown
+    ranks, and unsupported operations on the selected path are not inferred or
+    evaluated and instead fail closed here. The graph is returned unchanged on
+    success to support ``graph = finalize_typed_graph(builder.build())``.
     """
     input_typespecs = dict(graph.inputs)
     produced_by = {node.output_value_id: node for node in graph.nodes}
