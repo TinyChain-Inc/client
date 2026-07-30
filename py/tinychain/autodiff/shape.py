@@ -176,3 +176,186 @@ def shape_from_value(value: object) -> ConcreteShape | None:
         return tuple(int(dim) for dim in shape)
     except (TypeError, ValueError) as exc:
         raise AutodiffError("symbolic_shape_mismatch", "runtime tensor shape must be concrete") from exc
+
+
+# Differentiable dtypes accepted for forward-traced operations (spec §10.1 rule 4-5).
+FLOATING_DTYPES: tuple[str, ...] = ("f32", "f64")
+
+
+def check_differentiable_dtype(dtype: str) -> str:
+    """Require a floating dtype for a traced forward operation (spec §10.1 rule 4-5)."""
+    if dtype not in FLOATING_DTYPES:
+        raise AutodiffError(
+            "dtype_not_differentiable",
+            f"dtype {dtype!r} is not a differentiable floating dtype; expected one of {FLOATING_DTYPES}",
+        )
+    return dtype
+
+
+def check_compatible_operand_dtypes(lhs_dtype: str, rhs_dtype: str) -> str:
+    """Require equal, differentiable operand dtypes and return the output dtype.
+
+    No dtype promotion is performed (spec §10.1 rules 3-5).
+    """
+    if lhs_dtype != rhs_dtype:
+        raise AutodiffError(
+            "dtype_mismatch",
+            f"operand dtypes must match: {lhs_dtype!r} != {rhs_dtype!r}",
+        )
+    return check_differentiable_dtype(lhs_dtype)
+
+
+def _broadcast_dim(lhs_dim: ShapeDim, rhs_dim: ShapeDim, bindings: dict[str, int]) -> ShapeDim:
+    if isinstance(lhs_dim, int) and lhs_dim == 1:
+        return rhs_dim
+    if isinstance(rhs_dim, int) and rhs_dim == 1:
+        return lhs_dim
+    if isinstance(lhs_dim, int) and isinstance(rhs_dim, int):
+        if lhs_dim != rhs_dim:
+            raise AutodiffError(
+                "broadcast_shape_mismatch",
+                f"broadcast dimension mismatch: {lhs_dim} != {rhs_dim}",
+            )
+        return lhs_dim
+    try:
+        bind_compatible_dims(lhs_dim, rhs_dim, bindings=bindings, label="broadcast")
+    except AutodiffError as exc:
+        raise AutodiffError(
+            "unresolved_symbolic_shape",
+            f"broadcast dimensions {lhs_dim!r} and {rhs_dim!r} cannot be proven compatible",
+        ) from exc
+    if isinstance(lhs_dim, str) and isinstance(rhs_dim, str):
+        return lhs_dim
+    return lhs_dim if isinstance(lhs_dim, int) else rhs_dim
+
+
+def elementwise_broadcast_shape(lhs: Shape, rhs: Shape) -> Shape:
+    """Compute the proven right-aligned broadcast output shape (spec §10.2).
+
+    Equal dimensions are kept, `1` broadcasts to the other dimension, missing
+    leading dimensions act as leading `1`s, unequal concrete dimensions raise
+    `broadcast_shape_mismatch`, equal symbolic dimensions remain symbolic, and
+    unprovable symbolic dimensions raise `unresolved_symbolic_shape`.
+    """
+    rank = max(shape_rank(lhs), shape_rank(rhs))
+    padded_lhs = (1,) * (rank - shape_rank(lhs)) + lhs
+    padded_rhs = (1,) * (rank - shape_rank(rhs)) + rhs
+    bindings: dict[str, int] = {}
+    return tuple(
+        _broadcast_dim(lhs_dim, rhs_dim, bindings)
+        for lhs_dim, rhs_dim in zip(padded_lhs, padded_rhs, strict=True)
+    )
+
+
+def matmul_output_shape(lhs: Shape, rhs: Shape) -> Shape:
+    """Compute the proven matmul output shape (spec §10.3).
+
+    Both operands must have rank at least two; `lhs[-1]` and `rhs[-2]` must be
+    equal, bindable, or the same symbol; batch dimensions follow the
+    elementwise broadcast rules; the output shape is
+    `broadcast(lhs[:-2], rhs[:-2]) + (lhs[-2], rhs[-1])`.
+    """
+    lhs_rank = shape_rank(lhs)
+    rhs_rank = shape_rank(rhs)
+    if lhs_rank < 2 or rhs_rank < 2:
+        raise AutodiffError(
+            "matmul_shape_mismatch",
+            f"matmul requires operands of rank at least 2; got ranks {lhs_rank} and {rhs_rank}",
+        )
+    lhs_inner, rhs_inner = lhs[-1], rhs[-2]
+    if isinstance(lhs_inner, int) and isinstance(rhs_inner, int):
+        if lhs_inner != rhs_inner:
+            raise AutodiffError(
+                "matmul_shape_mismatch",
+                f"matmul inner dimensions incompatible: {lhs_inner} != {rhs_inner}",
+            )
+    else:
+        try:
+            bind_compatible_dims(lhs_inner, rhs_inner, bindings={}, label="matmul inner dimension")
+        except AutodiffError as exc:
+            raise AutodiffError(
+                "unresolved_symbolic_shape",
+                f"matmul inner dimensions {lhs_inner!r} and {rhs_inner!r} cannot be proven compatible",
+            ) from exc
+    batch_shape = elementwise_broadcast_shape(lhs[:-2], rhs[:-2])
+    return batch_shape + (lhs[-2], rhs[-1])
+
+
+def _normalize_mean_axes(axes: object, rank: int) -> tuple[int, ...]:
+    if isinstance(axes, int) and not isinstance(axes, bool):
+        raw_axes: tuple[object, ...] = (axes,)
+    elif isinstance(axes, Sequence) and not isinstance(axes, (str, bytes)):
+        raw_axes = tuple(axes)
+    else:
+        raise AutodiffError(
+            "reduction_shape_mismatch",
+            f"mean axes must be an integer or a sequence of integers; got {axes!r}",
+        )
+
+    normalized: list[int] = []
+    for axis in raw_axes:
+        if not isinstance(axis, int) or isinstance(axis, bool):
+            raise AutodiffError(
+                "reduction_shape_mismatch",
+                f"mean axis {axis!r} must be an integer",
+            )
+        normalized_axis = axis + rank if axis < 0 else axis
+        if normalized_axis < 0 or normalized_axis >= rank:
+            raise AutodiffError(
+                "reduction_shape_mismatch",
+                f"mean axis {axis} is out of range for rank {rank}",
+            )
+        normalized.append(normalized_axis)
+
+    if len(set(normalized)) != len(normalized):
+        raise AutodiffError(
+            "reduction_shape_mismatch",
+            f"mean axes must be unique after normalization: {normalized}",
+        )
+    return tuple(normalized)
+
+
+def mean_output_shape(shape: Shape, axes: object, *, keepdims: bool) -> Shape:
+    """Compute the proven mean-reduction output shape (spec §10.4).
+
+    Axes may be a single integer or a non-string sequence of integers;
+    negative axes normalize against rank; normalized axes must be in range and
+    unique (`reduction_shape_mismatch`); `keepdims` replaces reduced
+    dimensions with `1` instead of removing them; a fully reduced shape
+    yields the empty (rank-zero) shape; reducing a symbolic dimension raises
+    `unresolved_symbolic_shape`.
+    """
+    rank = shape_rank(shape)
+    normalized_axes = _normalize_mean_axes(axes, rank)
+    for axis in normalized_axes:
+        dim = shape[axis]
+        if isinstance(dim, str):
+            raise AutodiffError(
+                "unresolved_symbolic_shape",
+                f"mean reduction over symbolic dimension {dim!r} at axis {axis} is unresolved",
+            )
+    if keepdims:
+        return tuple(1 if index in normalized_axes else dim for index, dim in enumerate(shape))
+    return tuple(dim for index, dim in enumerate(shape) if index not in normalized_axes)
+
+
+def transpose_output_shape(shape: Shape, perm: Sequence[int]) -> Shape:
+    """Compute the proven transpose output shape (spec §10.5).
+
+    The permutation length must equal the input rank and each axis must
+    appear exactly once (`invalid_permutation`); the output shape follows the
+    permutation.
+    """
+    rank = shape_rank(shape)
+    if not isinstance(perm, Sequence) or isinstance(perm, (str, bytes)):
+        raise AutodiffError(
+            "invalid_permutation",
+            f"transpose permutation must be a sequence of integers; got {perm!r}",
+        )
+    perm_tuple = tuple(perm)
+    if len(perm_tuple) != rank or sorted(perm_tuple) != list(range(rank)):
+        raise AutodiffError(
+            "invalid_permutation",
+            f"transpose permutation {perm_tuple!r} must be a rearrangement of axes 0..{rank - 1}",
+        )
+    return tuple(shape[axis] for axis in perm_tuple)
