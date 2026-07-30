@@ -464,7 +464,7 @@ Forward dtype and shape are inferred for every captured node:
   identifier string; rank zero is `shape=()`. Symbolic dimensions are supported
   and are only compatible when provably equal — unprovable broadcast, matmul, or
   reduction constraints fail with the corresponding existing categories (for
-  example `matmul_inner_dim_mismatch`, `unresolved_symbolic_shape`).
+  example `matmul_shape_mismatch`, `unresolved_symbolic_shape`).
 - Typed finalization is **fail-closed**: any reachable input or captured output
   that lacks complete dtype/shape metadata raises before `generate(...)` runs,
   rather than silently returning a partial derivative.

@@ -55,7 +55,9 @@ _ValueMetadata = Optional[dict[str, object]]
 # record's stored ``op_params`` and its boundary ``output_typespec`` (``None``
 # when inference is impossible because an operand is untyped).
 _InferenceResult = tuple[dict[str, object], Optional[dict[str, object]]]
-_InferenceFn = Callable[[list[_ValueMetadata], Mapping[str, object]], _InferenceResult]
+_InferenceFn = Callable[
+    [list[_ValueMetadata], Mapping[str, object], dict[str, int]], _InferenceResult
+]
 
 
 def _boundary_typespec(dtype: str, shape: Sequence[object]) -> dict[str, object]:
@@ -64,7 +66,9 @@ def _boundary_typespec(dtype: str, shape: Sequence[object]) -> dict[str, object]
 
 
 def _infer_elementwise(
-    operand_metadata: list[_ValueMetadata], params: Mapping[str, object]
+    operand_metadata: list[_ValueMetadata],
+    params: Mapping[str, object],
+    symbol_bindings: dict[str, int],
 ) -> _InferenceResult:
     """Infer output metadata for a captured Add/Sub/Mul node (spec §10.1-§10.2)."""
     lhs_metadata, rhs_metadata = operand_metadata
@@ -74,13 +78,17 @@ def _infer_elementwise(
         str(lhs_metadata["dtype"]), str(rhs_metadata["dtype"])
     )
     shape = elementwise_broadcast_shape(
-        tuple(lhs_metadata["shape"]), tuple(rhs_metadata["shape"])
+        tuple(lhs_metadata["shape"]),
+        tuple(rhs_metadata["shape"]),
+        bindings=symbol_bindings,
     )
     return {}, _boundary_typespec(dtype, shape)
 
 
 def _infer_matmul(
-    operand_metadata: list[_ValueMetadata], params: Mapping[str, object]
+    operand_metadata: list[_ValueMetadata],
+    params: Mapping[str, object],
+    symbol_bindings: dict[str, int],
 ) -> _InferenceResult:
     """Infer output metadata for a captured Matmul node (spec §10.1, §10.3)."""
     lhs_metadata, rhs_metadata = operand_metadata
@@ -90,13 +98,17 @@ def _infer_matmul(
         str(lhs_metadata["dtype"]), str(rhs_metadata["dtype"])
     )
     shape = matmul_output_shape(
-        tuple(lhs_metadata["shape"]), tuple(rhs_metadata["shape"])
+        tuple(lhs_metadata["shape"]),
+        tuple(rhs_metadata["shape"]),
+        bindings=symbol_bindings,
     )
     return {}, _boundary_typespec(dtype, shape)
 
 
 def _infer_mean(
-    operand_metadata: list[_ValueMetadata], params: Mapping[str, object]
+    operand_metadata: list[_ValueMetadata],
+    params: Mapping[str, object],
+    _symbol_bindings: dict[str, int],
 ) -> _InferenceResult:
     """Infer output metadata for a captured Mean node (spec §10.1, §10.4).
 
@@ -122,7 +134,9 @@ def _infer_mean(
 
 
 def _infer_transpose(
-    operand_metadata: list[_ValueMetadata], params: Mapping[str, object]
+    operand_metadata: list[_ValueMetadata],
+    params: Mapping[str, object],
+    _symbol_bindings: dict[str, int],
 ) -> _InferenceResult:
     """Infer output metadata for a captured Transpose node (spec §10.5).
 
@@ -136,7 +150,7 @@ def _infer_transpose(
         return {"perm": stored}, None
     shape = tuple(metadata["shape"])
     rank = len(shape)
-    perm = tuple(permutation) if permutation is not None else tuple(reversed(range(rank)))
+    perm = permutation if permutation is not None else tuple(reversed(range(rank)))
     dtype = check_differentiable_dtype(str(metadata["dtype"]))
     output_shape = transpose_output_shape(shape, perm)
     return {"perm": list(perm)}, _boundary_typespec(dtype, output_shape)
@@ -201,7 +215,11 @@ def record_operation(
     output_value_id = builder.register_value(result)
     operand_metadata = [builder._get_value_metadata(value_id) for value_id in input_value_ids]
 
-    op_params, output_typespec = _INFERENCE[operation](operand_metadata, normalized_params)
+    symbol_bindings = builder._copy_symbol_bindings()
+    op_params, output_typespec = _INFERENCE[operation](
+        operand_metadata, normalized_params, symbol_bindings
+    )
+    builder._replace_symbol_bindings(symbol_bindings)
 
     if output_typespec is not None:
         builder._set_value_metadata(

@@ -7,10 +7,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from ..serialize import serialize
-
-# Differentiable dtypes accepted by TensorGraphBuilder.input(...)
-# (spec §7.3.4; https://github.com/TinyChain-Inc/client/issues/95).
-_INPUT_DTYPES: tuple[str, ...] = ("f32", "f64")
+from .shape import check_differentiable_dtype
 
 
 @dataclass(frozen=True)
@@ -190,6 +187,7 @@ class TensorGraphBuilder:
         # while `_retained_values` keeps the object itself alive so a GC'd
         # intermediate cannot have its `id()` reused and corrupt identity.
         self._value_metadata: dict[str, dict[str, object]] = {}
+        self._symbol_bindings: dict[str, int] = {}
         self._retained_values: dict[str, object] = {}
         self._input_value_ids: list[str] = []
         self._input_names: set[str] = set()
@@ -252,6 +250,14 @@ class TensorGraphBuilder:
             return None
         return {"dtype": metadata["dtype"], "shape": list(metadata["shape"])}
 
+    def _copy_symbol_bindings(self) -> dict[str, int]:
+        """Return a transactional copy of the graph-wide symbolic bindings."""
+        return dict(self._symbol_bindings)
+
+    def _replace_symbol_bindings(self, bindings: dict[str, int]) -> None:
+        """Commit graph-wide symbolic bindings after successful node inference."""
+        self._symbol_bindings = dict(bindings)
+
     @staticmethod
     def _normalize_input_shape(shape: object) -> tuple[object, ...]:
         if isinstance(shape, str) or not isinstance(shape, Sequence):
@@ -291,8 +297,7 @@ class TensorGraphBuilder:
             )
         if name in self._input_names:
             raise ValueError(f"TensorGraphBuilder.input(...) duplicate input name {name!r}")
-        if dtype not in _INPUT_DTYPES:
-            raise ValueError(f"TensorGraphBuilder.input(...) dtype must be one of {_INPUT_DTYPES}, got {dtype!r}")
+        check_differentiable_dtype(dtype)
         normalized_shape = self._normalize_input_shape(shape)
 
         from ..state.scalar import IdRef, TCRef
@@ -340,9 +345,15 @@ class TensorGraphBuilder:
         an untraced output raises ``ValueError`` naming the role when
         determinable (via :meth:`value_id`).
         """
+        output_sequence = self._as_output_sequence(outputs)
+        if not output_sequence:
+            raise ValueError(
+                "TensorGraphBuilder.build(outputs=...) requires at least one explicit output"
+            )
+
         resolved: list[str] = []
         seen: set[str] = set()
-        for output in self._as_output_sequence(outputs):
+        for output in output_sequence:
             value_id = self.value_id(output)
             if value_id not in seen:
                 seen.add(value_id)
@@ -384,16 +395,31 @@ class TensorGraphBuilder:
             return TensorGraph(nodes=self._nodes, inputs=inputs, outputs=graph_outputs)
 
         graph_outputs = self._resolve_output_value_ids(outputs)
-        # A declared typed input selected directly as an output has no producing
-        # node, so the node-operand walk above never lists it. Add such leaf
-        # outputs to the graph inputs so their side-table metadata is preserved
-        # (FR-005/FR-007; a passthrough graph names the value as both input and
-        # output). Genuinely untyped leaves still surface with `None` and fail
-        # closed at finalization.
-        for output_value_id in graph_outputs:
-            if output_value_id not in produced and output_value_id not in seen:
-                input_value_ids.append(output_value_id)
-                seen.add(output_value_id)
+        produced_by = {record.output_value_id: record for record in self._nodes}
+        reachable_inputs: set[str] = set()
+        visited_values: set[str] = set()
+        pending = list(graph_outputs)
+        while pending:
+            value_id = pending.pop()
+            if value_id in visited_values:
+                continue
+            visited_values.add(value_id)
+            record = produced_by.get(value_id)
+            if record is None:
+                reachable_inputs.add(value_id)
+            else:
+                pending.extend(record.input_value_ids)
+
+        declared_inputs = [
+            value_id for value_id in self._input_value_ids if value_id in reachable_inputs
+        ]
+        ordered_inputs = list(declared_inputs)
+        ordered_seen = set(ordered_inputs)
+        for value_id in [*input_value_ids, *graph_outputs]:
+            if value_id in reachable_inputs and value_id not in ordered_seen:
+                ordered_inputs.append(value_id)
+                ordered_seen.add(value_id)
+        input_value_ids = ordered_inputs
         inputs = [(vid, self._value_metadata_to_boundary_dict(vid)) for vid in input_value_ids]
         graph = TensorGraph(nodes=self._nodes, inputs=inputs, outputs=graph_outputs)
         from .tracing import finalize_typed_graph

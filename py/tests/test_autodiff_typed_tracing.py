@@ -80,12 +80,26 @@ def test_input_ids_and_metadata_preserve_declaration_order() -> None:
     ]
 
 
+def test_explicit_build_filters_reachable_inputs_in_declaration_order() -> None:
+    with TensorGraphBuilder() as trace:
+        first = trace.input("first", dtype="f32", shape=(2, 3))
+        trace.input("unused", dtype="f32", shape=(2, 3))
+        last = trace.input("last", dtype="f32", shape=(2, 3))
+        output = last + first
+
+    graph = trace.build(outputs=output)
+    assert [value_id for value_id, _ in graph.inputs] == [
+        trace.value_id(first),
+        trace.value_id(last),
+    ]
+
+
 @pytest.mark.parametrize(
     ("kwargs", "error_type"),
     [
         ({"shape": (2, 3)}, TypeError),
         ({"dtype": "f32"}, TypeError),
-        ({"dtype": "i32", "shape": (2, 3)}, ValueError),
+        ({"dtype": "i32", "shape": (2, 3)}, AutodiffError),
         ({"dtype": "f32", "shape": (-1, 3)}, ValueError),
         ({"dtype": "f32", "shape": (True, 3)}, ValueError),
         ({"dtype": "f32", "shape": ("N-D", 3)}, ValueError),
@@ -167,6 +181,32 @@ def test_typed_matmul_infers_rank2_and_batched_metadata(lhs_shape, rhs_shape, ou
     assert node.output_typespec == {"dtype": "f32", "shape": output_shape}
 
 
+def test_symbolic_bindings_are_consistent_across_operations() -> None:
+    with TensorGraphBuilder() as trace:
+        symbolic = trace.input("symbolic", dtype="f32", shape=("N", 3))
+        first = trace.input("first", dtype="f32", shape=(2, 3))
+        conflicting = trace.input("conflicting", dtype="f32", shape=(4, 3))
+        symbolic + first
+
+        with pytest.raises(AutodiffError) as error:
+            symbolic * conflicting
+
+    assert error.value.category == "symbolic_shape_mismatch"
+    assert len(trace.build().nodes) == 1
+
+
+def test_matmul_shares_symbol_bindings_between_inner_and_batch_dimensions() -> None:
+    with TensorGraphBuilder() as trace:
+        lhs = trace.input("lhs", dtype="f32", shape=("N", 2, "N"))
+        rhs = trace.input("rhs", dtype="f32", shape=(4, 3, 5))
+
+        with pytest.raises(AutodiffError) as error:
+            lhs @ rhs
+
+    assert error.value.category == "symbolic_shape_mismatch"
+    assert trace.build().nodes == []
+
+
 def test_add_and_transpose_capture_with_metadata() -> None:
     with tc.state.scoped_context():
         with TensorGraphBuilder() as trace:
@@ -182,6 +222,16 @@ def test_add_and_transpose_capture_with_metadata() -> None:
         {"dtype": "f32", "shape": [3, 2]},
     ]
     assert nodes[1].op_params == {"perm": [1, 0]}
+
+
+@pytest.mark.parametrize("permutation", ([1.0, 0.0], [True, 0]))
+def test_typed_transpose_rejects_non_integer_axes(permutation: list[object]) -> None:
+    def perform() -> None:
+        with TensorGraphBuilder() as trace:
+            value = trace.input("value", dtype="f32", shape=(2, 3))
+            value.transpose(permutation)
+
+    _assert_category("invalid_permutation", perform)
 
 
 def test_linear_mse_forward_graph_has_complete_ordered_metadata() -> None:
@@ -281,6 +331,16 @@ def test_build_outputs_deduplicates_in_first_occurrence_order() -> None:
     assert graph.outputs == [trace.value_id(a), trace.value_id(b), trace.value_id(c)]
 
 
+def test_build_rejects_empty_explicit_outputs_without_changing_legacy_build() -> None:
+    with TensorGraphBuilder() as trace:
+        value = trace.input("value", dtype="f32", shape=(2, 2))
+        output = value * value
+
+    assert trace.build().outputs == [trace.value_id(output)]
+    with pytest.raises(ValueError, match="at least one"):
+        trace.build(outputs=[])
+
+
 @pytest.mark.parametrize("reduce", [False, True])
 def test_vjp_seed_metadata_exactly_matches_selected_output(reduce: bool) -> None:
     with tc.state.scoped_context():
@@ -374,6 +434,14 @@ def test_invalid_elementwise_and_matmul_shapes(category, lhs_shape, rhs_shape, o
             operator(lhs, rhs)
 
     _assert_category(category, perform)
+
+
+def test_non_floating_input_dtype_has_exact_autodiff_category() -> None:
+    with TensorGraphBuilder() as trace:
+        with pytest.raises(AutodiffError) as error:
+            trace.input("value", dtype="i32", shape=(2, 3))
+
+    assert error.value.category == "dtype_not_differentiable"
 
 
 def test_mixed_traced_dtypes_fail() -> None:
