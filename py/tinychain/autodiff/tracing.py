@@ -1,0 +1,321 @@
+"""Central active-builder recorder for public typed Tensor tracing.
+
+This internal module is the single choke point through which ordinary ``Tensor``
+operations record autodiff graph nodes while a :class:`TensorGraphBuilder` is the
+active trace context (client ADR-004; spec §8.1;
+https://github.com/TinyChain-Inc/client/issues/95).
+
+Centralizing capture here removes the duplicated per-operation hooks that
+previously lived in ``collection/tensor/core.py`` and drifted out of sync with
+the VJP rule set (spec §2.2, §9.1). ``Tensor`` remains responsible for building
+the ordinary symbolic/eager result and then calls :func:`record_operation`; the
+recorder owns the route→concrete-operator allowlist, value-id resolution, forward
+dtype/shape inference (via the pure ``shape`` helpers), and single-record
+construction. It is the sole extension point for future supported operations.
+
+The capture allowlist is explicit and reviewable (spec §9.1, FR-013):
+Add, Sub, Mul, Matmul, Mean, and Transpose are captured; Div, Sum, and Reshape
+are deliberately NOT captured in this issue even though they have VJP rules.
+Tracing is limited to operations and metadata observable by the Python client.
+It neither queries nor evaluates an opaque runtime graph; an unavailable dtype
+or rank therefore fails closed during typed finalization.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping, Sequence
+from typing import Optional
+
+from .graph import (
+    AddOperator,
+    MatmulOperator,
+    MeanOperator,
+    MulOperator,
+    SubOperator,
+    TensorGraph,
+    TensorNodeRecord,
+    TensorOperator,
+    TransposeOperator,
+    get_active_builder,
+)
+from .protocol import AutodiffError
+from .shape import (
+    _normalize_mean_axes,
+    check_compatible_operand_dtypes,
+    check_differentiable_dtype,
+    elementwise_broadcast_shape,
+    matmul_output_shape,
+    mean_output_shape,
+    transpose_output_shape,
+    typespec_ranked_shape,
+)
+
+# Normalized builder-side metadata for a single value, or ``None`` when the
+# value has no declared/inferred metadata yet.
+_ValueMetadata = Optional[dict[str, object]]
+
+# An inference function maps (operand metadata, normalized params) to the
+# record's stored ``op_params`` and its boundary ``output_typespec`` (``None``
+# when inference is impossible because an operand is untyped).
+_InferenceResult = tuple[dict[str, object], Optional[dict[str, object]]]
+_InferenceFn = Callable[[list[_ValueMetadata], Mapping[str, object]], _InferenceResult]
+
+
+def _boundary_typespec(dtype: str, shape: Sequence[object]) -> dict[str, object]:
+    """Convert an inferred (dtype, shape) into the graph-boundary typespec form."""
+    return {"dtype": dtype, "shape": list(shape)}
+
+
+def _infer_elementwise(
+    operand_metadata: list[_ValueMetadata], params: Mapping[str, object]
+) -> _InferenceResult:
+    """Infer output metadata for a captured Add/Sub/Mul node (spec §10.1-§10.2)."""
+    lhs_metadata, rhs_metadata = operand_metadata
+    if lhs_metadata is None or rhs_metadata is None:
+        return {}, None
+    dtype = check_compatible_operand_dtypes(
+        str(lhs_metadata["dtype"]), str(rhs_metadata["dtype"])
+    )
+    shape = elementwise_broadcast_shape(
+        tuple(lhs_metadata["shape"]), tuple(rhs_metadata["shape"])
+    )
+    return {}, _boundary_typespec(dtype, shape)
+
+
+def _infer_matmul(
+    operand_metadata: list[_ValueMetadata], params: Mapping[str, object]
+) -> _InferenceResult:
+    """Infer output metadata for a captured Matmul node (spec §10.1, §10.3)."""
+    lhs_metadata, rhs_metadata = operand_metadata
+    if lhs_metadata is None or rhs_metadata is None:
+        return {}, None
+    dtype = check_compatible_operand_dtypes(
+        str(lhs_metadata["dtype"]), str(rhs_metadata["dtype"])
+    )
+    shape = matmul_output_shape(
+        tuple(lhs_metadata["shape"]), tuple(rhs_metadata["shape"])
+    )
+    return {}, _boundary_typespec(dtype, shape)
+
+
+def _infer_mean(
+    operand_metadata: list[_ValueMetadata], params: Mapping[str, object]
+) -> _InferenceResult:
+    """Infer output metadata for a captured Mean node (spec §10.1, §10.4).
+
+    Explicit axes are required for a differentiable traced Mean; ``axes=None``
+    fails with ``unsupported_reduction`` at record time (spec §10.4.9, §13.2).
+    """
+    axes = params.get("axes")
+    keepdims = bool(params.get("keepdims", False))
+    if axes is None:
+        raise AutodiffError(
+            "unsupported_reduction",
+            "typed traced mean requires explicit axes; axes=None is unsupported",
+        )
+    metadata = operand_metadata[0]
+    if metadata is None:
+        return {"axes": axes, "keepdims": keepdims}, None
+    shape = tuple(metadata["shape"])
+    normalized_axes = _normalize_mean_axes(axes, len(shape))
+    dtype = check_differentiable_dtype(str(metadata["dtype"]))
+    output_shape = mean_output_shape(shape, axes, keepdims=keepdims)
+    op_params = {"axes": list(normalized_axes), "keepdims": keepdims}
+    return op_params, _boundary_typespec(dtype, output_shape)
+
+
+def _infer_transpose(
+    operand_metadata: list[_ValueMetadata], params: Mapping[str, object]
+) -> _InferenceResult:
+    """Infer output metadata for a captured Transpose node (spec §10.5).
+
+    A ``None`` permutation reverses all axes, matching the ordinary symbolic
+    transpose default.
+    """
+    permutation = params.get("permutation")
+    metadata = operand_metadata[0]
+    if (
+        metadata is None
+        or not isinstance(metadata.get("dtype"), str)
+        or not metadata["dtype"]
+    ):
+        # Do not derive a default permutation without an observed rank, nor
+        # evaluate an opaque runtime permutation. Finalization rejects this
+        # untyped path before it can be used to generate a derivative.
+        return {"perm": permutation}, None
+    try:
+        shape = typespec_ranked_shape({"shape": metadata.get("shape")})
+    except AutodiffError as exc:
+        if exc.category == "missing_shape_metadata":
+            return {"perm": permutation}, None
+        raise
+    rank = len(shape)
+    if permutation is None:
+        perm = tuple(reversed(range(rank)))
+    else:
+        if not isinstance(permutation, Sequence) or isinstance(permutation, (str, bytes)):
+            raise AutodiffError(
+                "invalid_permutation",
+                "transpose permutation must be a static sequence of integer axes",
+            )
+        try:
+            if any(type(axis) is not int for axis in permutation):
+                raise AutodiffError(
+                    "invalid_permutation",
+                    "transpose permutation axes must be integers",
+                )
+            perm = tuple(permutation)
+        except AutodiffError:
+            raise
+        except (IndexError, TypeError, ValueError) as exc:
+            raise AutodiffError(
+                "invalid_permutation",
+                "transpose permutation must be a static sequence of integer axes",
+            ) from exc
+    dtype = check_differentiable_dtype(str(metadata["dtype"]))
+    output_shape = transpose_output_shape(shape, perm)
+    return {"perm": list(perm)}, _boundary_typespec(dtype, output_shape)
+
+
+# Explicit, reviewable route→concrete-operator allowlist (spec §9.1, FR-013).
+# Div/Sum/Reshape are deliberately absent (deferred subset, spec §5.2).
+_CAPTURED_OPERATORS: dict[str, type[TensorOperator]] = {
+    "add": AddOperator,
+    "sub": SubOperator,
+    "mul": MulOperator,
+    "matmul": MatmulOperator,
+    "mean": MeanOperator,
+    "transpose": TransposeOperator,
+}
+
+_INFERENCE: dict[str, _InferenceFn] = {
+    "add": _infer_elementwise,
+    "sub": _infer_elementwise,
+    "mul": _infer_elementwise,
+    "matmul": _infer_matmul,
+    "mean": _infer_mean,
+    "transpose": _infer_transpose,
+}
+
+
+def record_operation(
+    operation: str,
+    operands: Sequence[object],
+    result: object,
+    params: Optional[Mapping[str, object]] = None,
+) -> None:
+    """Record one captured tensor operation on the active trace, if any.
+
+    ``Tensor`` calls this after constructing the ordinary symbolic/eager result
+    (spec §8.1). Behavior:
+
+    1. Returns immediately when no builder is active (Invariant 3) or when
+       ``operation`` is not in the capture allowlist (Div/Sum/Reshape/logical
+       ops are not captured; an uncaptured intermediate on a selected path is
+       caught later by fail-closed finalization, spec §5.2, FR-008).
+    2. Resolves/registers operand and result value IDs on the active builder,
+       which also retains strong references so ``id()`` reuse cannot corrupt
+       dataflow identity (Invariant 6).
+    3. Reads operand metadata from the builder side table and, when every
+       operand is typed, infers the output dtype/shape via the pure ``shape``
+       helpers (record-time validation, spec §13.3).
+    4. Stores the inferred result metadata on the builder and constructs exactly
+       one concrete :class:`TensorNodeRecord` with the concrete operator,
+       normalized ``op_params``, ordered input value IDs, and ``output_typespec``
+       (Invariants 5-6), then appends it.
+    """
+    builder = get_active_builder()
+    if builder is None:
+        return
+    operator_class = _CAPTURED_OPERATORS.get(operation)
+    if operator_class is None:
+        return
+
+    normalized_params = dict(params or {})
+    input_value_ids = [builder.register_value(operand) for operand in operands]
+    output_value_id = builder.register_value(result)
+    operand_metadata = [builder._get_value_metadata(value_id) for value_id in input_value_ids]
+
+    op_params, output_typespec = _INFERENCE[operation](operand_metadata, normalized_params)
+
+    if output_typespec is not None:
+        builder._set_value_metadata(
+            output_value_id,
+            dtype=str(output_typespec["dtype"]),
+            shape=tuple(output_typespec["shape"]),
+        )
+
+    builder.record(
+        TensorNodeRecord(
+            node_id=builder._next_node_id(),
+            output_value_id=output_value_id,
+            operator=operator_class(),
+            op_params=op_params,
+            input_value_ids=input_value_ids,
+            output_typespec=output_typespec,
+        )
+    )
+
+
+def _require_complete_typespec(typespec: Optional[Mapping[str, object]], *, label: str) -> None:
+    """Fail closed unless *typespec* carries both a dtype and a ranked shape."""
+    if not isinstance(typespec, Mapping) or not isinstance(typespec.get("dtype"), str) or not typespec["dtype"]:
+        raise AutodiffError("missing_dtype_metadata", f"{label} is missing dtype metadata")
+    try:
+        # `typespec_ranked_shape` converts absent, unranked, and malformed
+        # shapes to the documented category. Do not let malformed boundary
+        # metadata leak a raw container exception.
+        typespec_ranked_shape({"shape": typespec.get("shape")})
+    except AutodiffError:
+        raise
+    except (IndexError, TypeError, ValueError) as exc:
+        raise AutodiffError(
+            "missing_shape_metadata", f"{label} is missing ranked shape metadata"
+        ) from exc
+
+
+def finalize_typed_graph(graph: TensorGraph) -> TensorGraph:
+    """Validate that a typed trace is complete, failing closed (spec §13.3, FR-008).
+
+    Every graph input and node output reachable from ``graph.outputs`` must carry
+    a dtype (``missing_dtype_metadata``) and a ranked shape
+    (``missing_shape_metadata``). Capture covers only operations and metadata
+    observable by the Python client: opaque runtime-built intermediates, unknown
+    ranks, and unsupported operations on the selected path are not inferred or
+    evaluated and instead fail closed here. The graph is returned unchanged on
+    success to support ``graph = finalize_typed_graph(builder.build())``.
+    """
+    input_typespecs = dict(graph.inputs)
+    produced_by = {node.output_value_id: node for node in graph.nodes}
+
+    reachable_inputs: set[str] = set()
+    reachable_nodes: list[TensorNodeRecord] = []
+    seen_nodes: set[str] = set()
+    pending: list[str] = list(graph.outputs)
+    while pending:
+        value_id = pending.pop()
+        node = produced_by.get(value_id)
+        if node is None:
+            reachable_inputs.add(value_id)
+            continue
+        if node.node_id in seen_nodes:
+            continue
+        seen_nodes.add(node.node_id)
+        reachable_nodes.append(node)
+        pending.extend(node.input_value_ids)
+
+    for value_id in sorted(reachable_inputs):
+        _require_complete_typespec(input_typespecs.get(value_id), label=f"graph input {value_id!r}")
+    for node in reachable_nodes:
+        _require_complete_typespec(node.output_typespec, label=f"node {node.node_id!r} output")
+    return graph
+
+
+def captured_operator_types() -> frozenset[type[TensorOperator]]:
+    """Return the concrete operator types the recorder captures (FR-013 parity)."""
+    return frozenset(_CAPTURED_OPERATORS.values())
+
+
+def captured_route_operators() -> dict[str, type[TensorOperator]]:
+    """Return a copy of the route-name→concrete-operator capture allowlist."""
+    return dict(_CAPTURED_OPERATORS)
