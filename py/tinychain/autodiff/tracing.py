@@ -43,6 +43,7 @@ from .shape import (
     elementwise_broadcast_shape,
     matmul_output_shape,
     mean_output_shape,
+    normalize_transpose_permutation,
     transpose_output_shape,
 )
 
@@ -145,14 +146,27 @@ def _infer_transpose(
     permutation = params.get("permutation")
     metadata = operand_metadata[0]
     if metadata is None:
-        stored = list(permutation) if permutation is not None else []
-        return {"perm": stored}, None
+        return _untyped_transpose_params(permutation), None
     shape = tuple(metadata["shape"])
     rank = len(shape)
     perm = permutation if permutation is not None else tuple(reversed(range(rank)))
     dtype = check_differentiable_dtype(str(metadata["dtype"]))
     output_shape = transpose_output_shape(shape, perm)
     return {"perm": list(perm)}, _boundary_typespec(dtype, output_shape)
+
+
+def _untyped_transpose_params(permutation: object) -> dict[str, object]:
+    """Normalize static transpose parameters without attempting shape inference."""
+    if permutation is None:
+        return {"perm": []}
+    return {"perm": list(normalize_transpose_permutation(permutation))}
+
+
+def _untyped_operation_params(operation: str, params: Mapping[str, object]) -> dict[str, object]:
+    """Store only static parameters when operands lack complete metadata."""
+    if operation == "transpose":
+        return _untyped_transpose_params(params.get("permutation"))
+    return {}
 
 
 # Explicit, reviewable route→concrete-operator allowlist (spec §9.1, FR-013).
@@ -214,11 +228,15 @@ def record_operation(
     output_value_id = builder.register_value(result)
     operand_metadata = [builder._get_value_metadata(value_id) for value_id in input_value_ids]
 
-    symbol_bindings = builder._copy_symbol_bindings()
-    op_params, output_typespec = _INFERENCE[operation](
-        operand_metadata, normalized_params, symbol_bindings
-    )
-    builder._replace_symbol_bindings(symbol_bindings)
+    if all(metadata is not None for metadata in operand_metadata):
+        symbol_bindings = builder._copy_symbol_bindings()
+        op_params, output_typespec = _INFERENCE[operation](
+            operand_metadata, normalized_params, symbol_bindings
+        )
+        builder._replace_symbol_bindings(symbol_bindings)
+    else:
+        op_params = _untyped_operation_params(operation, normalized_params)
+        output_typespec = None
 
     if output_typespec is not None:
         builder._set_value_metadata(

@@ -350,14 +350,8 @@ def mean_output_shape(shape: Shape, axes: object, *, keepdims: bool) -> Shape:
     return tuple(dim for index, dim in enumerate(shape) if index not in normalized_axes)
 
 
-def transpose_output_shape(shape: Shape, perm: object) -> Shape:
-    """Compute the proven transpose output shape (spec §10.5).
-
-    The permutation length must equal the input rank and each axis must
-    appear exactly once (`invalid_permutation`); the output shape follows the
-    permutation.
-    """
-    rank = shape_rank(shape)
+def normalize_transpose_permutation(perm: object) -> tuple[int, ...]:
+    """Require a concrete transpose permutation before static inference."""
     if not isinstance(perm, Sequence) or isinstance(perm, (str, bytes)):
         raise AutodiffError(
             "invalid_permutation",
@@ -369,6 +363,18 @@ def transpose_output_shape(shape: Shape, perm: object) -> Shape:
             "invalid_permutation",
             f"transpose permutation axes must be integers; got {perm_tuple!r}",
         )
+    return perm_tuple
+
+
+def transpose_output_shape(shape: Shape, perm: object) -> Shape:
+    """Compute the proven transpose output shape (spec §10.5).
+
+    The permutation length must equal the input rank and each axis must
+    appear exactly once (`invalid_permutation`); the output shape follows the
+    permutation.
+    """
+    rank = shape_rank(shape)
+    perm_tuple = normalize_transpose_permutation(perm)
     if len(perm_tuple) != rank or sorted(perm_tuple) != list(range(rank)):
         raise AutodiffError(
             "invalid_permutation",

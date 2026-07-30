@@ -249,6 +249,17 @@ def test_typed_transpose_rejects_non_integer_axes(permutation: list[object]) -> 
     _assert_category("invalid_permutation", perform)
 
 
+def test_typed_transpose_rejects_runtime_permutation_categorically() -> None:
+    permutation = tc.state.tuple_of([1, 0])
+
+    def perform() -> None:
+        with TensorGraphBuilder() as trace:
+            value = trace.input("value", dtype="f32", shape=(2, 3))
+            value.transpose(permutation)
+
+    _assert_category("invalid_permutation", perform)
+
+
 def test_linear_mse_forward_graph_has_complete_ordered_metadata() -> None:
     trace, graph, images, weights, labels, _, loss = _trace_linear_mse()
     assert [type(node.operator) for node in graph.nodes] == [
@@ -418,6 +429,12 @@ def test_inactive_mean_return_type_and_transpose_view_metadata() -> None:
     assert transposed.view_spec().ops[0].permutation == (1, 0)
 
 
+def test_inactive_transpose_allows_runtime_permutation() -> None:
+    result = _symbolic_tensor("x").transpose(tc.state.tuple_of([1, 0]))
+    assert isinstance(result, tc.Tensor)
+    assert get_active_builder() is None
+
+
 def test_active_builder_is_cleaned_up_after_normal_and_exceptional_exit() -> None:
     assert get_active_builder() is None
     with TensorGraphBuilder() as trace:
@@ -506,6 +523,17 @@ def test_untyped_operand_fails_typed_finalization() -> None:
         typed = trace.input("typed", dtype="f32", shape=(2, 3))
         output = untyped + typed
 
+    _assert_category("missing_dtype_metadata", lambda: trace.build(outputs=output))
+
+
+def test_untyped_matmul_defers_metadata_inference_to_typed_finalization() -> None:
+    untyped = _symbolic_tensor("untyped")
+    with TensorGraphBuilder() as trace:
+        typed = trace.input("typed", dtype="f32", shape=(3, 4))
+        output = untyped @ typed
+
+    node = trace.build().nodes[0]
+    assert node.output_typespec is None
     _assert_category("missing_dtype_metadata", lambda: trace.build(outputs=output))
 
 

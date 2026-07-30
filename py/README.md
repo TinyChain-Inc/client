@@ -464,7 +464,12 @@ Forward dtype and shape are inferred for every captured node:
   identifier string; rank zero is `shape=()`. Symbolic dimensions are supported
   and are only compatible when provably equal — unprovable broadcast, matmul, or
   reduction constraints fail with the corresponding existing categories (for
-  example `matmul_shape_mismatch`, `unresolved_symbolic_shape`).
+  example `matmul_shape_mismatch`, `unresolved_symbolic_shape`). Unknown rank is
+  not supported: the recorder only performs static inference when every operand
+  has complete ranked metadata.
+- Transpose permutations must be concrete sequences of integer axes during an
+  active typed trace. Runtime-valued permutations are not evaluated by the
+  client and fail with `AutodiffError("invalid_permutation", ...)`.
 - Typed finalization is **fail-closed**: any reachable input or captured output
   that lacks complete dtype/shape metadata raises before `generate(...)` runs,
   rather than silently returning a partial derivative.
