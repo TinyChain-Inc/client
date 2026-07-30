@@ -17,10 +17,7 @@ def require_cargo() -> None:
 
 
 def require_tinychain_local(*, require_library_definition: bool = False):
-    try:
-        import tinychain._local as tc_local
-    except ImportError as err:
-        pytest.fail(f"tinychain-local is required for this test: {err}")
+    import tinychain._local as tc_local
 
     try:
         handle = tc_local.kernel_handle()

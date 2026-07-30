@@ -1,16 +1,22 @@
 from __future__ import annotations
 
+import importlib
+import importlib.util
+import sys
 from typing import Any
 
 
 def backend() -> Any:
-    try:
-        import tinychain_local as local  # type: ignore
-    except ImportError as exc:  # pragma: no cover
+    existing = sys.modules.get("tinychain_local")
+    if existing is not None:  # pragma: no cover
+        return existing
+
+    if importlib.util.find_spec("tinychain_local") is None:  # pragma: no cover
         raise ImportError(
             "install `tinychain-local` to use the in-process TinyChain backend"
-        ) from exc
+        )
 
+    local = importlib.import_module("tinychain_local")  # type: ignore
     return local
 
 

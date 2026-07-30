@@ -47,12 +47,7 @@ class Host:
         if target.host is not None:
             return target
 
-        return URI(
-            path=target.path,
-            scheme=self.__uri__.scheme,
-            host=self.__uri__.host,
-            port=self.__uri__.port,
-        )
+        return target.with_authority(self.__uri__)
 
     def execute(self, opref: OpRef | Ref) -> object:
         if hasattr(opref, "op"):
@@ -68,12 +63,15 @@ class Host:
 
     def url(self, target: object, route: str | None = None, **query: object) -> str:
         _reject_transaction_query(query)
-        path = self.link(uri(target, *([route] if route else []))).absolute()
-        _reject_transaction_control(path)
+        target_uri = self.link(target)
+        if route:
+            target_uri = target_uri.child(route)
+        target = target_uri.absolute()
+        _reject_transaction_control(target)
         if not query:
-            return path
+            return target
         encoded = urlencode(_url_query(query), doseq=True)
-        return f"{path}?{encoded}"
+        return f"{target}?{encoded}"
 
     def request(
         self,

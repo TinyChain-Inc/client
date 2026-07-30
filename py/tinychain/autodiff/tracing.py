@@ -45,6 +45,7 @@ from .shape import (
     mean_output_shape,
     normalize_transpose_permutation,
     transpose_output_shape,
+    typespec_ranked_shape,
 )
 
 # Normalized builder-side metadata for a single value, or ``None`` when the
@@ -136,7 +137,7 @@ def _infer_mean(
 def _infer_transpose(
     operand_metadata: list[_ValueMetadata],
     params: Mapping[str, object],
-    _symbol_bindings: dict[str, int],
+    _symbol_bindings: Optional[dict[str, int]] = None,
 ) -> _InferenceResult:
     """Infer output metadata for a captured Transpose node (spec §10.5).
 
@@ -145,11 +146,24 @@ def _infer_transpose(
     """
     permutation = params.get("permutation")
     metadata = operand_metadata[0]
-    if metadata is None:
+    if (
+        metadata is None
+        or not isinstance(metadata.get("dtype"), str)
+        or not metadata["dtype"]
+    ):
         return _untyped_transpose_params(permutation), None
-    shape = tuple(metadata["shape"])
+    try:
+        shape = typespec_ranked_shape({"shape": metadata.get("shape")})
+    except AutodiffError as exc:
+        if exc.category == "missing_shape_metadata":
+            return _untyped_transpose_params(permutation), None
+        raise
     rank = len(shape)
-    perm = permutation if permutation is not None else tuple(reversed(range(rank)))
+    perm = (
+        tuple(reversed(range(rank)))
+        if permutation is None
+        else normalize_transpose_permutation(permutation)
+    )
     dtype = check_differentiable_dtype(str(metadata["dtype"]))
     output_shape = transpose_output_shape(shape, perm)
     return {"perm": list(perm)}, _boundary_typespec(dtype, output_shape)

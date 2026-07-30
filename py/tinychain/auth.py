@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import base64
+import importlib
+import importlib.util
+import sys
 import time
 from dataclasses import dataclass
 from typing import Sequence
+
+from .uri import URI
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,18 +36,21 @@ def context():
     """
     import tinychain as tc
 
-    return tc.Ref(tc.opref.get(tc.uri("host", "auth", "context").path))
+    return tc.Ref(tc.opref.get(tc.URI("host", "auth", "context")))
 
 
 def _rjwt():
-    try:
-        import rjwt
-    except ImportError as err:
+    existing = sys.modules.get("rjwt")
+    if existing is not None:
+        return existing
+
+    if importlib.util.find_spec("rjwt") is None:
         raise RuntimeError(
             "rjwt is required to mint TinyChain bearer tokens. Install the PyO3 package with "
             "`maturin develop --manifest-path deps/rjwt/rjwt-py/Cargo.toml`."
-        ) from err
+        )
 
+    rjwt = importlib.import_module("rjwt")
     return rjwt
 
 
@@ -73,15 +81,11 @@ def mint_rjwt_token(
     *,
     host: str,
     actor_id: str,
-    libs: Sequence[str],
+    libs: Sequence[object],
     ttl_secs: int = 3600,
     secret_key_b64: str | None = None,
     alg: str = "falcon512",
-    repo_root: object | None = None,
-    binary: object | None = None,
 ) -> SignedBearerToken:
-    if repo_root is not None or binary is not None:
-        raise ValueError("`repo_root` and `binary` are obsolete; token minting uses rjwt directly")
     if not libs:
         raise ValueError("minted token requires at least one `libs` claim")
     if not host.strip():
@@ -93,7 +97,7 @@ def mint_rjwt_token(
     alg = alg.strip().lower()
     actor = _actor(rjwt, actor_id, secret_key_b64, alg)
     now = time.time()
-    claims = {lib: 0o200 for lib in libs}
+    claims = {_lib_claim(lib): 0o200 for lib in libs}
     token = rjwt.Token(host, now, float(ttl_secs), actor_id, claims)
     signed = actor.sign_token(token)
     secret_key_b64 = secret_key_b64 or (
@@ -110,3 +114,18 @@ def mint_rjwt_token(
         secret_key_b64=secret_key_b64,
         bearer_token=signed.jwt(),
     )
+
+
+def _lib_claim(lib: object) -> str:
+    if isinstance(lib, URI):
+        return lib.path
+    if isinstance(lib, str):
+        parsed = URI.parse(lib)
+        return parsed.path
+    if hasattr(lib, "id") and callable(getattr(lib, "id")):
+        resolved = lib.id()
+        if isinstance(resolved, URI):
+            return resolved.path
+        resolved_uri = URI(resolved)
+        return resolved_uri.path
+    raise TypeError(f"unsupported library claim type: {type(lib).__name__}")

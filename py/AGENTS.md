@@ -105,6 +105,10 @@ staying thin and well-documented for new users.
 - Keep symbolic wrappers focused on IR shape and serialization round-trips;
   runtime arithmetic/comparison/container behaviors belong on typed wrappers
   (`tc.Number`, `tc.Bool`, `tc.Tuple`, `tc.Map`, `tc.String`) and protocols.
+- Avoid shared-helper type ladders (`if/elif isinstance(...)`) for runtime
+  behavior dispatch. Prefer type-specific implementation on the owning wrapper
+  class/module. If a type ladder is unavoidable at a decode/normalization
+  boundary, isolate it in one explicit dispatch function and keep it small.
 - Preserve concrete method type information for symbolic operation forms.
   Do not erase `Get/Put/Post/Delete` operation refs/defs behind parent-class
   method strings or generic `args` shape checks when constructing, validating,
@@ -119,8 +123,48 @@ staying thin and well-documented for new users.
   `_post_ref`). Do not hand-write `TCRef(GetOpRef(...))`,
   `TCRef(PostOpRef(...))`, etc. in wrapper modules such as
   `collection/tensor/core.py`.
-  Keep URI values structured until the serialization/transport boundary; avoid
+- Do not use or reintroduce `TCRef.id(...)`. Construct id refs directly via
+  `IdRef(name)`, and keep `tc.state.id(name)` as the user-facing helper that
+  returns a typed symbolic scalar ref.
+- Keep URI values structured until the serialization/transport boundary; avoid
   extracting `.path` in symbolic wrappers.
+- Treat `.path` as a boundary-only escape hatch. In runtime/domain code, pass
+  `URI` values directly and prefer `str(uri_value)` at encode/transport boundaries
+  (JSON keys, HTTP/kernel request paths) instead of `URI(...).path` extraction.
+  Do not introduce new `URI(...).path` constructions outside explicit boundary
+  adapters.
+- For runtime URI composition, use `uri(TypeOrInstance, ...)` and `URI(...)`
+  directly. `uri(...)` is the generic type/instance accessor and path builder;
+  `URI(...)` is the explicit constructor. Do not define local URI-constructor
+  helpers (for example `*_uri(...)`) or module URI constant tables (`*_URI`)
+  in runtime modules.
+- In runtime/client modules, construct canonical TinyChain resource paths only
+  through URI helpers (`tc.uri`, `tinychain.uri.path`, etc.). Do not hardcode
+  literal `/state/...`, `/service/...`, `/lib/...`, `/class/...`, `/host/...`,
+  or `/healthz...` strings outside tests/doc prose.
+- For native `/state/...` resources, define exactly one root URI on the owning
+  class/module (for example `State.__uri__`) and derive all descendants through
+  typed subjects (`uri(Type, ...)`, `path(Type, ...)`, `uri(root_uri, ...)`).
+  Do not scatter repeated `path("state", ...)`/`uri("state", ...)` constants
+  across runtime modules.
+- Ban `try: import ...` / `try: from ... import ...` in client/runtime code.
+  The only allowed exception is explicit conversion glue for optional large
+  external tensor ecosystems (`tensorflow`, `torch`, `jax`) where import
+  availability directly gates that conversion path.
+- For symbolic refs/opdefs, do not add `_cmp_key` helper APIs. Equality and
+  hashing must use one canonical representation (`to_json`/form), not parallel
+  comparison key paths.
+- Resolve active state context through the shared context helper
+  (`state.context.resolve_context`) rather than ad hoc `current_context()`
+  call sites.
+- Do not use `coerce` naming in symbolic/state runtime helpers. Where a helper
+  validates or wraps inputs, name it explicitly for its role (for example
+  `normalize_*`, `*_operand`, `autobox`) so no implicit-conversion semantics
+  are implied.
+- Naming convention for path metadata:
+  use `*_URI` for `URI` objects and `*_PATH` for serialized path strings.
+  Avoid `*_tag` naming for path-like values, and avoid `*_path()` helper
+  functions when a canonical module constant can represent the same value.
 - Keep one canonical route-stub call shape in application code.
   Prefer keyword arguments for route parameters and use `body=` only when
   passing one explicit payload. Treat positional forms as compatibility-only,
