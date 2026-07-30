@@ -84,6 +84,35 @@ Use one `with tc.backend(...):` block to run mixed local + remote calls:
 This keeps method definitions transport-agnostic while giving explicit per-context
 execution control for local + remote calls in the same flow.
 
+## State model and hierarchy
+
+`tc.state.State` is the universal symbolic state-machine node in the Python
+client. It is not a scalar-only type and must not impose scalar semantics.
+
+- `Scalar` is one `State` subclass for scalar IR forms.
+- `Collection` (including `Tensor` and upcoming `BTree`/`Table`) is another
+  `State` branch for collection IR forms.
+- Control-flow and op references (`TCRef`, `OpRef`, `Cond`, `While`,
+  `ForEach`, etc.) are symbolic references that compile into the same TinyChain
+  IR/state machine, not eager Python values.
+
+Equality semantics:
+- `State` does not define Python boolean equality semantics.
+- Symbolic equality is expressed through TinyChain ops (`eq`/`ne`) and resolves
+  at runtime.
+- Tests/tools that need structural checks should compare canonical forms/JSON
+  (`form_of(...)`, `to_json()`), not Python `==` on symbolic states.
+
+Serialization semantics:
+- `State.to_json()` serializes the canonical underlying form directly.
+- It does not coerce through `Scalar(...)`; collections and other non-scalar
+  state types remain in their own branch.
+
+Network semantics:
+- A given application describes one distributed transactional state machine.
+- Client symbolic graphs compile to canonical TinyChain IR and execute under
+  host/kernel transaction control across the TinyChain network.
+
 ## Canonical application call path
 
 Use this order as the default application path:

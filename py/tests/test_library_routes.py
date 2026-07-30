@@ -6,8 +6,6 @@ import pytest
 import tinychain as tc
 from tinychain.autodiff import AutodiffError
 from tinychain.library import compile_ir, library_definition
-from tinychain.state.scalar import OPDEF_POST
-
 
 def test_library_routes_return_typed_refs():
     class A(tc.Library):
@@ -29,12 +27,12 @@ def test_library_routes_return_typed_refs():
         hello = a.hello()
         assert isinstance(hello, tc.String)
         assert hello.op.method == "GET"
-        assert hello.op.path == tc.uri(a, "hello").path
+        assert hello.op.path == tc.URI(a, "hello").path
 
         raw = a.raw()
         assert isinstance(raw, tc.OpRef)
         assert raw.method == "GET"
-        assert raw.path == tc.uri(a, "raw").path
+        assert raw.path == tc.URI(a, "raw").path
 
 
 def test_route_type_hints_resolve_to_runtime_value_types():
@@ -132,9 +130,52 @@ def test_library_routes_preserve_all_dict_return_keys():
 
     ir = compile_ir(A)
     route = next(route for route in ir["routes"] if route["path"] == "/stats")
-    opdef = route["opdef"][OPDEF_POST]
+    opdef = route["opdef"][tc.URI("state", "scalar", "op", "post").path]
 
     assert [name for name, _ in opdef] == ["min", "max"]
+
+
+def test_library_routes_ref_typed_mapping_return_is_result_value():
+    class A(tc.Library):
+        publisher = "example-devco"
+        resource_name = "a"
+        version = "0.1.0"
+
+        @tc.post
+        def stats(self, x: tc.Number) -> tc.Ref:
+            stats_map = {"max": x}
+            return stats_map
+
+    ir = compile_ir(A)
+    route = next(route for route in ir["routes"] if route["path"] == "/stats")
+    opdef = route["opdef"][tc.URI("state", "scalar", "op", "post").path]
+
+    names = [name for name, _ in opdef]
+    assert "result" in names
+    assert "max" not in names
+
+
+def test_library_route_symbolic_post_body_skips_eager_execute(monkeypatch):
+    class A(tc.Library):
+        publisher = "example-devco"
+        resource_name = "a"
+        version = "0.1.0"
+
+        @tc.post
+        def echo(self, x: tc.Number) -> tc.Number:
+            return x
+
+    def fail_execute(_):
+        raise AssertionError("route call unexpectedly executed")
+
+    monkeypatch.setattr("tinychain.execute", fail_execute)
+
+    with tc.state.scoped_context():
+        symbolic = tc.state.id("x")
+    with tc.backend(mode="eager"):
+        result = A().echo(symbolic)
+
+    assert isinstance(result, tc.Number)
 
 
 def test_grad_is_call_site_transform_stub_not_route_decorator():
@@ -180,7 +221,7 @@ def test_grad_cannot_be_used_as_route_metadata_decorator():
 
     definition = library_definition(A)
     route = definition[A.class_id().path]["identity"]
-    assert OPDEF_POST in route
+    assert tc.URI("state", "scalar", "op", "post").path in route
 
 
 def test_grad_tensor_target_fails_until_route_tracing_is_implemented():
@@ -221,7 +262,7 @@ def test_library_routes_use_decorator_time_source_capture(monkeypatch):
     assert "opdef" in route
 
 
-def test_library_routes_allow_local_opref_subjects():
+def test_library_routes_accept_uri_subjects_for_oprefs():
     class A(tc.Library):
         publisher = "example-devco"
         resource_name = "a"
@@ -229,13 +270,13 @@ def test_library_routes_allow_local_opref_subjects():
 
         @tc.post
         def bad(self):
-            subject = "$foo"
+            subject = tc.URI("state", "scalar", "value")
             opref = tc.state.GetOpRef(subject)
             return tc.state.Scalar(ref=tc.state.TCRef(opref))
 
     a = A()
     ir = compile_ir(a)
-    assert "routes" in ir
+    assert any(route["path"] == "/bad" for route in ir["routes"])
 
 
 def test_route_decorators_do_not_accept_name_override():
@@ -399,7 +440,7 @@ def test_library_instances_do_not_accept_dependency_overrides():
         publisher = "example-devco"
         resource_name = "a"
         version = "0.1.0"
-        dependencies = (tc.uri("lib", "example-devco", "b", "0.1.0"),)
+        dependencies = (tc.URI("lib", "example-devco", "b", "0.1.0"),)
 
     with pytest.raises(TypeError, match="dependencies"):
         A(dependencies=())

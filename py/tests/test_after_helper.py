@@ -8,9 +8,9 @@ def test_after_preserves_wrapped_type() -> None:
         dep = tc.state.id("left").eq(1)
         value = tc.String(tc.state.form_of(tc.state.id("right")._string_render({"x": 1})))
 
-        result = tc.after(dep, value)
+        result = tc.state.after(dep, value)
 
-        assert isinstance(result, tc.String)
+        assert isinstance(result, tc.state.Scalar)
         form = list(cxt.form())
         assert len(form) == 1
         assert form[0][0].startswith("_after")

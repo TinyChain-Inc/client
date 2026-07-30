@@ -5,6 +5,7 @@ from typing import Mapping
 
 from ..collection.tensor import Tensor
 from ..state import PostOpDef, Scalar, id as state_id, tuple_of
+from ..state._ops import subject_of
 from .graph import (
     AddOperator,
     BroadcastOperator,
@@ -142,7 +143,7 @@ def _compile_node(
 ) -> Tensor:
     if isinstance(node.operator, AddOperator):
         _require_arity(node, inputs, 2)
-        return Tensor._post_ref(inputs[0]._subject_ref("add"), {"r": inputs[1]})
+        return Tensor._post_ref(f"{subject_of(inputs[0])}/add", {"r": inputs[1]})
 
     if isinstance(node.operator, SubOperator):
         return _compile_binary_tensor_node(node, inputs, "sub")
@@ -155,7 +156,7 @@ def _compile_node(
 
     if isinstance(node.operator, MatmulOperator):
         _require_arity(node, inputs, 2)
-        return Tensor._post_ref(inputs[0]._subject_ref("matmul"), {"r": inputs[1]})
+        return Tensor._post_ref(f"{subject_of(inputs[0])}/matmul", {"r": inputs[1]})
 
     if isinstance(node.operator, SumOperator):
         return _compile_reduction_node(node, inputs, "sum")
@@ -184,7 +185,7 @@ def _compile_node(
             shape_symbol_params=shape_symbol_params,
             used_params=used_params,
         )
-        return Tensor._post_ref(inputs[0]._subject_ref("reshape"), {"shape": shape})
+        return Tensor._post_ref(f"{subject_of(inputs[0])}/reshape", {"shape": shape})
 
     if isinstance(node.operator, BroadcastOperator):
         _require_arity(node, inputs, 1)
@@ -198,13 +199,13 @@ def _compile_node(
             shape_symbol_params=shape_symbol_params,
             used_params=used_params,
         )
-        return Tensor._post_ref(inputs[0]._subject_ref("broadcast"), {"shape": shape})
+        return Tensor._post_ref(f"{subject_of(inputs[0])}/broadcast", {"shape": shape})
 
     if isinstance(node.operator, TransposeOperator):
         _require_arity(node, inputs, 1)
         permutation = _transpose_permutation(node)
         return Tensor._post_ref(
-            inputs[0]._subject_ref("transpose"), {"permutation": permutation}
+            f"{subject_of(inputs[0])}/transpose", {"permutation": permutation}
         )
 
     if isinstance(node.operator, BroadcastReduceOperator):
@@ -220,7 +221,7 @@ def _compile_node(
             used_params=used_params,
         )
         return Tensor._post_ref(
-            inputs[0]._subject_ref("broadcast_reduce"), {"target_shape": target_shape}
+            f"{subject_of(inputs[0])}/broadcast_reduce", {"target_shape": target_shape}
         )
 
     if isinstance(node.operator, TensorOperator):
@@ -237,7 +238,7 @@ def _compile_reduction_node(node: TensorNodeRecord, inputs: list[Scalar], route_
     axes = _required_param(node, "axes")
     keepdims = _required_param(node, "keepdims")
     return Tensor._post_ref(
-        inputs[0]._subject_ref(route_name),
+        f"{subject_of(inputs[0])}/{route_name}",
         {"axes": axes, "keepdims": keepdims},
     )
 
@@ -249,7 +250,7 @@ def _compile_binary_tensor_node(node: TensorNodeRecord, inputs: list[Scalar], ro
     else:
         _require_arity(node, inputs, 2)
         right = inputs[1]
-    return Tensor._post_ref(inputs[0]._subject_ref(route_name), {"r": right})
+    return Tensor._post_ref(f"{subject_of(inputs[0])}/{route_name}", {"r": right})
 
 
 def _validate_program(program: DerivativeProgram) -> None:

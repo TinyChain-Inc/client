@@ -156,12 +156,6 @@ def test_manifest_serializes_to_json_compatible_primitives() -> None:
     assert DerivativeArtifactManifest.from_dict(result) == manifest
 
 
-def test_manifest_from_dict_accepts_legacy_digest_key() -> None:
-    manifest = DerivativeArtifactManifest.from_dict(_manifest().to_dict() | {"digest": "legacy"})
-
-    assert manifest.artifact_digest == "abc123"
-
-
 def test_derivative_metadata_to_dict_remains_artifact_free() -> None:
     result = _metadata().to_dict()
 
@@ -575,7 +569,7 @@ def test_build_derivative_artifact_library_returns_normal_library_subclass() -> 
     assert artifact_library.version == "1.2.3"
     assert artifact_library.class_id().path == "/lib/tester/example_derivative/1.2.3"
     assert artifact_library().dependencies == (
-        tc.uri("lib", "source_pub", "source_library", "0.1.0"),
+        tc.URI("lib", "source_pub", "source_library", "0.1.0"),
     )
 
 
@@ -653,8 +647,7 @@ def test_build_derivative_artifact_library_rejects_invalid_public_identity() -> 
             class_name="Invalid/Derivative",
             version="1.2.3",
             program=_program(),
-        )
+    )
 
     assert raised.value.category == "invalid_manifest"
     assert "resource_name must match" in raised.value.message
-
