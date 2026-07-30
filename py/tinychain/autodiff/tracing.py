@@ -134,14 +134,44 @@ def _infer_transpose(
     """
     permutation = params.get("permutation")
     metadata = operand_metadata[0]
-    if metadata is None:
+    if (
+        metadata is None
+        or not isinstance(metadata.get("dtype"), str)
+        or not metadata["dtype"]
+    ):
         # Do not derive a default permutation without an observed rank, nor
         # evaluate an opaque runtime permutation. Finalization rejects this
         # untyped path before it can be used to generate a derivative.
         return {"perm": permutation}, None
-    shape = tuple(metadata["shape"])
+    try:
+        shape = typespec_ranked_shape({"shape": metadata.get("shape")})
+    except AutodiffError as exc:
+        if exc.category == "missing_shape_metadata":
+            return {"perm": permutation}, None
+        raise
     rank = len(shape)
-    perm = tuple(permutation) if permutation is not None else tuple(reversed(range(rank)))
+    if permutation is None:
+        perm = tuple(reversed(range(rank)))
+    else:
+        if not isinstance(permutation, Sequence) or isinstance(permutation, (str, bytes)):
+            raise AutodiffError(
+                "invalid_permutation",
+                "transpose permutation must be a static sequence of integer axes",
+            )
+        try:
+            if any(type(axis) is not int for axis in permutation):
+                raise AutodiffError(
+                    "invalid_permutation",
+                    "transpose permutation axes must be integers",
+                )
+            perm = tuple(permutation)
+        except AutodiffError:
+            raise
+        except (IndexError, TypeError, ValueError) as exc:
+            raise AutodiffError(
+                "invalid_permutation",
+                "transpose permutation must be a static sequence of integer axes",
+            ) from exc
     dtype = check_differentiable_dtype(str(metadata["dtype"]))
     output_shape = transpose_output_shape(shape, perm)
     return {"perm": list(perm)}, _boundary_typespec(dtype, output_shape)

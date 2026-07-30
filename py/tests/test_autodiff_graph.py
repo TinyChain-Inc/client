@@ -2,6 +2,7 @@ import pytest
 import tinychain as tc
 from tinychain.autodiff import (
     AddOperator,
+    AutodiffError,
     BroadcastReduceOperator,
     MatmulOperator,
     TensorGraph,
@@ -10,6 +11,7 @@ from tinychain.autodiff import (
     TransposeOperator,
     get_active_builder,
 )
+from tinychain.autodiff.tracing import _infer_transpose, finalize_typed_graph
 
 
 def _make_tensor(name: str) -> tc.Tensor:
@@ -64,6 +66,73 @@ def test_tensor_node_requires_operator_instance():
             op_params={},
             input_value_ids=["v0"],
         )
+
+
+@pytest.mark.parametrize(
+    "permutation",
+    [object(), tc.state.IdRef("permutation"), "01", b"01", [0, 1.0], [True, 0]],
+)
+def test_typed_transpose_rejects_runtime_or_non_integer_permutation(permutation):
+    with pytest.raises(AutodiffError) as error:
+        _infer_transpose(
+            [{"dtype": "f32", "shape": (2, 3)}], {"permutation": permutation}
+        )
+
+    assert error.value.category == "invalid_permutation"
+
+
+def test_typed_transpose_preserves_static_and_default_permutations():
+    metadata = [{"dtype": "f32", "shape": (2, 3)}]
+
+    static_params, static_typespec = _infer_transpose(metadata, {"permutation": [1, 0]})
+    default_params, default_typespec = _infer_transpose(metadata, {"permutation": None})
+
+    assert static_params == default_params == {"perm": [1, 0]}
+    assert static_typespec == default_typespec == {"dtype": "f32", "shape": [3, 2]}
+
+
+def test_typed_transpose_does_not_infer_from_unranked_operand_metadata():
+    params, typespec = _infer_transpose(
+        [{"dtype": "f32", "shape": None}], {"permutation": [1, 0]}
+    )
+
+    assert params == {"perm": [1, 0]}
+    assert typespec is None
+
+
+@pytest.mark.parametrize(
+    "typespec",
+    [{"dtype": "f32"}, {"dtype": "f32", "shape": None}, {"dtype": "f32", "shape": "runtime"}],
+)
+def test_finalizer_rejects_missing_or_unranked_shape_metadata(typespec):
+    graph = TensorGraph(nodes=[], inputs=[("runtime_value", typespec)], outputs=["runtime_value"])
+
+    with pytest.raises(AutodiffError) as error:
+        finalize_typed_graph(graph)
+
+    assert error.value.category == "missing_shape_metadata"
+
+
+def test_finalizer_rejects_opaque_intermediate_on_selected_output_path():
+    graph = TensorGraph(
+        nodes=[
+            TensorNodeRecord(
+                node_id="n0",
+                output_value_id="v1",
+                operator=AddOperator(),
+                op_params={},
+                input_value_ids=["runtime_value"],
+                output_typespec={"dtype": "f32", "shape": [2, 3]},
+            )
+        ],
+        inputs=[("runtime_value", None)],
+        outputs=["v1"],
+    )
+
+    with pytest.raises(AutodiffError) as error:
+        finalize_typed_graph(graph)
+
+    assert error.value.category == "missing_dtype_metadata"
 
 
 class TestBuilderContext:
