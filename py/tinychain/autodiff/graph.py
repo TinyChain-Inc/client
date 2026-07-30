@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from ..serialize import serialize
+from .finalize import finalize_typed_graph
+from .protocol import AutodiffError
 from .shape import check_differentiable_dtype
 
 
@@ -300,6 +302,8 @@ class TensorGraphBuilder:
         check_differentiable_dtype(dtype)
         normalized_shape = self._normalize_input_shape(shape)
 
+        # Importing state/tensor at module scope would initialize Tensor, whose
+        # recorder imports this module for concrete operator identities.
         from ..state.scalar import IdRef, TCRef
         from ..collection.tensor import Tensor
 
@@ -422,8 +426,6 @@ class TensorGraphBuilder:
         input_value_ids = ordered_inputs
         inputs = [(vid, self._value_metadata_to_boundary_dict(vid)) for vid in input_value_ids]
         graph = TensorGraph(nodes=self._nodes, inputs=inputs, outputs=graph_outputs)
-        from .tracing import finalize_typed_graph
-
         return finalize_typed_graph(graph)
 
     def vjp(
@@ -481,14 +483,16 @@ class TensorGraphBuilder:
 
         seed_typespec = self._value_metadata_to_boundary_dict(output_value_id)
         if seed_typespec is None or not seed_typespec.get("dtype"):
-            from .protocol import AutodiffError
-
             raise AutodiffError(
                 "missing_dtype_metadata",
                 f"selected vjp output {output_value_id!r} is missing dtype metadata for seed inference",
             )
 
-        from . import generate
+        # Generation reaches reverse traversal, which owns VJP rules and imports
+        # the graph model. Importing it while this module initializes would form
+        # graph -> generate -> reverse -> graph, so this remains a call-time
+        # cycle guard. The implementation itself lives in `generate.py`.
+        from .generate import generate
 
         return generate(
             graph,

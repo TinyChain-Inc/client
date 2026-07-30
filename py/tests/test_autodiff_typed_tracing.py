@@ -28,6 +28,8 @@ from tinychain.autodiff import (
     generate,
     get_active_builder,
 )
+from tinychain.autodiff.finalize import finalize_typed_graph
+from tinychain.autodiff.generate import generate as generate_program
 from tinychain.autodiff.vjp import default_vjp_registry
 from tests.autodiff_execution import NumpyAutodiffDispatcher
 
@@ -57,6 +59,19 @@ def _trace_linear_mse(*, dtype: str = "f32"):
             loss = (residual * residual).mean([0, 1])
     graph = trace.build(outputs=loss)
     return trace, graph, images, weights, labels, residual, loss
+
+
+def test_typed_tracing_module_boundaries_support_build_and_vjp() -> None:
+    assert generate is generate_program
+
+    with TensorGraphBuilder() as trace:
+        lhs = trace.input("lhs", dtype="f32", shape=(2, 2))
+        rhs = trace.input("rhs", dtype="f32", shape=(2, 2))
+        output = lhs * rhs
+
+    graph = trace.build(outputs=output)
+    assert finalize_typed_graph(graph) is graph
+    assert trace.vjp(output, wrt=[lhs]).gradients
 
 
 def test_input_creates_named_symbolic_tensor() -> None:

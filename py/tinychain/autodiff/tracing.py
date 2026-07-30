@@ -23,13 +23,13 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from typing import Optional
 
+from .finalize import finalize_typed_graph
 from .graph import (
     AddOperator,
     MatmulOperator,
     MeanOperator,
     MulOperator,
     SubOperator,
-    TensorGraph,
     TensorNodeRecord,
     TensorOperator,
     TransposeOperator,
@@ -44,7 +44,6 @@ from .shape import (
     matmul_output_shape,
     mean_output_shape,
     transpose_output_shape,
-    typespec_ranked_shape,
 )
 
 # Normalized builder-side metadata for a single value, or ``None`` when the
@@ -238,50 +237,6 @@ def record_operation(
             output_typespec=output_typespec,
         )
     )
-
-
-def _require_complete_typespec(typespec: Optional[Mapping[str, object]], *, label: str) -> None:
-    """Fail closed unless *typespec* carries both a dtype and a ranked shape."""
-    if typespec is None or not typespec.get("dtype"):
-        raise AutodiffError("missing_dtype_metadata", f"{label} is missing dtype metadata")
-    # Raises `missing_shape_metadata` when the shape is absent or malformed.
-    typespec_ranked_shape(dict(typespec))
-
-
-def finalize_typed_graph(graph: TensorGraph) -> TensorGraph:
-    """Validate that a typed trace is complete, failing closed (spec §13.3, FR-008).
-
-    Every graph input and node output reachable from ``graph.outputs`` must carry
-    a dtype (``missing_dtype_metadata``) and a ranked shape
-    (``missing_shape_metadata``). An unsupported/untraced intermediate on the
-    selected path surfaces here as a graph input with no metadata, so it can
-    never be silently omitted from the derivative. The graph is returned
-    unchanged on success to support ``graph = finalize_typed_graph(builder.build())``.
-    """
-    input_typespecs = dict(graph.inputs)
-    produced_by = {node.output_value_id: node for node in graph.nodes}
-
-    reachable_inputs: set[str] = set()
-    reachable_nodes: list[TensorNodeRecord] = []
-    seen_nodes: set[str] = set()
-    pending: list[str] = list(graph.outputs)
-    while pending:
-        value_id = pending.pop()
-        node = produced_by.get(value_id)
-        if node is None:
-            reachable_inputs.add(value_id)
-            continue
-        if node.node_id in seen_nodes:
-            continue
-        seen_nodes.add(node.node_id)
-        reachable_nodes.append(node)
-        pending.extend(node.input_value_ids)
-
-    for value_id in sorted(reachable_inputs):
-        _require_complete_typespec(input_typespecs.get(value_id), label=f"graph input {value_id!r}")
-    for node in reachable_nodes:
-        _require_complete_typespec(node.output_typespec, label=f"node {node.node_id!r} output")
-    return graph
 
 
 def captured_operator_types() -> frozenset[type[TensorOperator]]:

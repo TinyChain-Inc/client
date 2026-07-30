@@ -35,6 +35,7 @@ from .protocol import (
 from .reflection import reflect_derivative_program, tensor_typespec_to_type_spec
 from .reverse import DerivativeProgram, ReverseTraversal
 from .seed import SeedValidator
+from .generate import generate
 from .tracing import captured_operator_types, captured_route_operators
 from .vjp import (
     AddVjpRule,
@@ -123,53 +124,6 @@ def __getattr__(name: str) -> object:
         globals()[name] = value
         return value
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
-def generate(
-    graph: TensorGraph,
-    output_value_id: str | list[str],
-    wrt: list[str],
-    seed: str | list[str],
-    *,
-    seed_typespec: dict[str, object] | list[dict[str, object] | None] | None = None,
-    graph_id: str | None = None,
-) -> DerivativeProgram:
-    """Experimentally build a structured Python derivative program.
-
-    The returned ``DerivativeProgram`` contains derivative ``TensorNodeRecord``
-    objects, ordered output gradient value ids, and metadata. It is a pure data
-    structure for inspection or later execution by ``ExecutionScheduler``; this
-    function does not execute server routes and does not return Python callbacks.
-
-    ``seed`` is the value id of the upstream cotangent for ``output_value_id``:
-    the initial dL/d(output) tensor used to start reverse traversal. During
-    execution, callers must provide a concrete value for this id in the
-    scheduler environment. When ``seed_typespec`` is supplied, it is validated
-    against the selected output typespec and must have the same shape and a
-    differentiable floating dtype (f32/f64).
-
-    ``graph_id`` is an optional explicit identifier for the source graph. When
-    supplied, it is used verbatim as ``source_graph_id`` in the returned
-    metadata; otherwise a stable SHA-256 content hash of the graph structure is
-    computed automatically.
-    """
-    output_value_ids = output_value_id if isinstance(output_value_id, list) else [output_value_id]
-    seed_value_ids = seed if isinstance(seed, list) else [seed]
-    seed_typespecs = seed_typespec if isinstance(seed_typespec, list) else None
-    single_seed_typespec = None if isinstance(seed_typespec, list) else seed_typespec
-    if len(output_value_ids) != len(seed_value_ids):
-        raise TypeError("generate requires one seed value id per output value id")
-    return ReverseTraversal().build(
-        graph=graph,
-        output_value_id=output_value_ids[0],
-        output_value_ids=output_value_ids,
-        wrt=wrt,
-        seed_value_id=seed_value_ids[0],
-        seed_value_ids=seed_value_ids,
-        seed_typespec=single_seed_typespec,
-        seed_typespecs=seed_typespecs,
-        source_graph_id=graph_id,
-    )
 
 
 __all__ = [
