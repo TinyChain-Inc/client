@@ -16,9 +16,6 @@ construction. It is the sole extension point for future supported operations.
 The capture allowlist is explicit and reviewable (spec §9.1, FR-013):
 Add, Sub, Mul, Matmul, Mean, and Transpose are captured; Div, Sum, and Reshape
 are deliberately NOT captured in this issue even though they have VJP rules.
-Tracing is limited to operations and metadata observable by the Python client.
-It neither queries nor evaluates an opaque runtime graph; an unavailable dtype
-or rank therefore fails closed during typed finalization.
 """
 
 from __future__ import annotations
@@ -26,13 +23,13 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from typing import Optional
 
+from .finalize import finalize_typed_graph
 from .graph import (
     AddOperator,
     MatmulOperator,
     MeanOperator,
     MulOperator,
     SubOperator,
-    TensorGraph,
     TensorNodeRecord,
     TensorOperator,
     TransposeOperator,
@@ -46,6 +43,7 @@ from .shape import (
     elementwise_broadcast_shape,
     matmul_output_shape,
     mean_output_shape,
+    normalize_transpose_permutation,
     transpose_output_shape,
     typespec_ranked_shape,
 )
@@ -58,7 +56,9 @@ _ValueMetadata = Optional[dict[str, object]]
 # record's stored ``op_params`` and its boundary ``output_typespec`` (``None``
 # when inference is impossible because an operand is untyped).
 _InferenceResult = tuple[dict[str, object], Optional[dict[str, object]]]
-_InferenceFn = Callable[[list[_ValueMetadata], Mapping[str, object]], _InferenceResult]
+_InferenceFn = Callable[
+    [list[_ValueMetadata], Mapping[str, object], dict[str, int]], _InferenceResult
+]
 
 
 def _boundary_typespec(dtype: str, shape: Sequence[object]) -> dict[str, object]:
@@ -67,7 +67,9 @@ def _boundary_typespec(dtype: str, shape: Sequence[object]) -> dict[str, object]
 
 
 def _infer_elementwise(
-    operand_metadata: list[_ValueMetadata], params: Mapping[str, object]
+    operand_metadata: list[_ValueMetadata],
+    params: Mapping[str, object],
+    symbol_bindings: dict[str, int],
 ) -> _InferenceResult:
     """Infer output metadata for a captured Add/Sub/Mul node (spec §10.1-§10.2)."""
     lhs_metadata, rhs_metadata = operand_metadata
@@ -77,13 +79,17 @@ def _infer_elementwise(
         str(lhs_metadata["dtype"]), str(rhs_metadata["dtype"])
     )
     shape = elementwise_broadcast_shape(
-        tuple(lhs_metadata["shape"]), tuple(rhs_metadata["shape"])
+        tuple(lhs_metadata["shape"]),
+        tuple(rhs_metadata["shape"]),
+        bindings=symbol_bindings,
     )
     return {}, _boundary_typespec(dtype, shape)
 
 
 def _infer_matmul(
-    operand_metadata: list[_ValueMetadata], params: Mapping[str, object]
+    operand_metadata: list[_ValueMetadata],
+    params: Mapping[str, object],
+    symbol_bindings: dict[str, int],
 ) -> _InferenceResult:
     """Infer output metadata for a captured Matmul node (spec §10.1, §10.3)."""
     lhs_metadata, rhs_metadata = operand_metadata
@@ -93,13 +99,17 @@ def _infer_matmul(
         str(lhs_metadata["dtype"]), str(rhs_metadata["dtype"])
     )
     shape = matmul_output_shape(
-        tuple(lhs_metadata["shape"]), tuple(rhs_metadata["shape"])
+        tuple(lhs_metadata["shape"]),
+        tuple(rhs_metadata["shape"]),
+        bindings=symbol_bindings,
     )
     return {}, _boundary_typespec(dtype, shape)
 
 
 def _infer_mean(
-    operand_metadata: list[_ValueMetadata], params: Mapping[str, object]
+    operand_metadata: list[_ValueMetadata],
+    params: Mapping[str, object],
+    _symbol_bindings: dict[str, int],
 ) -> _InferenceResult:
     """Infer output metadata for a captured Mean node (spec §10.1, §10.4).
 
@@ -125,7 +135,9 @@ def _infer_mean(
 
 
 def _infer_transpose(
-    operand_metadata: list[_ValueMetadata], params: Mapping[str, object]
+    operand_metadata: list[_ValueMetadata],
+    params: Mapping[str, object],
+    _symbol_bindings: Optional[dict[str, int]] = None,
 ) -> _InferenceResult:
     """Infer output metadata for a captured Transpose node (spec §10.5).
 
@@ -139,42 +151,36 @@ def _infer_transpose(
         or not isinstance(metadata.get("dtype"), str)
         or not metadata["dtype"]
     ):
-        # Do not derive a default permutation without an observed rank, nor
-        # evaluate an opaque runtime permutation. Finalization rejects this
-        # untyped path before it can be used to generate a derivative.
-        return {"perm": permutation}, None
+        return _untyped_transpose_params(permutation), None
     try:
         shape = typespec_ranked_shape({"shape": metadata.get("shape")})
     except AutodiffError as exc:
         if exc.category == "missing_shape_metadata":
-            return {"perm": permutation}, None
+            return _untyped_transpose_params(permutation), None
         raise
     rank = len(shape)
-    if permutation is None:
-        perm = tuple(reversed(range(rank)))
-    else:
-        if not isinstance(permutation, Sequence) or isinstance(permutation, (str, bytes)):
-            raise AutodiffError(
-                "invalid_permutation",
-                "transpose permutation must be a static sequence of integer axes",
-            )
-        try:
-            if any(type(axis) is not int for axis in permutation):
-                raise AutodiffError(
-                    "invalid_permutation",
-                    "transpose permutation axes must be integers",
-                )
-            perm = tuple(permutation)
-        except AutodiffError:
-            raise
-        except (IndexError, TypeError, ValueError) as exc:
-            raise AutodiffError(
-                "invalid_permutation",
-                "transpose permutation must be a static sequence of integer axes",
-            ) from exc
+    perm = (
+        tuple(reversed(range(rank)))
+        if permutation is None
+        else normalize_transpose_permutation(permutation)
+    )
     dtype = check_differentiable_dtype(str(metadata["dtype"]))
     output_shape = transpose_output_shape(shape, perm)
     return {"perm": list(perm)}, _boundary_typespec(dtype, output_shape)
+
+
+def _untyped_transpose_params(permutation: object) -> dict[str, object]:
+    """Normalize static transpose parameters without attempting shape inference."""
+    if permutation is None:
+        return {"perm": []}
+    return {"perm": list(normalize_transpose_permutation(permutation))}
+
+
+def _untyped_operation_params(operation: str, params: Mapping[str, object]) -> dict[str, object]:
+    """Store only static parameters when operands lack complete metadata."""
+    if operation == "transpose":
+        return _untyped_transpose_params(params.get("permutation"))
+    return {}
 
 
 # Explicit, reviewable route→concrete-operator allowlist (spec §9.1, FR-013).
@@ -236,7 +242,15 @@ def record_operation(
     output_value_id = builder.register_value(result)
     operand_metadata = [builder._get_value_metadata(value_id) for value_id in input_value_ids]
 
-    op_params, output_typespec = _INFERENCE[operation](operand_metadata, normalized_params)
+    if all(metadata is not None for metadata in operand_metadata):
+        symbol_bindings = builder._copy_symbol_bindings()
+        op_params, output_typespec = _INFERENCE[operation](
+            operand_metadata, normalized_params, symbol_bindings
+        )
+        builder._replace_symbol_bindings(symbol_bindings)
+    else:
+        op_params = _untyped_operation_params(operation, normalized_params)
+        output_typespec = None
 
     if output_typespec is not None:
         builder._set_value_metadata(
@@ -255,60 +269,6 @@ def record_operation(
             output_typespec=output_typespec,
         )
     )
-
-
-def _require_complete_typespec(typespec: Optional[Mapping[str, object]], *, label: str) -> None:
-    """Fail closed unless *typespec* carries both a dtype and a ranked shape."""
-    if not isinstance(typespec, Mapping) or not isinstance(typespec.get("dtype"), str) or not typespec["dtype"]:
-        raise AutodiffError("missing_dtype_metadata", f"{label} is missing dtype metadata")
-    try:
-        # `typespec_ranked_shape` converts absent, unranked, and malformed
-        # shapes to the documented category. Do not let malformed boundary
-        # metadata leak a raw container exception.
-        typespec_ranked_shape({"shape": typespec.get("shape")})
-    except AutodiffError:
-        raise
-    except (IndexError, TypeError, ValueError) as exc:
-        raise AutodiffError(
-            "missing_shape_metadata", f"{label} is missing ranked shape metadata"
-        ) from exc
-
-
-def finalize_typed_graph(graph: TensorGraph) -> TensorGraph:
-    """Validate that a typed trace is complete, failing closed (spec §13.3, FR-008).
-
-    Every graph input and node output reachable from ``graph.outputs`` must carry
-    a dtype (``missing_dtype_metadata``) and a ranked shape
-    (``missing_shape_metadata``). Capture covers only operations and metadata
-    observable by the Python client: opaque runtime-built intermediates, unknown
-    ranks, and unsupported operations on the selected path are not inferred or
-    evaluated and instead fail closed here. The graph is returned unchanged on
-    success to support ``graph = finalize_typed_graph(builder.build())``.
-    """
-    input_typespecs = dict(graph.inputs)
-    produced_by = {node.output_value_id: node for node in graph.nodes}
-
-    reachable_inputs: set[str] = set()
-    reachable_nodes: list[TensorNodeRecord] = []
-    seen_nodes: set[str] = set()
-    pending: list[str] = list(graph.outputs)
-    while pending:
-        value_id = pending.pop()
-        node = produced_by.get(value_id)
-        if node is None:
-            reachable_inputs.add(value_id)
-            continue
-        if node.node_id in seen_nodes:
-            continue
-        seen_nodes.add(node.node_id)
-        reachable_nodes.append(node)
-        pending.extend(node.input_value_ids)
-
-    for value_id in sorted(reachable_inputs):
-        _require_complete_typespec(input_typespecs.get(value_id), label=f"graph input {value_id!r}")
-    for node in reachable_nodes:
-        _require_complete_typespec(node.output_typespec, label=f"node {node.node_id!r} output")
-    return graph
 
 
 def captured_operator_types() -> frozenset[type[TensorOperator]]:

@@ -220,6 +220,8 @@ def _broadcast_dim(lhs_dim: ShapeDim, rhs_dim: ShapeDim, bindings: dict[str, int
     try:
         bind_compatible_dims(lhs_dim, rhs_dim, bindings=bindings, label="broadcast")
     except AutodiffError as exc:
+        if exc.category == "symbolic_shape_mismatch":
+            raise
         raise AutodiffError(
             "unresolved_symbolic_shape",
             f"broadcast dimensions {lhs_dim!r} and {rhs_dim!r} cannot be proven compatible",
@@ -229,7 +231,9 @@ def _broadcast_dim(lhs_dim: ShapeDim, rhs_dim: ShapeDim, bindings: dict[str, int
     return lhs_dim if isinstance(lhs_dim, int) else rhs_dim
 
 
-def elementwise_broadcast_shape(lhs: Shape, rhs: Shape) -> Shape:
+def elementwise_broadcast_shape(
+    lhs: Shape, rhs: Shape, *, bindings: dict[str, int] | None = None
+) -> Shape:
     """Compute the proven right-aligned broadcast output shape (spec §10.2).
 
     Equal dimensions are kept, `1` broadcasts to the other dimension, missing
@@ -240,14 +244,16 @@ def elementwise_broadcast_shape(lhs: Shape, rhs: Shape) -> Shape:
     rank = max(shape_rank(lhs), shape_rank(rhs))
     padded_lhs = (1,) * (rank - shape_rank(lhs)) + lhs
     padded_rhs = (1,) * (rank - shape_rank(rhs)) + rhs
-    bindings: dict[str, int] = {}
+    binding_map = {} if bindings is None else bindings
     return tuple(
-        _broadcast_dim(lhs_dim, rhs_dim, bindings)
+        _broadcast_dim(lhs_dim, rhs_dim, binding_map)
         for lhs_dim, rhs_dim in zip(padded_lhs, padded_rhs, strict=True)
     )
 
 
-def matmul_output_shape(lhs: Shape, rhs: Shape) -> Shape:
+def matmul_output_shape(
+    lhs: Shape, rhs: Shape, *, bindings: dict[str, int] | None = None
+) -> Shape:
     """Compute the proven matmul output shape (spec §10.3).
 
     Both operands must have rank at least two; `lhs[-1]` and `rhs[-2]` must be
@@ -255,6 +261,7 @@ def matmul_output_shape(lhs: Shape, rhs: Shape) -> Shape:
     elementwise broadcast rules; the output shape is
     `broadcast(lhs[:-2], rhs[:-2]) + (lhs[-2], rhs[-1])`.
     """
+    binding_map = {} if bindings is None else bindings
     lhs_rank = shape_rank(lhs)
     rhs_rank = shape_rank(rhs)
     if lhs_rank < 2 or rhs_rank < 2:
@@ -271,13 +278,17 @@ def matmul_output_shape(lhs: Shape, rhs: Shape) -> Shape:
             )
     else:
         try:
-            bind_compatible_dims(lhs_inner, rhs_inner, bindings={}, label="matmul inner dimension")
+            bind_compatible_dims(
+                lhs_inner, rhs_inner, bindings=binding_map, label="matmul inner dimension"
+            )
         except AutodiffError as exc:
+            if exc.category == "symbolic_shape_mismatch":
+                raise
             raise AutodiffError(
                 "unresolved_symbolic_shape",
                 f"matmul inner dimensions {lhs_inner!r} and {rhs_inner!r} cannot be proven compatible",
             ) from exc
-    batch_shape = elementwise_broadcast_shape(lhs[:-2], rhs[:-2])
+    batch_shape = elementwise_broadcast_shape(lhs[:-2], rhs[:-2], bindings=binding_map)
     return batch_shape + (lhs[-2], rhs[-1])
 
 
@@ -339,7 +350,23 @@ def mean_output_shape(shape: Shape, axes: object, *, keepdims: bool) -> Shape:
     return tuple(dim for index, dim in enumerate(shape) if index not in normalized_axes)
 
 
-def transpose_output_shape(shape: Shape, perm: Sequence[int]) -> Shape:
+def normalize_transpose_permutation(perm: object) -> tuple[int, ...]:
+    """Require a concrete transpose permutation before static inference."""
+    if not isinstance(perm, Sequence) or isinstance(perm, (str, bytes)):
+        raise AutodiffError(
+            "invalid_permutation",
+            f"transpose permutation must be a sequence of integers; got {perm!r}",
+        )
+    perm_tuple = tuple(perm)
+    if any(type(axis) is not int for axis in perm_tuple):
+        raise AutodiffError(
+            "invalid_permutation",
+            f"transpose permutation axes must be integers; got {perm_tuple!r}",
+        )
+    return perm_tuple
+
+
+def transpose_output_shape(shape: Shape, perm: object) -> Shape:
     """Compute the proven transpose output shape (spec §10.5).
 
     The permutation length must equal the input rank and each axis must
@@ -347,12 +374,7 @@ def transpose_output_shape(shape: Shape, perm: Sequence[int]) -> Shape:
     permutation.
     """
     rank = shape_rank(shape)
-    if not isinstance(perm, Sequence) or isinstance(perm, (str, bytes)):
-        raise AutodiffError(
-            "invalid_permutation",
-            f"transpose permutation must be a sequence of integers; got {perm!r}",
-        )
-    perm_tuple = tuple(perm)
+    perm_tuple = normalize_transpose_permutation(perm)
     if len(perm_tuple) != rank or sorted(perm_tuple) != list(range(rank)):
         raise AutodiffError(
             "invalid_permutation",
