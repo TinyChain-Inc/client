@@ -6,6 +6,9 @@ from tinychain.autodiff import (
     BroadcastReduceOperator,
     MatmulOperator,
     TensorGraph,
+    MeanOperator,
+    MulOperator,
+    SubOperator,
     TensorGraphBuilder,
     TensorNodeRecord,
     TransposeOperator,
@@ -266,6 +269,26 @@ class TestTransposeRecording:
 
 
 class TestMultiNodeGraph:
+    def test_typed_linear_mse_records_supported_operations_in_order(self):
+        with TensorGraphBuilder() as builder:
+            features = builder.input("features", dtype="f32", shape=[2, 3])
+            weights = builder.input("weights", dtype="f32", shape=[3, 1])
+            targets = builder.input("targets", dtype="f32", shape=[2, 1])
+            with tc.state.scoped_context():
+                prediction = features @ weights
+                error = prediction - targets
+                loss = (error * error).mean(axes=[0], keepdims=False)
+            builder.mark_output(loss)
+
+        graph = builder.build()
+        assert [type(node.operator) for node in graph.nodes] == [
+            MatmulOperator,
+            SubOperator,
+            MulOperator,
+            MeanOperator,
+        ]
+        assert graph.nodes[-1].op_params == {"axes": [0], "keepdims": False}
+
     def test_two_ops_produce_two_nodes(self, x, y, w):
         with TensorGraphBuilder() as builder:
             x + y
@@ -312,3 +335,51 @@ def test_symbolic_form_unchanged_outside_builder(op_fn, expected_json):
     x = _make_tensor("x")
     y = _make_tensor("y")
     assert _json(op_fn(x, y)) == expected_json
+
+
+def test_add_and_transpose_are_recorded_by_the_active_builder():
+    with TensorGraphBuilder() as builder:
+        x = builder.input("x", dtype="f32", shape=[2, 3])
+        y = builder.input("y", dtype="f32", shape=[2, 3])
+        with tc.state.scoped_context():
+            result = (x + y).transpose([1, 0])
+        builder.mark_output(result)
+
+    graph = builder.build()
+    assert [type(node.operator) for node in graph.nodes] == [AddOperator, TransposeOperator]
+    assert graph.nodes[1].input_value_ids == [graph.nodes[0].output_value_id]
+
+
+def test_div_and_logical_operations_are_not_captured():
+    with TensorGraphBuilder() as builder:
+        x = builder.input("x", dtype="f32", shape=[2, 3])
+        y = builder.input("y", dtype="f32", shape=[2, 3])
+        quotient = x / y
+        conjunction = x.logical_and(y)
+
+    graph = builder.build()
+    assert isinstance(quotient, tc.Tensor)
+    assert isinstance(conjunction, tc.Tensor)
+    assert graph.nodes == []
+    assert graph.outputs == []
+
+
+def test_inactive_supported_operations_preserve_return_types_without_records():
+    x = _make_tensor("x")
+    y = _make_tensor("y")
+
+    results = [x + y, x - y, x * y, x @ y, x.transpose([1, 0])]
+    mean = x.mean(axes=[0], keepdims=False)
+
+    assert get_active_builder() is None
+    assert all(isinstance(result, tc.Tensor) for result in results)
+    assert isinstance(mean, tc.state.Scalar)
+
+
+def test_active_typed_transpose_rejects_runtime_permutation_through_recorder():
+    with TensorGraphBuilder() as builder:
+        x = builder.input("x", dtype="f32", shape=[2, 3])
+        with pytest.raises(AutodiffError) as error:
+            x.transpose(tc.state.IdRef("runtime_permutation"))
+
+    assert error.value.category == "invalid_permutation"
