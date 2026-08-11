@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING
-
 from ..uri import URI, uri
 from .scalar.refs import (
     Cond,
@@ -12,11 +10,6 @@ from .scalar.refs import (
     TCRef,
     While,
 )
-
-if TYPE_CHECKING:
-    from .context import Context
-    from .scalar import Scalar
-    from .value import Value
 
 
 def _freeze_shape(value: object) -> object:
@@ -33,25 +26,14 @@ def _sorted_items(obj: Mapping[str, object]) -> list[tuple[str, object]]:
     return sorted(obj.items(), key=lambda kv: kv[0])
 
 
-def _owner_ctx(owner: object, ctx: "Context | None" = None) -> "Context | None":
-    return ctx if ctx is not None else getattr(owner, "_ctx", None)
+def _stage_subject(owner: object) -> str | None:
+    from .context import current_context
 
-
-def _active_subject_ctx(owner: object, ctx: "Context | None" = None) -> "Context | None":
-    active_ctx = _owner_ctx(owner, ctx)
-    from .context import resolve_context
-
-    return resolve_context(active_ctx)
-
-
-def _stage_subject(owner: object, active_ctx: "Context | None") -> str | None:
+    active_ctx = current_context()
     if active_ctx is None:
         return None
 
-    try:
-        bound = active_ctx.bind_auto(owner)
-    except TypeError:
-        return None
+    bound = active_ctx.bind_auto(owner)
 
     from .scalar import form_of
 
@@ -64,7 +46,7 @@ def _stage_subject(owner: object, active_ctx: "Context | None") -> str | None:
     return None
 
 
-def _subject_from_candidate(candidate: object, active_ctx: "Context | None", owner: object) -> str | None:
+def _subject_from_candidate(candidate: object, owner: object) -> str | None:
     if isinstance(candidate, OpRef):
         subject = candidate.subject
     else:
@@ -73,21 +55,19 @@ def _subject_from_candidate(candidate: object, active_ctx: "Context | None", own
             return None
         subject = runtime_candidate.subject
 
-    staged = _stage_subject(owner, active_ctx)
+    staged = _stage_subject(owner)
     return staged if staged is not None else subject
 
 
-def _state_subject(owner: object, form: object, *, ctx: "Context | None" = None) -> str:
+def _state_subject(owner: object, form: object) -> str:
     from .scalar import form_of
 
-    active_ctx = _active_subject_ctx(owner, ctx)
-
     if isinstance(form, OpRef):
-        subject = _subject_from_candidate(form, active_ctx, owner)
+        subject = _subject_from_candidate(form, owner)
         if subject is not None:
             return subject
 
-    subject = _subject_from_candidate(form, active_ctx, owner)
+    subject = _subject_from_candidate(form, owner)
     if subject is not None:
         return subject
 
@@ -96,7 +76,7 @@ def _state_subject(owner: object, form: object, *, ctx: "Context | None" = None)
         if isinstance(ref_form, IdRef):
             return ref_form.key()
 
-        subject = _subject_from_candidate(ref_form, active_ctx, owner)
+        subject = _subject_from_candidate(ref_form, owner)
         if subject is not None:
             return subject
 
@@ -113,84 +93,76 @@ def _state_subject(owner: object, form: object, *, ctx: "Context | None" = None)
             return key
 
     if isinstance(form, Sequence) and not isinstance(form, (str, bytes, bytearray)):
-        staged = _stage_subject(owner, active_ctx)
+        staged = _stage_subject(owner)
         if staged is not None:
             return staged
 
-    staged = _stage_subject(owner, active_ctx)
+    staged = _stage_subject(owner)
     if staged is not None:
         return staged
 
     raise TypeError("expected a State id ref for an op subject")
 
 
-def _state_subject_ref(owner: object, form: object, method: str | None = None, *, ctx: "Context | None" = None) -> str:
-    subject = _state_subject(owner, form, ctx=ctx)
+def _state_subject_ref(owner: object, form: object, method: str | None = None) -> str:
+    subject = _state_subject(owner, form)
     return f"{subject}/{method}" if method else subject
 
 
-def subject_of(owner: object, *, ctx: "Context | None" = None) -> str:
+def subject_of(owner: object) -> str:
     from .scalar import form_of
 
-    return _state_subject(owner, form_of(owner), ctx=ctx)
+    return _state_subject(owner, form_of(owner))
 
 
 def _state_get(
     owner: object,
     form: object,
     method: str | None = None,
-    key: "Scalar | Value | object" = None,
+    key: object = None,
     *,
-    rtype: type["Scalar"] | None = None,
-    ctx: "Context | None" = None,
-) -> "Scalar":
+    rtype: type | None = None,
+) -> object:
     cls = rtype or type(owner)
-    owner_ctx = _owner_ctx(owner, ctx)
-    subject = _state_subject_ref(owner, form, method, ctx=owner_ctx)
-    return cls._get_ref(subject, key, ctx=owner_ctx)
+    subject = _state_subject_ref(owner, form, method)
+    return cls._get_ref(subject, key)
 
 
 def _state_put(
     owner: object,
     form: object,
-    value: "Scalar | Value | object",
+    value: object,
     method: str | None = None,
-    key: "Scalar | Value | object" = None,
+    key: object = None,
     *,
-    rtype: type["Scalar"] | None = None,
-    ctx: "Context | None" = None,
-) -> "Scalar":
+    rtype: type | None = None,
+) -> object:
     cls = rtype or type(owner)
-    owner_ctx = _owner_ctx(owner, ctx)
-    subject = _state_subject_ref(owner, form, method, ctx=owner_ctx)
-    return cls._put_ref(subject, key, value, ctx=owner_ctx)
+    subject = _state_subject_ref(owner, form, method)
+    return cls._put_ref(subject, key, value)
 
 
 def _state_post(
     owner: object,
     form: object,
     method: str | None = None,
-    params: Mapping[str, "Scalar | Value | object"] | None = None,
+    params: Mapping[str, object] | None = None,
     *,
-    rtype: type["Scalar"] | None = None,
-    ctx: "Context | None" = None,
-) -> "Scalar":
+    rtype: type | None = None,
+) -> object:
     cls = rtype or type(owner)
-    owner_ctx = _owner_ctx(owner, ctx)
-    subject = _state_subject_ref(owner, form, method, ctx=owner_ctx)
-    return cls._post_ref(subject, params, ctx=owner_ctx)
+    subject = _state_subject_ref(owner, form, method)
+    return cls._post_ref(subject, params)
 
 
 def _state_delete(
     owner: object,
     form: object,
     method: str | None = None,
-    key: "Scalar | Value | object" = None,
+    key: object = None,
     *,
-    rtype: type["Scalar"] | None = None,
-    ctx: "Context | None" = None,
-) -> "Scalar":
+    rtype: type | None = None,
+) -> object:
     cls = rtype or type(owner)
-    owner_ctx = _owner_ctx(owner, ctx)
-    subject = _state_subject_ref(owner, form, method, ctx=owner_ctx)
-    return cls._delete_ref(subject, key, ctx=owner_ctx)
+    subject = _state_subject_ref(owner, form, method)
+    return cls._delete_ref(subject, key)

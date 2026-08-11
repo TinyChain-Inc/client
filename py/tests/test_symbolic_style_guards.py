@@ -49,6 +49,24 @@ def _call_name(node: ast.AST) -> str | None:
     return None
 
 
+def _enclosing_function_name(
+    node: ast.AST, parent_by_child: dict[ast.AST, ast.AST]
+) -> str | None:
+    parent = parent_by_child.get(node)
+    while parent is not None:
+        if isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return parent.name
+        parent = parent_by_child.get(parent)
+    return None
+
+
+def _is_ast_constructor_call(node: ast.Call) -> bool:
+    func = node.func
+    while isinstance(func, ast.Attribute):
+        func = func.value
+    return isinstance(func, ast.Name) and func.id == "ast"
+
+
 def _collect_subclasses_by_base() -> dict[str, set[str]]:
     direct_children: dict[str, set[str]] = {}
     all_classes: set[str] = set()
@@ -143,6 +161,68 @@ def test_symbolic_instantiation_style_guards() -> None:
                         continue
 
     assert not violations, "forbidden symbolic construction forms found:\n" + "\n".join(violations)
+
+
+def test_serialization_is_not_used_for_equality_or_hashing() -> None:
+    violations: list[str] = []
+
+    for path in sorted(_SRC_ROOT.rglob("*.py")):
+        relative_path = path.relative_to(_SRC_ROOT).as_posix()
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        parent_by_child = _build_parent_map(tree)
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            if _enclosing_function_name(node, parent_by_child) not in {
+                "__eq__",
+                "__ne__",
+                "__hash__",
+            }:
+                continue
+
+            name = _call_name(node.func)
+            if name not in {"to_json", "dumps", "loads"}:
+                continue
+
+            segment = ast.get_source_segment(source, node) or f"{name}(...)"
+            violations.append(f"{relative_path}:{node.lineno}: {segment}")
+
+    assert not violations, (
+        "serialization is permitted only at a real boundary, not for equality or hashing:\n"
+        + "\n".join(violations)
+    )
+
+
+def test_symbolic_state_ownership_has_one_construction_path() -> None:
+    violations: list[str] = []
+
+    for path in sorted(_SRC_ROOT.rglob("*.py")):
+        relative_path = path.relative_to(_SRC_ROOT).as_posix()
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Attribute) and node.attr == "_ctx":
+                violations.append(f"{relative_path}:{node.lineno}: {node.attr}")
+                continue
+
+            if not isinstance(node, ast.Call):
+                continue
+
+            if _is_ast_constructor_call(node):
+                continue
+
+            for keyword in node.keywords:
+                if keyword.arg in {"ctx", "ref"}:
+                    segment = ast.get_source_segment(source, node) or "call(...)"
+                    violations.append(f"{relative_path}:{node.lineno}: {segment}")
+
+    assert not violations, (
+        "symbolic State values must use one positional form; Context owns bindings:\n"
+        + "\n".join(violations)
+    )
 
 
 def test_runtime_paths_use_uri_helpers() -> None:

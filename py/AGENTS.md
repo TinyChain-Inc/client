@@ -27,6 +27,9 @@ staying thin and well-documented for new users.
   batching, convenience helpers) must never hide long-running work; expose
   TaskQueue helpers (`enqueue`/`claim`/`ack`) so publishers push heavy workloads
   through queues instead of synchronous routes.
+- Preserve server and transport backpressure. Collection responses stay lazy,
+  request concurrency and prefetch are finite and explicit, and retries never
+  form an unbounded queue or conceal a structured resource-exhaustion error.
 - Distinguish two classes of gaps:
   framework gaps (missing native capability we want `tinychain` to provide,
   independent of v1/v2) and parity gaps (behavior differences versus v1).
@@ -102,13 +105,20 @@ staying thin and well-documented for new users.
   type-specific constructors/accessors on `Value`, and do not expose a `.value`
   property for client code; access underlying representation via `form_of(...)`
   helpers.
-- Keep symbolic wrappers focused on IR shape and serialization round-trips;
-  runtime arithmetic/comparison/container behaviors belong on typed wrappers
-  (`tc.Number`, `tc.Bool`, `tc.Tuple`, `tc.Map`, `tc.String`) and protocols.
+- Keep symbolic wrappers focused on their canonical IR shape. Serialization is
+  an explicit transport/export operation, never an internal traversal or
+  normalization mechanism. Runtime arithmetic/comparison/container behaviors
+  belong on typed wrappers (`tc.Number`, `tc.Bool`, `tc.Tuple`, `tc.Map`,
+  `tc.String`) and protocols.
 - Avoid shared-helper type ladders (`if/elif isinstance(...)`) for runtime
   behavior dispatch. Prefer type-specific implementation on the owning wrapper
   class/module. If a type ladder is unavoidable at a decode/normalization
   boundary, isolate it in one explicit dispatch function and keep it small.
+- Keep Python response materialization as one recursive boundary projection:
+  recursively project ordinary state/map/tuple structure and preserve collection
+  sequences as lazy terminal iterators. Do not duplicate that traversal across
+  response wrappers, type-specific collection helpers, or JSON re-encoding
+  paths; collection leaves remain owned by their collection modules.
 - Preserve concrete method type information for symbolic operation forms.
   Do not erase `Get/Put/Post/Delete` operation refs/defs behind parent-class
   method strings or generic `args` shape checks when constructing, validating,
@@ -151,9 +161,13 @@ staying thin and well-documented for new users.
   The only allowed exception is explicit conversion glue for optional large
   external tensor ecosystems (`tensorflow`, `torch`, `jax`) where import
   availability directly gates that conversion path.
-- For symbolic refs/opdefs, do not add `_cmp_key` helper APIs. Equality and
-  hashing must use one canonical representation (`to_json`/form), not parallel
-  comparison key paths.
+- For symbolic refs/opdefs, do not add `_cmp_key` helper APIs. Any structural
+  inspection must use the canonical in-memory form directly; never call
+  `to_json`, `json.dumps`, or `json.loads` to implement equality, hashing,
+  cloning, reference construction, validation, or type inspection.
+- PyO3 local execution must pass Rust-backed State and collection handles
+  directly. JSON/HTTP body conversion is permitted only for a real remote HTTP
+  call or explicit Python materialization, never as a local execution bridge.
 - Resolve active state context through the shared context helper
   (`state.context.resolve_context`) rather than ad hoc `current_context()`
   call sites.
@@ -166,9 +180,8 @@ staying thin and well-documented for new users.
   Avoid `*_tag` naming for path-like values, and avoid `*_path()` helper
   functions when a canonical module constant can represent the same value.
 - Keep one canonical route-stub call shape in application code.
-  Prefer keyword arguments for route parameters and use `body=` only when
-  passing one explicit payload. Treat positional forms as compatibility-only,
-  and avoid adding new route-call conventions.
+  Require keyword arguments for route parameters and use `body=` only when
+  passing one explicit payload. Positional route arguments are prohibited.
 - Preserve a single obvious execution path for applications:
   route method calls inside `tc.backend(...)` contexts are the default,
   while `tc.execute`, `tc.Host.execute`, and `tc.Host.request` remain

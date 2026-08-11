@@ -30,7 +30,7 @@ AUTODIFF_ERROR_CATEGORIES: tuple[str, ...] = (
 )
 
 
-@dataclass(frozen=True)
+@dataclass
 class AutodiffError(Exception):
     category: str
     message: str

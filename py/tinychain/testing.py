@@ -107,8 +107,8 @@ def start_rust_example(
 
     if prefer_binary:
         candidates = [
-            root / "tc-server" / "target" / "release" / "examples" / name,
-            root / "tc-server" / "target" / "debug" / "examples" / name,
+            root / "target" / "release" / "examples" / name,
+            root / "target" / "debug" / "examples" / name,
         ]
         binary = next((p for p in candidates if p.exists()), None)
         if binary is not None:

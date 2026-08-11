@@ -160,12 +160,14 @@ def test_stub_route_accepts_body_and_dispatches(monkeypatch):
 
     d = D()
     with tc.backend(mode="deferred"):
-        ref = d.hello("World")
+        with pytest.raises(TypeError, match="require keyword arguments"):
+            d.hello("World")
+        ref = d.hello(body="World")
     assert isinstance(ref, tc.String)
     assert ref.op.body == "World"
 
     with tc.backend(kernel):
-        assert d.hello("World") == "ok"
+        assert d.hello(body="World") == "ok"
     expected = tc.URI(d, "hello").path
     assert len(kernel.dispatched) == 1
     method, path, _headers, body = kernel.dispatched[0]
@@ -325,7 +327,7 @@ def test_backend_mode_deferred_preserves_cross_library_dependency_paths(monkeypa
         mode="deferred",
     ):
         local_plan = local.hello()
-        remote_plan = remote_lib.ping("World")
+        remote_plan = remote_lib.ping(name="World")
         assert isinstance(local_plan, tc.String)
         assert isinstance(remote_plan, tc.String)
 
@@ -435,7 +437,7 @@ def test_execute_without_backend_runs_authority_qualified_stub(monkeypatch):
             ...
 
     remote = Remote()
-    assert remote.ping("World") == {"remote": "ok"}
+    assert remote.ping(name="World") == {"remote": "ok"}
     assert remote_target.calls == [
         (
             "GET",

@@ -5,19 +5,16 @@ from typing import TYPE_CHECKING, Mapping, Sequence
 from .refs import IdRef, OpRef, TCRef
 
 if TYPE_CHECKING:
-    from ..context import Context
     from . import OpDef, Scalar
 
 
 def infer_reduce_item_name(
     op: "OpDef | Scalar | object",
     value: "Scalar | object",
-    *,
-    ctx: "Context | None" = None,
 ) -> str:
     from . import form_of
 
-    resolved_op = _resolve_reduce_opdef(op, ctx=ctx)
+    resolved_op = _resolve_reduce_opdef(op)
     if resolved_op is None:
         raise TypeError("reduce requires a concrete OpDef to infer item binding")
 
@@ -90,7 +87,7 @@ def _reduce_state_keys(value: "Scalar | object") -> set[str]:
     return set()
 
 
-def _resolve_reduce_opdef(op: "OpDef | Scalar | object", *, ctx: "Context | None" = None) -> "OpDef | None":
+def _resolve_reduce_opdef(op: "OpDef | Scalar | object") -> "OpDef | None":
     from . import OpDef, Scalar, form_of
 
     if isinstance(op, OpDef):
@@ -109,7 +106,9 @@ def _resolve_reduce_opdef(op: "OpDef | Scalar | object", *, ctx: "Context | None
     if not isinstance(op_ref_form, IdRef):
         return None
 
-    active_ctx = ctx
+    from ..context import current_context
+
+    active_ctx = current_context()
     if active_ctx is None:
         return None
 
@@ -120,7 +119,7 @@ def _resolve_reduce_opdef(op: "OpDef | Scalar | object", *, ctx: "Context | None
         scalar_form = form_of(scalar)
         if isinstance(scalar_form, OpDef):
             return scalar_form
-        return _resolve_reduce_opdef(scalar, ctx=active_ctx)
+        return _resolve_reduce_opdef(scalar)
 
     return None
 

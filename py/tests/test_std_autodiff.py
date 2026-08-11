@@ -94,8 +94,8 @@ def test_autodiff_operator_is_abstract_and_dualoperator_has_typed_fields():
 
 
 def test_dualoperator_accepts_tensor_operands():
-    left = tc.Tensor(ref=tc.state.id("t1"))
-    right = tc.Tensor(ref=tc.state.id("t2"))
+    left = tc.Tensor(tc.state.id("t1"))
+    right = tc.Tensor(tc.state.id("t2"))
 
     op = tc.std.DualOperator(left=left, right=right)
     assert op.left.to_json() == left.to_json()
@@ -195,8 +195,8 @@ def test_vjp_registry_decorator_type_error():
             pass
 
 
-def test_vjp_registry_manual_register_backwards_compatibility():
-    """Test that manual register() still works for backwards compatibility."""
+def test_vjp_registry_registers_rule_directly():
+    """The decorator and direct callers share the same registration primitive."""
     registry = VjpRegistry()
 
     class ManualRule:

@@ -21,9 +21,8 @@ explicitly asks for advanced control.
   default.
 - `tc.backend(..., mode="deferred")` is the single call-site switch for explicit
   planning in runtime code.
-- Canonical route invocation style is keyword arguments (or one explicit
-  `body=` payload). Positional route calls are compatibility-only and should not
-  grow new conventions.
+- Canonical route invocation uses keyword arguments or one explicit `body=`
+  payload. Positional route arguments are rejected.
 - `tc.install(...)` is the canonical install helper for Python libraries and WASM
   implementations.
 - Auth context is framework-owned and derived from validated transport/auth state,
@@ -32,6 +31,10 @@ explicitly asks for advanced control.
   implement payload/status wrappers or TinyChain state parsing.
 - Transaction lifecycle ownership stays inside the kernel/host. Client helpers may
   compose plans but never mint or manage transaction handles.
+- Symbolic state instances carry one canonical form only. `tc.state.Context` owns
+  local bindings and generated names, while `scoped_context()` is the standard graph
+  binding scope; public state and collection APIs do not accept explicit contexts
+  or alternate `ref=` constructors.
 - Advanced/internal helpers stay out of top-level `import tinychain as tc` unless
   they are part of the ordinary user path.
 - `tc.execute(...)`, `tc.Host.execute(...)`, and `tc.Host.request(...)` remain
@@ -66,7 +69,7 @@ Guardrails:
 
 ### Removed PyO3 top-level re-exports
 
-`Backend`, `KernelHandle`, `KernelRequest`, `KernelResponse`, `State`, `StateHandle`,
+`Backend`, `KernelHandle`, `KernelRequest`, `Response`, `State`, `StateHandle`,
 and `LocalTensor` are no longer re-exported from the top-level `tinychain` namespace
 in source form. They are stubs that raise `ImportError` when `tinychain-local` is
 absent. Application code must not import or reference these names directly; use the
@@ -82,10 +85,9 @@ planning and route definitions without the local backend.
 
 ### Collection module consolidation
 
-Tensor is now owned by `tinychain.collection.tensor` (and exported via
-`tinychain.collection`) instead of `tinychain.state.tensor`. This is intentional
-preparation for grouping additional collection types (`btree`, `table`) under the
-same `collection` module boundary.
+Tensor and BTree are owned by `tinychain.collection` instead of
+`tinychain.state`. This collection boundary also reserves a natural home for the
+forthcoming `Table` type.
 
 ### `tc.grad` reserved stub
 

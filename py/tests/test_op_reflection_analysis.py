@@ -158,15 +158,15 @@ def test_op_reflection_analysis(tmp_path: pathlib.Path) -> None:
             assert resp.status == 204
 
         with tc.backend(kernel):
-            depth_leaf = tc_testing.run_with_timeout(20, lambda: c.cyclomatic_depth(leaf_op))
+            depth_leaf = tc_testing.run_with_timeout(20, lambda: c.cyclomatic_depth(op=leaf_op))
             assert depth_leaf["max"] == 1
-            depth_branch = tc_testing.run_with_timeout(20, lambda: c.cyclomatic_depth(branch_op))
+            depth_branch = tc_testing.run_with_timeout(20, lambda: c.cyclomatic_depth(op=branch_op))
             assert depth_branch["max"] >= depth_leaf["max"]
-            nested = tc_testing.run_with_timeout(20, lambda: c.nested_if_count([0, 1, 0, 0]))
+            nested = tc_testing.run_with_timeout(20, lambda: c.nested_if_count(items=[0, 1, 0, 0]))
             assert nested["count"] == 3
-            tuple_loop = tc_testing.run_with_timeout(20, lambda: c.tuple_loop_supported([1, 2, 7]))
+            tuple_loop = tc_testing.run_with_timeout(20, lambda: c.tuple_loop_supported(items=[1, 2, 7]))
             assert tuple_loop == 1
-            map_loop = tc_testing.run_with_timeout(20, lambda: c.map_loop_supported({"b": 1, "a": 2}))
+            map_loop = tc_testing.run_with_timeout(20, lambda: c.map_loop_supported(items={"b": 1, "a": 2}))
             assert map_loop == "ok"
 
     tc_testing.run_with_timeout(45, _run)

@@ -32,21 +32,16 @@ def require_tinychain_local(*, require_library_definition: bool = False):
 
 
 def require_local_tensor_backend() -> tuple[object, object]:
-    _, _ = require_tinychain_local()
-
-    try:
-        dense_u64 = tc.LocalTensor.dense_u64
-        dense_f64 = tc.LocalTensor.dense_f64
-    except Exception as err:
-        pytest.fail(f"tinychain-local tensor backend is required for this test: {err}")
-
-    return dense_u64, dense_f64
+    require_tinychain_local()
+    return (
+        lambda shape, values: tc.Tensor.dense("u64", shape, values),
+        lambda shape, values: tc.Tensor.dense("f64", shape, values),
+    )
 
 
 def wasm_example_artifact(example_name: str) -> pathlib.Path:
     return (
         REPO_ROOT
-        / "tc-wasm"
         / "target"
         / "wasm32-unknown-unknown"
         / "release"

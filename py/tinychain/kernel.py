@@ -126,6 +126,7 @@ def with_library(
     library: Library,
     *,
     data_dir: pathlib.Path,
+    workspace: pathlib.Path | None = None,
     token: object | None = None,
 ) -> "object":
     """
@@ -151,4 +152,5 @@ def with_library(
         routes=routes,
         token=token,
         data_dir=str(data_dir),
+        workspace=str(workspace) if workspace is not None else None,
     )

@@ -25,7 +25,7 @@ def test_pyo3_kernel_resolves_opref_over_http_gateway(tmp_path):
         raise
     try:
         b_root = tc.URI("lib", "example-devco", "example", "0.1.0")
-        b_hello = tc.URI("lib", "example-devco", "example", "0.1.0", "example-devco", "example", "0.1.0", "hello")
+        b_hello = tc.URI(b_root, "hello")
 
         class Local(tc.Library):
             publisher = "example-devco"

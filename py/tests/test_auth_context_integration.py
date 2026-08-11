@@ -6,7 +6,7 @@ import pytest
 import tinychain as tc
 import tinychain.testing as tc_testing
 
-from .support import REPO_ROOT, ensure_wasm_example_built, require_tinychain_local
+from .support import REPO_ROOT, require_tinychain_local
 
 
 ACTOR_ID = "example-admin"
@@ -35,15 +35,14 @@ class A(tc.Library):
 
     @tc.get
     def auth_context(self) -> tc.Ref:
-        ...
+        return tc.auth.context()
 
 
-def test_framework_auth_context_available_in_local_and_wasm_routes(tmp_path: pathlib.Path):
+def test_framework_auth_context_available_in_local_and_native_routes(tmp_path: pathlib.Path):
     if not tc_testing.cargo_available():
         pytest.skip("`cargo` not found; install Rust tooling to run auth context integration")
     _, _ = require_tinychain_local(require_library_definition=True)
 
-    wasm_path = ensure_wasm_example_built("opref_to_remote")
     secret_key_b64 = tc.auth.generate_actor_secret(ACTOR_ID)
     try:
         proc, authority = tc_testing.start_rust_example(
@@ -96,7 +95,6 @@ def test_framework_auth_context_available_in_local_and_wasm_routes(tmp_path: pat
         )
         install = tc.install(
             a,
-            wasm=wasm_path,
             kernel=kernel,
             token=install_token,
         )
@@ -104,11 +102,11 @@ def test_framework_auth_context_available_in_local_and_wasm_routes(tmp_path: pat
 
         with tc.backend(kernel, token=runtime_token):
             direct_ctx = tc.execute(tc.auth.context())
-            wasm_ctx = a.auth_context()
+            native_ctx = a.auth_context()
             assert isinstance(direct_ctx, dict)
-            assert isinstance(wasm_ctx, dict)
+            assert isinstance(native_ctx, dict)
             assert direct_ctx["principal"].endswith(f"::{ACTOR_ID}")
-            assert wasm_ctx["principal"].endswith(f"::{ACTOR_ID}")
+            assert native_ctx["principal"].endswith(f"::{ACTOR_ID}")
     finally:
         proc.terminate()
         try:

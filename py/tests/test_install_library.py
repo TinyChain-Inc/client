@@ -76,4 +76,4 @@ def test_install_python_library_string_concat(tmp_path: pathlib.Path):
     assert resp.status == 204
 
     with tc.backend(kernel, token=token):
-        assert Greeter().hello("Ada") == "Hello, Ada!"
+        assert Greeter().hello(name="Ada") == "Hello, Ada!"

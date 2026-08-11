@@ -130,8 +130,8 @@ def _route_path(subject: object, route_name: str) -> str:
 
 
 def _contains_symbolic(value: object) -> bool:
-    if isinstance(value, Scalar) and getattr(value, "_ctx", None) is not None:
-        return True
+    if isinstance(value, (Scalar, Collection)):
+        return isinstance(form_of(value), TCRef)
 
     if isinstance(value, dict):
         return any(_contains_symbolic(v) for v in value.values())
@@ -154,36 +154,31 @@ def _route_arg_param_names(params: list[inspect.Parameter], *, skip_first_self: 
 
 def _route_body_from_call(route: "Route", args: tuple[object, ...], kwargs: dict[str, object]) -> object:
     body = None
-    if args and kwargs:
-        raise TypeError("TinyChain route stubs accept either args or kwargs, not both")
-
     if args:
-        if route.method == "POST":
-            sig = inspect.signature(route.form)
-            params = list(sig.parameters.values())
-            param_names = _route_arg_param_names(params, skip_first_self=True)
-            if len(args) != len(param_names):
-                raise TypeError(
-                    "TinyChain POST stubs require one positional argument per parameter"
-                )
-            body = dict(zip(param_names, args, strict=True))
-        else:
-            if len(args) != 1:
-                raise TypeError("TinyChain route stubs accept at most one positional argument")
-            body = args[0]
-    elif kwargs:
-        if route.method == "POST" and not (len(kwargs) == 1 and "body" in kwargs):
+        raise TypeError("TinyChain route stubs require keyword arguments or one explicit body=")
+
+    if kwargs:
+        if len(kwargs) == 1 and "body" in kwargs:
+            body = kwargs["body"]
+        elif route.method == "POST":
             body = kwargs
         else:
-            if len(kwargs) != 1 or "body" not in kwargs:
-                raise TypeError("TinyChain route stubs accept only the keyword argument `body`")
-            body = kwargs["body"]
+            params = list(inspect.signature(route.form).parameters.values())
+            param_names = _route_arg_param_names(params, skip_first_self=True)
+            if len(param_names) != 1 or set(kwargs) != set(param_names):
+                raise TypeError(
+                    f"TinyChain {route.method} stubs require the keyword argument "
+                    f"`{param_names[0]}` or `body`"
+                    if len(param_names) == 1
+                    else f"TinyChain {route.method} stubs require one explicit `body`"
+                )
+            body = kwargs[param_names[0]]
 
     return body
 
 
 def _execute_route_result_if_needed(result: object, body: object) -> object:
-    if getattr(result, "_ctx", None) is not None:
+    if _contains_symbolic(result):
         return result
 
     if _contains_symbolic(body):
@@ -461,7 +456,6 @@ def _compile_opdef_callable(form: Callable[..., Any], *, method: str) -> OpDef:
                 raise TypeError(f"reserved parameter '{param.name}' is not supported in opdef callables")
             annotation = hints.get(param.name, param.annotation)
             placeholder = scalar_for_hint(param.name, _runtime_type_hint(annotation, default=Value))
-            placeholder._ctx = cxt
             arg_names.append(param.name)
             if param.kind == param.KEYWORD_ONLY:
                 kwargs[param.name] = placeholder
@@ -720,14 +714,11 @@ def _compile_opdef_route(
                 continue
             annotation = hints.get(param.name, param.annotation)
             placeholder = scalar_for_hint(param.name, _runtime_type_hint(annotation, default=Value))
-            placeholder._ctx = cxt
             if param.kind == param.KEYWORD_ONLY:
                 kwargs[param.name] = placeholder
             else:
                 args.append(placeholder)
         result = form(library, *args, **kwargs)
-        if uses_autograph and isinstance(result, ContextResult) and cxt.form():
-            result = ContextResult(list(cxt.form()) + list(result.form), result.result)
         if cxt.form() and not isinstance(result, ContextResult):
             result = cxt.result(result)
 
@@ -830,7 +821,7 @@ def _inline_opref_refs(opdef: OpDef) -> OpDef:
                 target = form_map.get(target_id.name)
                 target_form = form_of(target) if target is not None else None
                 if isinstance(target_form, TCRef) and isinstance(form_of(target_form), StateOpRef):
-                    return Scalar(ref=TCRef(form_of(target_form)))
+                    return Scalar._from_opref(TCRef(form_of(target_form)))
 
         if isinstance(scalar_form, OpDef):
             return Scalar(_inline_opref_refs(scalar_form))

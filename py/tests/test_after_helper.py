@@ -11,9 +11,13 @@ def test_after_preserves_wrapped_type() -> None:
         result = tc.state.after(dep, value)
 
         assert isinstance(result, tc.state.Scalar)
-        form = list(cxt.form())
-        assert len(form) == 1
-        assert form[0][0].startswith("_after")
+        assert result.to_json() == {
+            "/state/scalar/ref/after": [
+                dep.to_json(),
+                {"$right/render": {"x": 1}},
+            ]
+        }
+        assert list(cxt.form()) == []
 
 
 def test_state_after_returns_scalar_and_binds_dependency() -> None:
@@ -24,6 +28,10 @@ def test_state_after_returns_scalar_and_binds_dependency() -> None:
         result = tc.state.after(dep, then)
 
         assert isinstance(result, tc.state.Scalar)
-        form = list(cxt.form())
-        assert len(form) == 1
-        assert form[0][0].startswith("_after")
+        assert result.to_json() == {
+            "/state/scalar/ref/after": [
+                dep.to_json(),
+                then.to_json(),
+            ]
+        }
+        assert list(cxt.form()) == []

@@ -1,5 +1,7 @@
+from .btree import BTree
 from .tensor import (
     Tensor,
+    DenseTensor,
     TensorBackend,
     TensorStorageLayout,
     TensorStorageSchema,
@@ -15,7 +17,9 @@ from .tensor import (
 )
 
 __all__ = [
+    "BTree",
     "Tensor",
+    "DenseTensor",
     "TensorBackend",
     "TensorStorageLayout",
     "TensorStorageSchema",

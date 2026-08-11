@@ -55,10 +55,9 @@ def _encode_json_body(value: Any) -> "object":
     from . import _local
 
     payload = json.dumps(_encode_payload(value), separators=(",", ":")).encode("utf-8")
-    try:
+    if _local.is_available():
         return _local.state_handle(payload)
-    except ImportError:
-        return payload
+    return payload
 
 
 def _encode_payload(value: Any) -> Any:
@@ -220,10 +219,8 @@ def _encode_body(body: Any) -> "object":
     if isinstance(body, (bytes, bytearray)):
         from . import _local
 
-        try:
+        if _local.is_available():
             return _local.state_handle(bytes(body))
-        except ImportError:
-            pass
 
     return _encode_json_body(body)
 
@@ -238,12 +235,10 @@ def _kernel_dispatch(kernel: object, method: str, path: str, headers, body) -> o
 def _default_local_kernel() -> object | None:
     from . import _local
 
-    try:
+    if _local.is_available():
         local_ctor = getattr(_local.kernel_handle(), "local", None)
         if callable(local_ctor):
             return local_ctor()
-    except ImportError:
-        return None
 
     return None
 

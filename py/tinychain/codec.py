@@ -20,44 +20,26 @@ def _decode_tensor(payload: object) -> object:
         return payload
     decoded_values = [decode_payload(value) for value in values] if isinstance(values, list) else values
 
-    from . import _local
     from .collection.tensor import Tensor
 
-    try:
-        local = _local.backend()
-        native_tensor = getattr(local, "Tensor", None)
-    except ImportError:
-        native_tensor = None
-        tensor_type = None
-    else:
-        tensor_type = Tensor
-
-    if native_tensor is not None and tensor_type is not None:
-        try:
-            if dtype == str(URI(Number, "float", "32")):
-                return tensor_type(native=native_tensor.dense_f32(shape, [float(value) for value in decoded_values]))
-            if dtype == str(URI(Number, "float", "64")):
-                return tensor_type(native=native_tensor.dense_f64(shape, [float(value) for value in decoded_values]))
-            if dtype == str(URI(Number, "uint", "64")):
-                return tensor_type(native=native_tensor.dense_u64(shape, [int(value) for value in decoded_values]))
-        except (AttributeError, TypeError, ValueError):
-            pass
-
-    if dtype in (
-        str(URI(Number, "float", "32")),
-        str(URI(Number, "float", "64")),
-        str(URI(Number, "uint", "64")),
-    ):
-        raise TypeError(f"cannot decode tensor dtype {dtype} into local Tensor backend")
+    if dtype == str(URI(Number, "float", "32")):
+        return Tensor.dense("f32", shape, [float(value) for value in decoded_values])
+    if dtype == str(URI(Number, "float", "64")):
+        return Tensor.dense("f64", shape, [float(value) for value in decoded_values])
+    if dtype == str(URI(Number, "uint", "64")):
+        return Tensor.dense("u64", shape, [int(value) for value in decoded_values])
 
     raise TypeError(f"unsupported tensor dtype {dtype}")
 
 
 def _decode_collections(payload: object) -> object:
+    from .collection.btree import BTree
     from .collection.tensor import Tensor
 
     if isinstance(payload, dict) and len(payload) == 1:
         (key, value), = payload.items()
+        if key == str(URI(BTree)):
+            return BTree.from_json(payload)
         if key == str(URI(Tensor)):
             return _decode_tensor(value)
     if isinstance(payload, dict):

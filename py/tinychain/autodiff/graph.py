@@ -304,10 +304,10 @@ class TensorGraphBuilder:
 
         # Importing state/tensor at module scope would initialize Tensor, whose
         # recorder imports this module for concrete operator identities.
-        from ..state.scalar import IdRef, TCRef
+        from ..state.scalar import IdRef
         from ..collection.tensor import Tensor
 
-        value = Tensor(ref=TCRef(IdRef(name)))
+        value = Tensor(IdRef(name))
         value_id = self.register_value(value)
         self._set_value_metadata(value_id, dtype=dtype, shape=normalized_shape)
         self._input_value_ids.append(value_id)
