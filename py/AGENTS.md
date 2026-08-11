@@ -119,6 +119,15 @@ staying thin and well-documented for new users.
   sequences as lazy terminal iterators. Do not duplicate that traversal across
   response wrappers, type-specific collection helpers, or JSON re-encoding
   paths; collection leaves remain owned by their collection modules.
+- Collection wrappers share one structural literal/ref contract through
+  `state.collection.Collection`. Concrete collection types normalize only their
+  own payload shape and expose their native routes; do not add a central decoder
+  which names every concrete collection or duplicate `from_json`/`to_json`
+  traversal in BTree, Table, Tensor, or future collection wrappers.
+- Python schema helpers validate authoring and canonical wire shape only.
+  Runtime uniqueness, arity, index, dtype, and mutation semantics belong to the
+  native collection owner; do not maintain a second semantic validator in the
+  client.
 - Preserve concrete method type information for symbolic operation forms.
   Do not erase `Get/Put/Post/Delete` operation refs/defs behind parent-class
   method strings or generic `args` shape checks when constructing, validating,

@@ -1,4 +1,5 @@
 from .btree import BTree
+from .table import Table
 from .tensor import (
     Tensor,
     DenseTensor,
@@ -18,6 +19,7 @@ from .tensor import (
 
 __all__ = [
     "BTree",
+    "Table",
     "Tensor",
     "DenseTensor",
     "TensorBackend",

@@ -47,6 +47,7 @@ _RESERVED_NAMES = {
 }
 
 _ALLOWED_GLOBALS = {
+    "slice",
     "tc",
 }
 

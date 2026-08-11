@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ..state.collection import Collection
-from ..state.scalar import Bool, Number, Scalar, TCRef, Tuple, autobox, form_of
+from ..state.scalar import Bool, Number, Scalar, Tuple, autobox
 from ..uri import URI
 
 
@@ -13,21 +13,10 @@ def _normalize_schema(schema: object) -> list[list[object]]:
     for column in schema:
         if not isinstance(column, (list, tuple)):
             raise TypeError("BTree schema columns must be tuple/list entries")
-
         if len(column) not in (2, 3):
             raise TypeError("BTree schema column entries must have 2 or 3 elements")
 
-        name = column[0]
-        dtype = column[1]
-        if not isinstance(name, str):
-            raise TypeError("BTree schema column name must be a string")
-        if not isinstance(dtype, str):
-            raise TypeError("BTree schema column dtype must be a string URI")
-
-        if len(column) == 3:
-            normalized.append([name, dtype, column[2]])
-        else:
-            normalized.append([name, dtype])
+        normalized.append(list(column))
 
     return normalized
 
@@ -58,55 +47,10 @@ class BTree(Collection):
         super().__init__(form)
 
     @classmethod
-    def from_json(cls, form: object) -> "BTree":
-        if not isinstance(form, dict):
-            raise TypeError("BTree.from_json expects a map-shaped BTree payload")
-
-        btree_path = str(URI(cls))
-        if btree_path in form:
-            payload = form[btree_path]
-            # A route result is represented as a one-item State tuple before it
-            # reaches the typed Python return wrapper.
-            if isinstance(payload, list) and len(payload) == 1:
-                payload = payload[0]
-            if not isinstance(payload, list):
-                raise TypeError("BTree payload must be a list")
-
-            if len(payload) != 2:
-                raise TypeError("BTree payload must be [schema, rows]")
-
-            schema = _normalize_schema(payload[0])
-            rows = _normalize_rows(payload[1])
-            return cls({btree_path: [schema, rows]})
-
-        # Symbolic BTree refs/oprefs are map-shaped TCRef forms.
-        if len(form) == 1:
-            return cls(form=form_of(Scalar.from_json(form)))
-
-        raise TypeError("BTree.from_json expects {uri: [keys]} or a symbolic ref map")
-
-    def to_json(self) -> object:
-        form = self._form
-        if isinstance(form, TCRef):
-            return Scalar(form).to_json()
-
-        if isinstance(form, dict):
-            btree_path = str(URI(BTree))
-            if btree_path in form:
-                payload = form[btree_path]
-                if not isinstance(payload, list):
-                    raise TypeError("BTree payload must be a list")
-
-                if len(payload) != 2:
-                    raise TypeError("BTree payload must be [schema, rows]")
-
-                schema = _normalize_schema(payload[0])
-                rows = _normalize_rows(payload[1])
-                return {btree_path: [schema, rows]}
-
-            return Scalar(form).to_json()
-
-        return Scalar(form).to_json()
+    def _normalize_payload(cls, payload: object) -> object:
+        if not isinstance(payload, list) or len(payload) != 2:
+            raise TypeError("BTree payload must be [schema, rows]")
+        return [_normalize_schema(payload[0]), _normalize_rows(payload[1])]
 
     def contains(self, row: object) -> Bool:
         return self._get("contains", autobox(row), rtype=Bool)
