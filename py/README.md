@@ -90,7 +90,7 @@ execution control for local + remote calls in the same flow.
 client. It is not a scalar-only type and must not impose scalar semantics.
 
 - `Scalar` is one `State` subclass for scalar IR forms.
-- `Collection` (including `Tensor` and upcoming `BTree`/`Table`) is another
+- `Collection` (including `Tensor`, `BTree`, and upcoming `Table`) is another
   `State` branch for collection IR forms.
 - Control-flow and op references (`TCRef`, `OpRef`, `Cond`, `While`,
   `ForEach`, etc.) are symbolic references that compile into the same TinyChain
@@ -100,13 +100,16 @@ Equality semantics:
 - `State` does not define Python boolean equality semantics.
 - Symbolic equality is expressed through TinyChain ops (`eq`/`ne`) and resolves
   at runtime.
-- Tests/tools that need structural checks should compare canonical forms/JSON
-  (`form_of(...)`, `to_json()`), not Python `==` on symbolic states.
+- Tests/tools that need structural checks should inspect canonical forms with
+  `form_of(...)`, not Python `==` and not a `to_json()` round trip.
 
 Serialization semantics:
 - `State.to_json()` serializes the canonical underlying form directly.
 - It does not coerce through `Scalar(...)`; collections and other non-scalar
   state types remain in their own branch.
+- Call `to_json()` only for an actual transport/export boundary or a test of the
+  wire contract. Do not use serialization for comparison, hashing, cloning,
+  validation, reference construction, or local delegation.
 
 Network semantics:
 - A given application describes one distributed transactional state machine.
@@ -142,8 +145,8 @@ When you need to pass one explicit payload object, use `body=`:
 result = library.route(body={"name": "Ada"})
 ```
 
-Avoid introducing new route-call conventions. Positional argument forms are
-supported for compatibility but are not the recommended authoring style.
+Route parameters are keyword-only. Positional arguments are rejected so every
+route has one unambiguous call shape.
 
 ## 60-second Greeter demo shape
 
@@ -828,7 +831,7 @@ PYTHONPATH=client/py .venv/bin/python -m pytest client/py/tests/test_wasm_helper
 
 ## How WASM libraries surface through PyO3
 
-`tinychain-local` exposes the same kernel that powers the HTTP runtime. When you
+`tinychain-local` exposes the same native kernel implementation that powers the HTTP runtime. When you
 install the optional backend and pass `data_dir=...` to `tc.kernel.with_library`,
 the PyO3 layer hydrates per-library storage and registers every WASM library
 found under `<data-dir>/lib/<id>/<version>`.
@@ -836,13 +839,16 @@ That means:
 
 1. Install the library once with `tc.install(...)`.
 2. Point both the HTTP server and PyO3 kernel at the same `data_dir`.
+   Pass the separate `workspace=...` only when they should also share persistent
+   BTree/Table state; transaction-local collection storage belongs there, never
+   under `data_dir`.
 3. Invoke routes from Python through `tc.backend(...)` and library route
    methods. Low-level HTTP clients are useful for adapter diagnostics, but
    application packages should not hand-build request payloads.
 
-There is no PyO3-specific registration step; the shared txfs layout is the single
-source of truth for both adapters. If a route resolves via HTTP, it will resolve
-in PyO3 as soon as the kernel loads the same directory tree.
+There is no PyO3-specific registration step; the host-owned data cache is the
+single Library/artifact source of truth. If a route resolves via HTTP, it will
+resolve in PyO3 as soon as its local kernel loads the same `data_dir`.
 
 ## Tensor response decoding without `tinychain-local`
 

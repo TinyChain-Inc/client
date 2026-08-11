@@ -1,6 +1,11 @@
 # TinyChain UX Agent Notes
 
 - The UX kit **must not invent new protocol layers**. All data access flows through the published TinyChain JS client (Node.js) or WASM bundle; do not embed bespoke REST clients or bypass capability tokens.
+- UI state, hooks, and components consume canonical client values or lazy
+  iterators. They must not JSON-round-trip TinyChain values for cloning,
+  comparison, caching, normalization, or handoff between colocated components.
+  Only the TinyChain transport or an explicit browser/WASM boundary may encode
+  them.
 - Keep environment configuration centralized: `.env` files for server/browser, secure secret handling for API tokens, and optional manifest-driven config for staging/prod switching.
 - Ensure React (web) and React Native share as much code as possible via monorepo packages; avoid large platform-specific forks unless necessary.
 - Testing:
