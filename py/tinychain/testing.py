@@ -84,8 +84,8 @@ def start_rust_example(
             while True:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    stderr = proc.stderr.read() if proc.stderr is not None else ""
                     proc.kill()
+                    _, stderr = proc.communicate()
                     raise RuntimeError(
                         f"example {name} did not print a bound address within "
                         f"{startup_timeout_secs:.1f}s (stderr):\n{stderr}"

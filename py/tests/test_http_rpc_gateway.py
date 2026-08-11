@@ -17,7 +17,6 @@ def test_pyo3_kernel_resolves_opref_over_http_gateway(tmp_path):
         proc, addr = tc_testing.start_rust_example(
             "http_rpc_native_host",
             args=("--bind=127.0.0.1:0",),
-            prefer_binary=False,
         )
     except RuntimeError as err:
         if "Operation not permitted" in str(err):
