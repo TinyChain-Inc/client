@@ -128,7 +128,7 @@ def test_scalar_walk_and_opdef_roundtrip():
     op = tc.state.PostOpDef([("x", 3)])
     encoded = op.to_json()
     decoded = tc.state.OpDef.from_json(encoded)
-    assert decoded == op
+    assert decoded.to_json() == encoded
 
     scalar_op = tc.state.Scalar.from_json(encoded)
     scalar_op_form = tc.state.form_of(scalar_op)
@@ -152,7 +152,7 @@ def scalar_op_walk(root: tc.state.Scalar):
 
 
 def test_scalar_tcref_id_roundtrip():
-    scalar = tc.state.Scalar(ref=tc.state.TCRef.from_json({"$foo": []}))
+    scalar = tc.state.Scalar(tc.state.TCRef.from_json({"$foo": []}))
     encoded = scalar.to_json()
     assert encoded == {"$foo": []}
 
@@ -231,8 +231,6 @@ def test_number_deferred_arithmetic_builds_oprefs():
         deferred_ref_form = tc.state.form_of(deferred_form)
         assert isinstance(deferred_ref_form, tc.state.OpRef)
         deferred = tc.Number(deferred_ref_form)
-        deferred._ctx = cxt
-
         add = deferred + 2
         sub = deferred - 2
         mul = deferred * 2
@@ -258,6 +256,11 @@ def test_number_deferred_arithmetic_builds_oprefs():
         assert div.op.args == {"r": 2}
 
 
+def test_state_rejects_context_instance_state() -> None:
+    with pytest.raises(AttributeError, match="Context"):
+        tc.state.Scalar()._ctx = tc.state.Context()
+
+
 def test_reduce_infers_item_binding_name_from_reducer_inputs():
     op = tc.state.PostOpDef([
         ("x2", tc.state.id("x") + tc.state.id("x")),
@@ -266,7 +269,7 @@ def test_reduce_infers_item_binding_name_from_reducer_inputs():
 
     with tc.state.scoped_context() as cxt:
         items = tc.state.autobox([1])
-        cxt.bind(items, "items")
+        cxt.bind("items", items)
         reduced = items.reduce(op=op, value={})
     payload = reduced.to_json()
     (subject, params), = payload.items()
@@ -284,7 +287,7 @@ def test_reduce_rejects_ambiguous_item_binding():
 
     with tc.state.scoped_context() as cxt:
         items = tc.state.autobox([1])
-        cxt.bind(items, "items")
+        cxt.bind("items", items)
 
         with pytest.raises(TypeError, match="ambiguous"):
             items.reduce(op=op, value={})

@@ -480,7 +480,7 @@ class C128(Complex):
     __uri__: URI = URI(Complex, "128")
 
 
-# Backward-compatible alias: bool literals are represented as Number values.
+# Bool literals use the canonical Number representation.
 Bool = Number
 
 

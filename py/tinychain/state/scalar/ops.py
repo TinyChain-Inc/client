@@ -43,7 +43,7 @@ class Get(Op):
         if not isinstance(key, Value):
             raise TypeError("Get expects key to be a Value")
 
-        return Scalar(ref=GetOpRef(self.subject, key))
+        return Scalar._from_opref(GetOpRef(self.subject, key))
 
 
 class Put(Op):
@@ -67,7 +67,7 @@ class Put(Op):
         if not isinstance(value, Scalar):
             raise TypeError("Put expects value to be State (Scalar or Value)")
 
-        return Scalar(ref=PutOpRef(self.subject, key, value))
+        return Scalar._from_opref(PutOpRef(self.subject, key, value))
 
 
 class Post(Op):
@@ -97,7 +97,7 @@ class Post(Op):
                 raise TypeError("Post expects params to be a map of State values")
             typed_params[key] = value
 
-        return Scalar(ref=PostOpRef(self.subject, typed_params))
+        return Scalar._from_opref(PostOpRef(self.subject, typed_params))
 
 
 class Delete(Op):
@@ -122,4 +122,4 @@ class Delete(Op):
         if not isinstance(key, Value):
             raise TypeError("Delete expects key to be a Value")
 
-        return Scalar(ref=DeleteOpRef(self.subject, key))
+        return Scalar._from_opref(DeleteOpRef(self.subject, key))

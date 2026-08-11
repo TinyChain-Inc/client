@@ -33,17 +33,17 @@ class TCRef(Scalar):
 
     def __init__(self, form: "TCRef | Scalar"):
         if form is self:
-            Scalar.__init__(self, ref=self)
+            Scalar.__init__(self, self)
             return
 
         if isinstance(form, TCRef):
-            super().__init__(ref=form._form, ctx=form._ctx)
+            super().__init__(form._form)
             return
 
         if not isinstance(form, Scalar):
             raise TypeError("TCRef form must be TCRef or Scalar")
 
-        super().__init__(form, ctx=form._ctx)
+        super().__init__(form)
 
     def __eq__(self, other: object) -> bool:
         return isinstance(other, TCRef) and self._form == other._form
@@ -83,6 +83,12 @@ class TCRef(Scalar):
                 Scalar.from_json(raw_then),
                 Scalar.from_json(raw_or_else),
             )
+
+        if key == str(URI(TCRef, "after")):
+            if not isinstance(value, list) or len(value) != 2:
+                raise TypeError("invalid After ref encoding")
+            when, then = value
+            return After(Scalar.from_json(when), Scalar.from_json(then))
 
         if key == str(URI(TCRef, "while")):
             if not isinstance(value, list) or len(value) != 3:
@@ -137,11 +143,8 @@ class OpRef(TCRef):
     def args(self) -> object:
         raise NotImplementedError()
 
-    def __eq__(self, other: object) -> bool:
-        return type(self) is type(other) and self.subject == other.subject and self.args == other.args
-
-    def __hash__(self) -> int:
-        return hash((type(self), repr(self.to_json())))
+    __eq__ = object.__eq__
+    __hash__ = object.__hash__
 
     def to_json(self) -> dict[str, object]:
         raise NotImplementedError()
@@ -334,13 +337,33 @@ class ControlRef(TCRef):
         super().__init__(self)
 
 
+class After(ControlRef):
+    def __init__(self, when: "Scalar", then: "Scalar"):
+        super().__init__()
+        self.when = when
+        self.then = then
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, After) and self.when == other.when and self.then == other.then
+
+    def __hash__(self) -> int:
+        return hash((self.when, self.then))
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            str(URI(TCRef, "after")): [
+                self.when.to_json(),
+                self.then.to_json(),
+            ]
+        }
+
+
 class While(ControlRef):
     def __init__(self, cond: "Scalar", op: "Scalar", state: "Scalar"):
         super().__init__()
         self.cond = cond
         self.op = op
         self.state = state
-        self._ctx = None
 
     def __eq__(self, other: object) -> bool:
         return (
@@ -369,7 +392,6 @@ class Cond(ControlRef):
         self.cond = cond
         self.then = then
         self.or_else = or_else
-        self._ctx = None
 
     def __eq__(self, other: object) -> bool:
         return (
@@ -398,7 +420,6 @@ class ForEach(ControlRef):
         self.items = items
         self.op = op
         self.item_name = item_name
-        self._ctx = None
 
     def __eq__(self, other: object) -> bool:
         return (

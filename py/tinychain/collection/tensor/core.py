@@ -19,7 +19,7 @@ from ...state.value import Number as ValueNumber
 from ...autodiff.tracing import record_operation
 from ._common import infer_broadcast_axes, normalize_permutation, normalize_shape, params, reduce_args
 from ._wire import encode_view_schema
-from .backend import TensorBackend, TensorWireTensorBackend
+from .backend import DenseTensor, TensorBackend, TensorWireTensorBackend
 from .routes import TENSOR_CLASS_URI, tensor_route
 from .schema import TensorStorageLayout, TensorStorageSchema, TensorViewSchema
 from .view_ops import BroadcastViewOp, ReshapeViewOp, SliceViewOp, TensorViewOp, TransposeViewOp
@@ -41,19 +41,27 @@ class Tensor(Comparable):
 
     __uri__: URI = TENSOR_CLASS_URI
 
+    @classmethod
+    def dense(
+        cls,
+        dtype: str,
+        shape: list[int] | tuple[int, ...],
+        values: list[int | float] | tuple[int | float, ...],
+    ) -> "Tensor":
+        return cls(native=DenseTensor.new(dtype, shape, values))
+
     def __init__(
         self,
         form: object = None,
         *,
-        ref=None,
         native: object = None,
         view_ops: tuple[TensorViewOp, ...] = (),
         subject_root: str | None = None,
         view_ops_materialized: bool | None = None,
     ):
-        if native is not None and (form is not None or ref is not None):
-            raise TypeError("Tensor accepts either native data or symbolic form/ref")
-        super().__init__(form, ref=ref)
+        if native is not None and form is not None:
+            raise TypeError("Tensor accepts either native data or symbolic form")
+        super().__init__(form)
         self._native = native
         self._view_ops = view_ops
         if view_ops_materialized is not None:
@@ -63,8 +71,8 @@ class Tensor(Comparable):
 
         if subject_root is not None:
             self._subject_root = subject_root
-        elif ref is not None:
-            ref_form = tcref_form_of(ref)
+        elif form is not None:
+            ref_form = tcref_form_of(form)
             self._subject_root = ref_form.key() if isinstance(ref_form, IdRef) else None
         else:
             self._subject_root = None
@@ -147,19 +155,13 @@ class Tensor(Comparable):
             }.get(method)
 
             if op is not None:
-                try:
-                    return self._native.apply_view_op(op)
-                except NotImplementedError:
-                    pass
+                return self._native.apply_view_op(op)
 
         native_method = getattr(self._native, method, None)
         if native_method is None or not callable(native_method):
             return None
 
-        try:
-            return native_method(*args)
-        except NotImplementedError:
-            return None
+        return native_method(*args)
 
     def _native_attr(self, name: str) -> object | None:
         if self._native is None:
@@ -197,6 +199,8 @@ class Tensor(Comparable):
     def shape(self) -> object:
         shape = self._native_attr("shape")
         if shape is not None:
+            if isinstance(self._native, DenseTensor):
+                return list(shape)
             return shape
         return self._post("shape", rtype=Tuple)
 
@@ -315,8 +319,8 @@ class Tensor(Comparable):
         return result
 
     def materialize_view_spec(self) -> "Tensor":
-        """Apply the current view spec through the active backend if supported."""
-        if self._native is None or not isinstance(self._native, TensorBackend):
+        """Apply the current view spec through the canonical backend wire hook."""
+        if self._native is None or not isinstance(self._native, TensorWireTensorBackend):
             return self
 
         if self._view_ops_materialized:
@@ -326,25 +330,11 @@ class Tensor(Comparable):
         if not spec.ops:
             return self
 
-        if isinstance(self._native, TensorWireTensorBackend):
-            try:
-                base_shape = self._native_attr("shape")
-                if base_shape is not None:
-                    wire = encode_view_schema(spec.to_view_schema(base_shape=base_shape))
-                    native = self._native.apply_view_wire(wire)
-                    return Tensor(
-                        native=native,
-                        view_ops=self._view_ops,
-                        subject_root=self._subject_root,
-                        view_ops_materialized=True,
-                    )
-            except NotImplementedError:
-                pass
-
-        try:
-            native = self._native.apply_view_spec(spec)
-        except NotImplementedError:
+        base_shape = self._native_attr("shape")
+        if base_shape is None:
             return self
+        wire = encode_view_schema(spec.to_view_schema(base_shape=base_shape))
+        native = self._native.apply_view_wire(wire)
 
         return Tensor(
             native=native,
@@ -434,6 +424,8 @@ class Tensor(Comparable):
         native = self._native_attr("values")
         if native is None:
             raise AttributeError("symbolic Tensor has no materialized values")
+        if isinstance(self._native, DenseTensor):
+            return list(native)
         return native
 
     def to_json(self) -> object:

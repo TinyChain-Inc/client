@@ -58,14 +58,14 @@ def test_tensor_slice_executes_via_local_python_client(tmp_path: pathlib.Path):
     assert install.status == 204
 
     with tc.backend(kernel):
-        tensor = tc.Tensor(native=dense_u64([5], [10, 20, 30, 40, 50]))
+        tensor = dense_u64([5], [10, 20, 30, 40, 50])
 
-        sliced = tc_testing.run_with_timeout(TIMEOUT_SECONDS, lambda: library.slice_tensor(tensor))
+        sliced = tc_testing.run_with_timeout(TIMEOUT_SECONDS, lambda: library.slice_tensor(x=tensor))
         assert isinstance(sliced, tc.Tensor)
         assert sliced.shape == [3]
         assert sliced.values == [20, 30, 40]
 
-        total = tc_testing.run_with_timeout(TIMEOUT_SECONDS, lambda: library.slice_sum(tensor))
+        total = tc_testing.run_with_timeout(TIMEOUT_SECONDS, lambda: library.slice_sum(x=tensor))
         assert total == 90
 
 
@@ -79,41 +79,36 @@ def test_tensor_ops_execute_via_local_python_client(tmp_path: pathlib.Path):
     assert install.status == 204
 
     with tc.backend(kernel):
-        cast_source = tc.Tensor(native=dense_f64([3], [1.0, 2.0, 3.0]))
-        casted = tc_testing.run_with_timeout(TIMEOUT_SECONDS, lambda: library.cast_u64(cast_source))
+        cast_source = dense_f64([3], [1.0, 2.0, 3.0])
+        casted = tc_testing.run_with_timeout(TIMEOUT_SECONDS, lambda: library.cast_u64(x=cast_source))
         assert isinstance(casted, tc.Tensor)
         assert casted.dtype == "u64"
         assert casted.values == [1, 2, 3]
 
-        reduce_source = tc.Tensor(native=dense_f64([2, 2], [1.0, 2.0, 3.0, 4.0]))
-        reduced = tc_testing.run_with_timeout(TIMEOUT_SECONDS, lambda: library.sum_axis_keepdims(reduce_source))
+        reduce_source = dense_f64([2, 2], [1.0, 2.0, 3.0, 4.0])
+        reduced = tc_testing.run_with_timeout(TIMEOUT_SECONDS, lambda: library.sum_axis_keepdims(x=reduce_source))
         assert isinstance(reduced, tc.Tensor)
         assert reduced.shape == [2, 1]
         assert reduced.values == [3.0, 7.0]
 
-        transpose_source = tc.Tensor(native=dense_f64([2, 3, 2], [float(v) for v in range(12)]))
-        transposed = tc_testing.run_with_timeout(TIMEOUT_SECONDS, lambda: library.transpose_3d(transpose_source))
+        transpose_source = dense_f64([2, 3, 2], [float(v) for v in range(12)])
+        transposed = tc_testing.run_with_timeout(TIMEOUT_SECONDS, lambda: library.transpose_3d(x=transpose_source))
         assert isinstance(transposed, tc.Tensor)
         assert transposed.shape == [2, 2, 3]
         assert transposed.values == [0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 1.0, 3.0, 5.0, 7.0, 9.0, 11.0]
 
-        u64_transpose_source = tc.Tensor(native=dense_u64([2, 3, 2], list(range(12))))
-        try:
-            u64_transposed = tc_testing.run_with_timeout(
-                TIMEOUT_SECONDS,
-                lambda: library.transpose_3d(u64_transpose_source),
-            )
-        except AssertionError as err:
-            if "DtypeNotSupported" in str(err):
-                pytest.skip("local backend transpose does not support u64 tensors")
-            raise
+        u64_transpose_source = dense_u64([2, 3, 2], list(range(12)))
+        u64_transposed = tc_testing.run_with_timeout(
+            TIMEOUT_SECONDS,
+            lambda: library.transpose_3d(x=u64_transpose_source),
+        )
         assert isinstance(u64_transposed, tc.Tensor)
         assert u64_transposed.shape == [2, 2, 3]
         assert u64_transposed.values == [0, 2, 4, 6, 8, 10, 1, 3, 5, 7, 9, 11]
 
-        left = tc.Tensor(native=dense_f64([2, 1], [1.0, 2.0]))
-        right = tc.Tensor(native=dense_f64([1, 3], [10.0, 20.0, 30.0]))
-        broadcast_sum = tc_testing.run_with_timeout(TIMEOUT_SECONDS, lambda: library.add_broadcast(left, right))
+        left = dense_f64([2, 1], [1.0, 2.0])
+        right = dense_f64([1, 3], [10.0, 20.0, 30.0])
+        broadcast_sum = tc_testing.run_with_timeout(TIMEOUT_SECONDS, lambda: library.add_broadcast(x=left, y=right))
         assert isinstance(broadcast_sum, tc.Tensor)
         assert broadcast_sum.shape == [2, 3]
         assert broadcast_sum.values == [11.0, 21.0, 31.0, 12.0, 22.0, 32.0]

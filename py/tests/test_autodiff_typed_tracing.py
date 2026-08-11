@@ -39,7 +39,7 @@ def _json(value: object) -> object:
 
 
 def _symbolic_tensor(name: str) -> tc.Tensor:
-    return tc.Tensor(ref=tc.state.TCRef(tc.state.IdRef(name)))
+    return tc.Tensor(tc.state.TCRef(tc.state.IdRef(name)))
 
 
 def _assert_category(category: str, operation) -> None:
@@ -357,7 +357,7 @@ def test_build_outputs_deduplicates_in_first_occurrence_order() -> None:
     assert graph.outputs == [trace.value_id(a), trace.value_id(b), trace.value_id(c)]
 
 
-def test_build_rejects_empty_explicit_outputs_without_changing_legacy_build() -> None:
+def test_build_rejects_empty_explicit_outputs_and_infers_the_default_output() -> None:
     with TensorGraphBuilder() as trace:
         value = trace.input("value", dtype="f32", shape=(2, 2))
         output = value * value

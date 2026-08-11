@@ -4,12 +4,13 @@ import contextvars
 from dataclasses import dataclass
 from typing import Iterable
 
-from .scalar import IdRef, Scalar, autobox
+from .base import State
+from .scalar import IdRef, autobox
 
 
 @dataclass(frozen=True, slots=True)
 class ContextResult:
-    form: list[tuple[str, Scalar]]
+    form: list[tuple[str, State]]
     result: object
 
 
@@ -19,9 +20,12 @@ class Context:
         object.__setattr__(self, "_names", set())
         object.__setattr__(self, "_bound", {})
         object.__setattr__(self, "_values", {})
+        object.__setattr__(self, "_by_identity", {})
         object.__setattr__(self, "_counter", 0)
 
-    def bind(self, value: object, name: str) -> Scalar:
+    def bind(self, name: str, value: object) -> State:
+        if not isinstance(name, str):
+            raise TypeError("Context binding names must be strings")
         original = name
         if name in self._names:
             while True:
@@ -32,49 +36,42 @@ class Context:
                     break
         self._names.add(name)
         boxed = autobox(value)
-        if isinstance(boxed, Scalar):
-            object.__setattr__(boxed, "_ctx", self)
         self._form.append((name, boxed))
 
-        cls = type(boxed) if isinstance(boxed, Scalar) else Scalar
-        try:
-            bound = cls(ref=IdRef(name), ctx=self)
-        except TypeError:
-            try:
-                bound = cls(ref=IdRef(name))
-                if isinstance(bound, Scalar):
-                    object.__setattr__(bound, "_ctx", self)
-            except TypeError:
-                # Fall back to an untyped scalar if a subclass constructor diverges.
-                bound = Scalar(ref=IdRef(name), ctx=self)
+        cls = type(boxed) if isinstance(boxed, State) else State
+        bound = cls(IdRef(name))
 
         self._bound[name] = bound
         self._bound[original] = bound
         self._values[name] = boxed
         self._values[original] = boxed
+        self._by_identity[id(value)] = name
         return bound
 
-    def bind_auto(self, value: object, *, prefix: str = "_tmp") -> Scalar:
+    def bind_auto(self, value: object, *, prefix: str = "_tmp") -> State:
+        name = self._by_identity.get(id(value))
+        if name is not None:
+            return self._bound[name]
         while True:
             name = f"{prefix}{self._counter}"
             object.__setattr__(self, "_counter", self._counter + 1)
             if name in self._names:
                 continue
-            return self.bind(value, name)
+            return self.bind(name, value)
 
     def __setattr__(self, name: str, value: object) -> None:
         if name.startswith("_"):
             object.__setattr__(self, name, value)
             return
-        self.bind(value, name)
+        self.bind(name, value)
 
-    def __getattr__(self, name: str) -> Scalar:
+    def __getattr__(self, name: str) -> State:
         bound = self._bound.get(name)
         if bound is None:
             raise AttributeError(name)
         return bound
 
-    def value(self, name: str) -> Scalar:
+    def value(self, name: str) -> State:
         value = self._values.get(name)
         if value is None:
             raise AttributeError(name)
@@ -83,7 +80,7 @@ class Context:
     def result(self, value: object) -> ContextResult:
         return ContextResult(list(self._form), value)
 
-    def form(self) -> Iterable[tuple[str, Scalar]]:
+    def form(self) -> Iterable[tuple[str, State]]:
         return list(self._form)
 
 
@@ -118,12 +115,6 @@ def context() -> Context:
 
 def current_context() -> Context | None:
     return _current_context.get()
-
-
-def resolve_context(ctx: Context | None = None) -> Context | None:
-    if ctx is not None:
-        return ctx
-    return current_context()
 
 
 def scoped_context() -> _ContextScope:

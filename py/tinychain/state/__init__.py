@@ -15,7 +15,7 @@ from .scalar import (
 )
 from .scalar.opdef import DeleteOpDef, GetOpDef, OpDef, PostOpDef, PutOpDef
 from .scalar.ops import Delete, Get, Op, Post, Put
-from .scalar.refs import Cond, DeleteOpRef, ForEach, GetOpRef, IdRef, OpRef, PostOpRef, PutOpRef, TCRef, While
+from .scalar.refs import After, Cond, DeleteOpRef, ForEach, GetOpRef, IdRef, OpRef, PostOpRef, PutOpRef, TCRef, While
 from .context import Context, ContextResult, context, scoped_context, current_context
 from ._ops import subject_of
 from . import collection
@@ -28,6 +28,7 @@ Numeric: TypeAlias = Scalar | _Tensor
 __all__ = [
     "Op",
     "Cond",
+    "After",
     "Delete",
     "DeleteOpDef",
     "DeleteOpRef",

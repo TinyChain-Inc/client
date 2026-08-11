@@ -23,12 +23,6 @@ class OpDef:
     def form(self) -> list[tuple[str, "Scalar"]]:
         raise NotImplementedError()
 
-    def __eq__(self, other: object) -> bool:
-        return type(self) is type(other) and self.to_json() == other.to_json()
-
-    def __hash__(self) -> int:
-        return hash((type(self), repr(self.to_json())))
-
     def last_id(self) -> str | None:
         if not self.form:
             return None
@@ -43,7 +37,7 @@ class OpDef:
     def _reflect(self, subject: str) -> "Scalar":
         from . import PostOpRef, Scalar
 
-        return Scalar(ref=PostOpRef(subject, {"op": self}))
+        return Scalar._from_opref(PostOpRef(subject, {"op": self}))
 
     def reflect_form(self) -> "Scalar":
         return self._reflect(str(URI(type(self), "reflect", "form")))

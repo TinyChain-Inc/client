@@ -165,18 +165,13 @@ def test_real_dispatcher_executes_installed_route_against_local_backend(tmp_path
         params=tuple(getattr(library_cls, "__tc_derivative_params__")),
     )
 
-    seed = tc.Tensor(native=dense_f64([2], [1.0, 2.0]))
-    other = tc.Tensor(native=dense_f64([2], [10.0, 20.0]))
+    seed = dense_f64([2], [1.0, 2.0])
+    other = dense_f64([2], [10.0, 20.0])
 
-    try:
-        result = tc_testing.run_with_timeout(
-            TIMEOUT_SECONDS,
-            lambda: dispatcher.execute(program, values={"seed": seed, "other": other}),
-        )
-    except AutodiffError as err:
-        if "expected scalar state while resolving op" in err.message:
-            pytest.skip("local backend does not yet execute tensor-valued derivative opdefs")
-        raise
+    result = tc_testing.run_with_timeout(
+        TIMEOUT_SECONDS,
+        lambda: dispatcher.execute(program, values={"seed": seed, "other": other}),
+    )
 
     (gradient,) = result.gradients
     assert isinstance(gradient, tc.Tensor)

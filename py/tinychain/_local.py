@@ -6,12 +6,19 @@ import sys
 from typing import Any
 
 
+def is_available() -> bool:
+    return (
+        sys.modules.get("tinychain_local") is not None
+        or importlib.util.find_spec("tinychain_local") is not None
+    )
+
+
 def backend() -> Any:
     existing = sys.modules.get("tinychain_local")
     if existing is not None:  # pragma: no cover
         return existing
 
-    if importlib.util.find_spec("tinychain_local") is None:  # pragma: no cover
+    if not is_available():  # pragma: no cover
         raise ImportError(
             "install `tinychain-local` to use the in-process TinyChain backend"
         )
@@ -49,8 +56,11 @@ def kernel_with_library_definition(
     routes: object = None,
     token: object = None,
     data_dir: str | None = None,
+    workspace: str | None = None,
 ) -> Any:
     kwargs = {"token": token, "data_dir": data_dir}
+    if workspace is not None:
+        kwargs["workspace"] = workspace
     if routes is not None:
         kwargs["routes"] = routes
     return kernel_handle().with_library_definition(definition_json, **kwargs)

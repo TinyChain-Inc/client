@@ -1,4 +1,4 @@
-from .backend import TensorBackend, TensorWireTensorBackend
+from .backend import DenseTensor, TensorBackend, TensorWireTensorBackend
 from .core import Tensor
 from .ops import concatenate, einsum, split, tile
 from .schema import (
@@ -13,6 +13,7 @@ from .view_spec import TensorViewSpec
 
 __all__ = [
     "Tensor",
+    "DenseTensor",
     "TensorStorageLayout",
     "TensorStorageSchema",
     "TensorViewAxisMap",

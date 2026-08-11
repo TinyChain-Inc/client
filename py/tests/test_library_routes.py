@@ -173,7 +173,7 @@ def test_library_route_symbolic_post_body_skips_eager_execute(monkeypatch):
     with tc.state.scoped_context():
         symbolic = tc.state.id("x")
     with tc.backend(mode="eager"):
-        result = A().echo(symbolic)
+        result = A().echo(x=symbolic)
 
     assert isinstance(result, tc.Number)
 
@@ -272,7 +272,7 @@ def test_library_routes_accept_uri_subjects_for_oprefs():
         def bad(self):
             subject = tc.URI("state", "scalar", "value")
             opref = tc.state.GetOpRef(subject)
-            return tc.state.Scalar(ref=tc.state.TCRef(opref))
+            return tc.state.Scalar(tc.state.TCRef(opref))
 
     a = A()
     ir = compile_ir(a)

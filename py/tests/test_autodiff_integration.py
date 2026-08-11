@@ -232,12 +232,12 @@ def test_missing_derivative_behavior():
     assert "mystery" in exc.value.message
 
 
-# --- Step 9: to_dict() snapshot compatibility ---
+# --- Step 9: canonical to_dict() snapshots ---
 
 
-def test_to_dict_snapshot_compatibility():
+def test_to_dict_canonical_snapshots():
     """AutodiffError, AutodiffResult, and DerivativeMetadata to_dict() outputs
-    match the expected pre-refactor snapshots after migration to serialize()."""
+    match the canonical serialized representation."""
 
     error = AutodiffError(
         category="missing_derivative_behavior",

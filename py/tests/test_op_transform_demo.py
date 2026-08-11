@@ -24,8 +24,8 @@ class A(tc.Library):
 
     @tc.post
     def fanout_quad(self, x: tc.Number) -> tc.Number:
-        twice = self.double(x)
-        return self.double(twice)
+        twice = self.double(x=x)
+        return self.double(x=twice)
 
 
 class C(tc.Library):
@@ -112,21 +112,21 @@ def test_op_transform_autodiff_demo(tmp_path: pathlib.Path) -> None:
         assert resp.status == 204
 
     with tc.backend(kernel):
-        double_nodes = tc_testing.run_with_timeout(20, lambda: c.reflected_form_size(double_op))
-        fanout_nodes = tc_testing.run_with_timeout(20, lambda: c.reflected_form_size(fanout_quad_op))
+        double_nodes = tc_testing.run_with_timeout(20, lambda: c.reflected_form_size(op=double_op))
+        fanout_nodes = tc_testing.run_with_timeout(20, lambda: c.reflected_form_size(op=fanout_quad_op))
         assert fanout_nodes > double_nodes
 
-        primal = tc_testing.run_with_timeout(20, lambda: a.double(7))
+        primal = tc_testing.run_with_timeout(20, lambda: a.double(x=7))
         assert primal == 14
 
-        grad = tc_testing.run_with_timeout(20, lambda: c.autodiff_linear_demo(double_op, 7))
+        grad = tc_testing.run_with_timeout(20, lambda: c.autodiff_linear_demo(op=double_op, x=7))
         assert grad == 2
 
-        chain_primal = tc_testing.run_with_timeout(20, lambda: a.triple_chain(7))
+        chain_primal = tc_testing.run_with_timeout(20, lambda: a.triple_chain(x=7))
         assert chain_primal == 21
 
-        chain_grad = tc_testing.run_with_timeout(20, lambda: c.autodiff_chain_demo(triple_chain_op, 7))
+        chain_grad = tc_testing.run_with_timeout(20, lambda: c.autodiff_chain_demo(op=triple_chain_op, x=7))
         assert chain_grad == 3
 
-        fanout_grad = tc_testing.run_with_timeout(20, lambda: c.autodiff_fanout_demo(fanout_quad_op, 7))
+        fanout_grad = tc_testing.run_with_timeout(20, lambda: c.autodiff_fanout_demo(op=fanout_quad_op, x=7))
         assert fanout_grad == 28

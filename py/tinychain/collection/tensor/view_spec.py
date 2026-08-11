@@ -12,8 +12,8 @@ from .view_ops import BroadcastViewOp, ReshapeViewOp, SliceViewOp, TensorViewOp,
 class TensorViewSpec:
     """Canonical client-side tensor view plan.
 
-    This remains backend-agnostic: local shims can execute it eagerly while
-    deferred backends can serialize and forward it to runtime routes.
+    This remains backend-agnostic: eager client values can apply it locally
+    while deferred values serialize and forward it to runtime routes.
     """
 
     ops: tuple[TensorViewOp, ...]

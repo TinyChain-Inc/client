@@ -154,7 +154,7 @@ class _AutographTransformer(ast.NodeTransformer):
             value=ast.Call(
                 func=ast.Attribute(
                     value=ast.Attribute(value=ast.Name(id="_tc_autograph", ctx=ast.Load()), attr="state", ctx=ast.Load()),
-                    attr="Context",
+                    attr="context",
                     ctx=ast.Load(),
                 ),
                 args=[],
