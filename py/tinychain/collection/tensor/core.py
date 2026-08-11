@@ -5,6 +5,7 @@ from numbers import Number as NumberABC
 from typing import Literal
 
 from ...uri import URI
+from ...state.collection import Collection
 from ...state.scalar import (
     Bool,
     Comparable,
@@ -30,7 +31,7 @@ _F64_DTYPE_URI = URI(ValueNumber, "float", "64")
 _U64_DTYPE_URI = URI(ValueNumber, "uint", "64")
 
 
-class Tensor(Comparable):
+class Tensor(Collection, Comparable):
     """TinyChain tensor.
 
     A tensor may be symbolic (backed by an IR ref/op) or materialized (backed by
@@ -49,6 +50,30 @@ class Tensor(Comparable):
         values: list[int | float] | tuple[int | float, ...],
     ) -> "Tensor":
         return cls(native=DenseTensor.new(dtype, shape, values))
+
+    @classmethod
+    def _from_payload(cls, payload: object) -> "Tensor":
+        if not (isinstance(payload, list) and len(payload) == 2):
+            raise TypeError("Tensor payload must be [metadata, values]")
+        meta, values = payload
+        if not (
+            isinstance(meta, list)
+            and len(meta) == 2
+            and isinstance(meta[0], str)
+            and isinstance(meta[1], list)
+            and isinstance(values, list)
+        ):
+            raise TypeError("invalid Tensor payload")
+
+        dtype = {
+            str(_F32_DTYPE_URI): "f32",
+            str(_F64_DTYPE_URI): "f64",
+            str(_U64_DTYPE_URI): "u64",
+        }.get(meta[0])
+        if dtype is None:
+            raise TypeError(f"unsupported tensor dtype {meta[0]}")
+        cast = float if dtype.startswith("f") else int
+        return cls.dense(dtype, [int(dim) for dim in meta[1]], [cast(value) for value in values])
 
     def __init__(
         self,

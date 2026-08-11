@@ -2,55 +2,12 @@ from __future__ import annotations
 
 import json
 
-from .state.value import Number
 from .uri import URI
-
-def _decode_tensor(payload: object) -> object:
-    if not (isinstance(payload, list) and len(payload) == 2):
-        return payload
-
-    meta, values = payload
-    if not (isinstance(meta, list) and len(meta) == 2 and isinstance(meta[0], str) and isinstance(meta[1], list)):
-        return payload
-
-    dtype = meta[0]
-    try:
-        shape = [int(dim) for dim in meta[1]]
-    except (TypeError, ValueError):
-        return payload
-    decoded_values = [decode_payload(value) for value in values] if isinstance(values, list) else values
-
-    from .collection.tensor import Tensor
-
-    if dtype == str(URI(Number, "float", "32")):
-        return Tensor.dense("f32", shape, [float(value) for value in decoded_values])
-    if dtype == str(URI(Number, "float", "64")):
-        return Tensor.dense("f64", shape, [float(value) for value in decoded_values])
-    if dtype == str(URI(Number, "uint", "64")):
-        return Tensor.dense("u64", shape, [int(value) for value in decoded_values])
-
-    raise TypeError(f"unsupported tensor dtype {dtype}")
-
-
-def _decode_collections(payload: object) -> object:
-    from .collection.btree import BTree
-    from .collection.tensor import Tensor
-
-    if isinstance(payload, dict) and len(payload) == 1:
-        (key, value), = payload.items()
-        if key == str(URI(BTree)):
-            return BTree.from_json(payload)
-        if key == str(URI(Tensor)):
-            return _decode_tensor(value)
-    if isinstance(payload, dict):
-        return {k: _decode_collections(v) for k, v in payload.items()}
-    if isinstance(payload, list):
-        return [_decode_collections(item) for item in payload]
-    return payload
 
 
 def decode_payload(payload: object) -> object:
     from .state import OpDef, TCRef
+    from .state.collection import Collection
     from .state.value import Map, Tuple, Value, form_of as value_form_of
 
     def _project_value(value: Value) -> object:
@@ -66,37 +23,40 @@ def decode_payload(payload: object) -> object:
 
         return value_form_of(value)
 
-    unwrapped = _decode_collections(payload)
-    if unwrapped is None or isinstance(unwrapped, (bool, int, float, str)):
-        return unwrapped
+    if payload is None or isinstance(payload, (bool, int, float, str)):
+        return payload
 
-    if isinstance(unwrapped, dict):
-        if len(unwrapped) == 1:
-            (key, _value), = unwrapped.items()
+    if isinstance(payload, dict):
+        if len(payload) == 1:
+            (key, _value), = payload.items()
+            collection = Collection.decode(payload)
+            if collection is not None:
+                return collection
+
             if isinstance(key, str) and key.startswith(str(URI(OpDef))):
                 try:
-                    return OpDef.from_json(unwrapped)
+                    return OpDef.from_json(payload)
                 except (TypeError, ValueError):
                     pass
 
             if isinstance(key, str) and (key.startswith("/") or key.startswith("$")):
                 try:
-                    return TCRef.from_json(unwrapped)
+                    return TCRef.from_json(payload)
                 except (TypeError, ValueError):
                     pass
 
-            try:
-                value = Value.from_json(unwrapped)
-                return _project_value(value)
-            except (TypeError, ValueError):
-                pass
+                try:
+                    value = Value.from_json(payload)
+                    return _project_value(value)
+                except (TypeError, ValueError):
+                    pass
 
-        return {k: decode_payload(v) for k, v in unwrapped.items()}
+        return {k: decode_payload(v) for k, v in payload.items()}
 
-    if isinstance(unwrapped, list):
-        return [decode_payload(item) for item in unwrapped]
+    if isinstance(payload, list):
+        return [decode_payload(item) for item in payload]
 
-    return unwrapped
+    return payload
 
 
 def decode_response_body(response: object) -> object:
