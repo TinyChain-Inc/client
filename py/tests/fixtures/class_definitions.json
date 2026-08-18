@@ -1,0 +1,54 @@
+[
+  {
+    "id": "/class/example-devco/point/1.0.0",
+    "parent": "/state/scalar/value/map",
+    "prototype": {
+      "dimensions": 2,
+      "label": {
+        "/state/scalar/op/get": [
+          "key",
+          [
+            [
+              "result",
+              "point"
+            ]
+          ]
+        ]
+      },
+      "translate": {
+        "/state/scalar/op/post": [
+          [
+            "dx",
+            {
+              "$dx": []
+            }
+          ],
+          [
+            "dy",
+            {
+              "$dy": []
+            }
+          ]
+        ]
+      }
+    }
+  },
+  {
+    "id": "/class/example-devco/named-point/1.0.0",
+    "parent": "/class/example-devco/point/1.0.0",
+    "prototype": {
+      "label": {
+        "/state/scalar/op/get": [
+          "key",
+          [
+            [
+              "result",
+              "named point"
+            ]
+          ]
+        ]
+      },
+      "name": "origin"
+    }
+  }
+]
