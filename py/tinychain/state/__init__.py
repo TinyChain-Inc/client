@@ -22,6 +22,7 @@ from . import collection
 from .collection import Collection
 from ..collection.tensor import Tensor as _Tensor
 from .value import Bool, C64, C128, Complex, F32, F64, Float, I64, Integer, Link, Map, Null, Number, String, Tuple, U64, Value
+from .base import State
 
 Numeric: TypeAlias = Scalar | _Tensor
 
@@ -50,6 +51,7 @@ __all__ = [
     "While",
     "ForEach",
     "Value",
+    "State",
     "Null",
     "Link",
     "Bool",
