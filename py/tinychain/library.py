@@ -348,6 +348,8 @@ class Route:
         params = list(sig.parameters.values())
         if not params or params[0].name != "self":
             raise TypeError("route form must begin with a `self` parameter")
+        if getattr(instance, "_bind_class_route", None) is not None:
+            return _compile_opdef_route(self, instance, params)
         library_cls = _library_class(instance)
         _validate_library_class(library_cls)
         # Identity is class-authoritative: route compilation always uses a fresh
@@ -357,6 +359,12 @@ class Route:
     def __get__(self, instance: object, owner: type | None = None):
         if instance is None:
             return self
+
+        # Class instances use state-subject refs so construction and bound
+        # method invocation remain one canonical deferred graph.
+        bind_class_route = getattr(instance, "_bind_class_route", None)
+        if bind_class_route is not None:
+            return bind_class_route(self)
 
         def bound(*args, **kwargs):
             body = _route_body_from_call(self, args, kwargs)
@@ -634,6 +642,14 @@ def _library_schema(library: "Library") -> dict:
 def compile_ir(library: Library | type[Library]) -> dict:
     library_cls = _library_class(library)
     _validate_library_class(library_cls)
+    from .classdef import Class, class_definition
+
+    declared_classes = getattr(library_cls, "classes", ()) or ()
+    classes: list[dict[str, object]] = []
+    for declared in declared_classes:
+        if not isinstance(declared, type) or not issubclass(declared, Class):
+            raise TypeError("Library classes must contain tc.Class subclasses")
+        classes.append(class_definition(declared))
     routes: list[dict] = []
     for name, attr in list(library_cls.__dict__.items()):
         if not isinstance(attr, Route):
@@ -656,7 +672,7 @@ def compile_ir(library: Library | type[Library]) -> dict:
 
         routes.append({"path": f"/{name}", "value": result})
 
-    return {"schema": _class_schema(library_cls), "routes": routes}
+    return {"schema": _class_schema(library_cls), "classes": classes, "routes": routes}
 
 
 def _compile_route(route: Route, library: type[Library]) -> object:
@@ -925,7 +941,8 @@ def install(
     if _bearer_token(token) is None and remote is None:
         raise ValueError("expected `token` for library installs")
 
-    definition = library_definition(library_cls)
+    ir = compile_ir(library_cls)
+    definition = ir if ir["classes"] else library_definition(library_cls)
 
     if remote is not None:
         return _submit_remote_library_definition(remote, definition, token=token)
