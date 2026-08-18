@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .autodiff.callsite import grad
 from .library import Library, delete, get, install, post, put
+from .classdef import Class, ClassError, InvalidClassParent, MissingClassMember, UnsupportedClassOverride, class_definition, validate_class_definition
 from .codec import decode_response_body
 from .executor import Executor, backend
 from .executor import execute as _dispatch_execute
@@ -23,6 +24,13 @@ from .host import Host
 
 __all__ = [
     "Library",
+    "Class",
+    "ClassError",
+    "InvalidClassParent",
+    "MissingClassMember",
+    "UnsupportedClassOverride",
+    "class_definition",
+    "validate_class_definition",
     "Executor",
     "backend",
     "OpRef",

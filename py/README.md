@@ -3,6 +3,9 @@
 This directory holds the refreshed Python client plus its PyO3-backed
 integration tests.
 
+See [the Class parity and migration guide](CLASS_PARITY.md) for canonical
+user-defined Class inheritance, prototypes, construction, and bound methods.
+
 From the client repo root, install the client dependencies:
 
 ```bash
