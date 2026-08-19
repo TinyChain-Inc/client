@@ -32,9 +32,18 @@ captures follow forward-graph topological order, and local values follow the
 topological order of the analyzed selection. Repeated analyses of equivalent
 traces therefore compare equal.
 
+One value id must have exactly one provenance, and that invariant is enforced
+in one place rather than per index. A single assignment pass walks the reachable
+set and assigns each value its provenance; assigning a second provenance to an
+id that already has one raises ``ambiguous_producer`` naming the id and both
+conflicting categories. Every pairing -- two declarations, a declaration that is
+also produced, a seed that collides with a declared input or with a produced
+forward value -- therefore fails through the same check, which cannot be
+partially applied.
+
 Malformed selections fail closed with categorized :class:`AutodiffError` values
-rather than a raw container exception: ``ambiguous_producer`` when one value has
-two producers or a declared seed collides with a forward value,
+rather than a raw container exception: ``ambiguous_producer`` when one value
+would carry two provenances or two nodes produce the same value,
 ``invalid_selected_output`` when a selection is empty or names an unknown value,
 ``malformed_derivative_ir`` when the reachable region contains a cycle,
 ``missing_dependency`` when a reachable value has no producer and no provenance,
@@ -140,7 +149,7 @@ def analyze_graph_dependencies(
     reachable value, matching typed-graph finalization.
     """
     producers = _producers_by_value(graph.nodes, label="graph")
-    declared_typespecs = _declared_typespecs(graph, label="graph")
+    declared_typespecs = _declared_typespecs(graph)
     selected_outputs = _resolve_selected_outputs(
         outputs,
         default_outputs=graph.outputs,
@@ -149,8 +158,20 @@ def analyze_graph_dependencies(
     )
     reachable_nodes, free_value_ids = _reachable_region(selected_outputs, producers)
 
+    assignments: dict[str, str] = {}
+    reachable_values = free_value_ids | {node.output_value_id for node in reachable_nodes}
+    # Iterate the declared inputs themselves, not the index built from them, so
+    # a value declared twice is two assignments rather than one dict entry.
+    for value_id, _typespec in graph.inputs:
+        if value_id in reachable_values:
+            _assign_provenance(assignments, value_id, DEPENDENCY_PROVENANCE_DECLARED_INPUT)
+    for node in reachable_nodes:
+        _assign_provenance(
+            assignments, node.output_value_id, DEPENDENCY_PROVENANCE_LOCAL_VALUE
+        )
+
     for value_id in free_value_ids:
-        if value_id not in declared_typespecs:
+        if value_id not in assignments:
             raise AutodiffError(
                 "missing_dependency",
                 f"value {value_id!r} is reachable from the selected outputs "
@@ -205,15 +226,7 @@ def analyze_derivative_dependencies(
     """
     seeds = _resolve_seed_value_ids(seed_value_ids)
     forward_producers = _producers_by_value(forward_graph.nodes, label="forward graph")
-    declared_typespecs = _declared_typespecs(forward_graph, label="forward graph")
-    for seed_value_id in seeds:
-        if seed_value_id in forward_producers or seed_value_id in declared_typespecs:
-            raise AutodiffError(
-                "ambiguous_producer",
-                f"seed value {seed_value_id!r} is also a forward graph value, "
-                "so its provenance is ambiguous",
-            )
-
+    declared_typespecs = _declared_typespecs(forward_graph)
     producers = _producers_by_value(program.nodes, label="derivative program")
     known_values = set(seeds) | set(declared_typespecs) | set(forward_producers)
     selected_outputs = _resolve_selected_outputs(
@@ -224,8 +237,28 @@ def analyze_derivative_dependencies(
     )
     reachable_nodes, free_value_ids = _reachable_region(selected_outputs, producers)
 
+    assignments: dict[str, str] = {}
+    reachable_values = free_value_ids | {node.output_value_id for node in reachable_nodes}
+    # Iterate the declared inputs themselves, not the index built from them, so
+    # a value declared twice is two assignments rather than one dict entry.
+    for value_id, _typespec in forward_graph.inputs:
+        if value_id in reachable_values:
+            _assign_provenance(assignments, value_id, DEPENDENCY_PROVENANCE_DECLARED_INPUT)
+    for value_id in seeds:
+        if value_id in reachable_values:
+            _assign_provenance(assignments, value_id, DEPENDENCY_PROVENANCE_SEED_INPUT)
+    for node in forward_graph.nodes:
+        if node.output_value_id in reachable_values:
+            _assign_provenance(
+                assignments, node.output_value_id, DEPENDENCY_PROVENANCE_FORWARD_CAPTURE
+            )
+    for node in reachable_nodes:
+        _assign_provenance(
+            assignments, node.output_value_id, DEPENDENCY_PROVENANCE_LOCAL_VALUE
+        )
+
     for value_id in free_value_ids:
-        if value_id not in known_values:
+        if value_id not in assignments:
             raise AutodiffError(
                 "missing_dependency",
                 f"value {value_id!r} is reachable from the selected outputs but is "
@@ -304,7 +337,13 @@ def _producers_by_value(
     *,
     label: str,
 ) -> dict[str, "TensorNodeRecord"]:
-    """Index nodes by produced value, rejecting a value with two producers."""
+    """Index nodes by produced value, rejecting a value with two producers.
+
+    This check stays ahead of the provenance assignment pass rather than
+    folding into it, because traversal is defined in terms of this index: with
+    two producers for one value, the reachable set itself is ambiguous and the
+    pass would only ever see whichever node the index kept.
+    """
     producers: dict[str, "TensorNodeRecord"] = {}
     for node in nodes:
         existing = producers.get(node.output_value_id)
@@ -318,23 +357,43 @@ def _producers_by_value(
     return producers
 
 
-def _declared_typespecs(graph: "TensorGraph", *, label: str) -> dict[str, object]:
-    """Index the declared graph inputs by value id, rejecting a repeated id.
+def _assign_provenance(
+    assignments: dict[str, str],
+    value_id: str,
+    provenance: str,
+) -> None:
+    """Give *value_id* its provenance, rejecting a value that already has one.
 
-    Mirrors :func:`_producers_by_value` for the other class of input: one value
-    id must have exactly one provenance. A repeated declaration would otherwise
-    either report a single id twice with contradicting metadata or collapse
-    last-wins, and a consumer could not bind it from provenance alone.
+    This is the single point where the "one value id, one provenance" invariant
+    is enforced. Checking it per index instead would leave every pairing of
+    indices as its own possible gap; here a declaration that is also produced, a
+    value declared twice, and a seed that collides with either all arrive at the
+    same rejection.
     """
-    declared: dict[str, object] = {}
-    for value_id, typespec in graph.inputs:
-        if value_id in declared:
+    existing = assignments.get(value_id)
+    if existing is not None:
+        if existing == provenance:
             raise AutodiffError(
                 "ambiguous_producer",
-                f"{label} value {value_id!r} is declared as an input more than once",
+                f"value {value_id!r} is assigned the {provenance!r} provenance more than once",
             )
-        declared[value_id] = typespec
-    return declared
+        raise AutodiffError(
+            "ambiguous_producer",
+            f"value {value_id!r} has conflicting provenance: "
+            f"{existing!r} and {provenance!r}",
+        )
+    assignments[value_id] = provenance
+
+
+def _declared_typespecs(graph: "TensorGraph") -> dict[str, object]:
+    """Index the declared graph inputs by value id, for metadata lookup.
+
+    A repeated declaration is not rejected here: the provenance assignment pass
+    walks ``graph.inputs`` directly and rejects it there, so that every
+    ambiguity is reported by one check rather than by whichever index happened
+    to notice first.
+    """
+    return {value_id: typespec for value_id, typespec in graph.inputs}
 
 
 def _resolve_selected_outputs(
