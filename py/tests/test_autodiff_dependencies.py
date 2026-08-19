@@ -461,6 +461,32 @@ def test_seed_colliding_with_a_forward_value_raises_ambiguous_producer():
     )
 
 
+def test_seed_colliding_with_a_produced_forward_value_raises_ambiguous_producer():
+    """Regression guard: the seed/produced half of the seed collision check.
+
+    The sibling seed/declared case is covered elsewhere; this pins the case
+    where the colliding forward value is produced by a node rather than
+    declared as an input.
+    """
+    forward_graph = TensorGraph(
+        nodes=[_node("f0", "mid", ["beta"], _typespec("f32", [2]))],
+        inputs=[("beta", _typespec("f32", [2]))],
+        outputs=["mid"],
+    )
+    program = _derivative_program(
+        nodes=[_node("an0", "local", ["mid"], _typespec("f32", [2]))],
+        gradients={"beta": "local"},
+    )
+
+    with pytest.raises(AutodiffError) as error:
+        analyze_derivative_dependencies(
+            program, forward_graph=forward_graph, seed_value_ids=("mid",)
+        )
+
+    assert error.value.category == "ambiguous_producer"
+    assert "mid" in error.value.message
+
+
 def test_cycle_raises_malformed_derivative_ir():
     graph = TensorGraph(
         nodes=[
