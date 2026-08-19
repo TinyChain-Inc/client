@@ -27,6 +27,15 @@ AUTODIFF_ERROR_CATEGORIES: tuple[str, ...] = (
     "side_effecting_route_unsupported",
     "autodiff_not_implemented",
     "dtype_mismatch",
+    # Structured dependency analysis of a selected forward or derivative output.
+    # `details` for each is carried in the message as the offending value ids.
+    #   missing_dependency:       a reachable value has no producer and no provenance
+    #   ambiguous_producer:       one value has two producers, or a declared seed
+    #                             collides with a forward graph value
+    #   invalid_selected_output:  the selection is empty or names an unknown value
+    "missing_dependency",
+    "ambiguous_producer",
+    "invalid_selected_output",
 )
 
 

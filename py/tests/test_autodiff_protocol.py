@@ -59,6 +59,9 @@ def test_autodiff_error_categories_cover_spec_codes():
         "side_effecting_route_unsupported",
         "autodiff_not_implemented",
         "dtype_mismatch",
+        "missing_dependency",
+        "ambiguous_producer",
+        "invalid_selected_output",
     }
 
     assert set(AUTODIFF_ERROR_CATEGORIES) == expected
