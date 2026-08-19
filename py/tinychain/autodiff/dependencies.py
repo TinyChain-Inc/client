@@ -140,7 +140,7 @@ def analyze_graph_dependencies(
     reachable value, matching typed-graph finalization.
     """
     producers = _producers_by_value(graph.nodes, label="graph")
-    declared_typespecs = dict(graph.inputs)
+    declared_typespecs = _declared_typespecs(graph, label="graph")
     selected_outputs = _resolve_selected_outputs(
         outputs,
         default_outputs=graph.outputs,
@@ -205,7 +205,7 @@ def analyze_derivative_dependencies(
     """
     seeds = _resolve_seed_value_ids(seed_value_ids)
     forward_producers = _producers_by_value(forward_graph.nodes, label="forward graph")
-    declared_typespecs = dict(forward_graph.inputs)
+    declared_typespecs = _declared_typespecs(forward_graph, label="forward graph")
     for seed_value_id in seeds:
         if seed_value_id in forward_producers or seed_value_id in declared_typespecs:
             raise AutodiffError(
@@ -316,6 +316,25 @@ def _producers_by_value(
             )
         producers[node.output_value_id] = node
     return producers
+
+
+def _declared_typespecs(graph: "TensorGraph", *, label: str) -> dict[str, object]:
+    """Index the declared graph inputs by value id, rejecting a repeated id.
+
+    Mirrors :func:`_producers_by_value` for the other class of input: one value
+    id must have exactly one provenance. A repeated declaration would otherwise
+    either report a single id twice with contradicting metadata or collapse
+    last-wins, and a consumer could not bind it from provenance alone.
+    """
+    declared: dict[str, object] = {}
+    for value_id, typespec in graph.inputs:
+        if value_id in declared:
+            raise AutodiffError(
+                "ambiguous_producer",
+                f"{label} value {value_id!r} is declared as an input more than once",
+            )
+        declared[value_id] = typespec
+    return declared
 
 
 def _resolve_selected_outputs(
