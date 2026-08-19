@@ -354,6 +354,40 @@ def test_derivative_free_input_outside_forward_graph_and_seeds_raises_missing_de
     )
 
 
+def test_duplicate_declared_inputs_raise_ambiguous_producer():
+    graph = TensorGraph(
+        nodes=[_node("n0", "out", ["alpha"], _typespec("f32", [2]))],
+        inputs=[("alpha", _typespec("f32", [2])), ("alpha", _typespec("f32", [9]))],
+        outputs=["out"],
+    )
+
+    with pytest.raises(AutodiffError) as error:
+        analyze_graph_dependencies(graph)
+
+    assert error.value.category == "ambiguous_producer"
+    assert "alpha" in error.value.message
+
+
+def test_duplicate_declared_inputs_in_forward_graph_raise_ambiguous_producer():
+    forward_graph = TensorGraph(
+        nodes=[],
+        inputs=[("parameter", _typespec("f32", [2])), ("parameter", _typespec("f32", [9]))],
+        outputs=["parameter"],
+    )
+    program = _derivative_program(
+        nodes=[_node("an0", "local", ["cotangent", "parameter"], _typespec("f32", [2]))],
+        gradients={"parameter": "local"},
+    )
+
+    with pytest.raises(AutodiffError) as error:
+        analyze_derivative_dependencies(
+            program, forward_graph=forward_graph, seed_value_ids=("cotangent",)
+        )
+
+    assert error.value.category == "ambiguous_producer"
+    assert "parameter" in error.value.message
+
+
 def test_duplicate_producers_raise_ambiguous_producer():
     graph = TensorGraph(
         nodes=[
