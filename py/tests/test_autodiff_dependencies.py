@@ -388,6 +388,47 @@ def test_duplicate_declared_inputs_in_forward_graph_raise_ambiguous_producer():
     assert "parameter" in error.value.message
 
 
+def test_declared_input_that_is_also_produced_raises_ambiguous_producer():
+    graph = TensorGraph(
+        nodes=[
+            _node("n0", "alpha", ["beta"], _typespec("f32", [2])),
+            _node("n1", "out", ["alpha"], _typespec("f32", [2])),
+        ],
+        inputs=[("alpha", _typespec("f32", [9])), ("beta", _typespec("f32", [2]))],
+        outputs=["out"],
+    )
+
+    with pytest.raises(AutodiffError) as error:
+        analyze_graph_dependencies(graph)
+
+    assert error.value.category == "ambiguous_producer"
+    assert "alpha" in error.value.message
+    assert DEPENDENCY_PROVENANCE_DECLARED_INPUT in error.value.message
+    assert DEPENDENCY_PROVENANCE_LOCAL_VALUE in error.value.message
+
+
+def test_forward_declared_input_that_is_also_produced_raises_ambiguous_producer():
+    forward_graph = TensorGraph(
+        nodes=[_node("f0", "alpha", ["beta"], _typespec("f32", [2]))],
+        inputs=[("alpha", _typespec("f32", [9])), ("beta", _typespec("f32", [2]))],
+        outputs=["alpha"],
+    )
+    program = _derivative_program(
+        nodes=[_node("an0", "local", ["cotangent", "alpha"], _typespec("f32", [2]))],
+        gradients={"beta": "local"},
+    )
+
+    with pytest.raises(AutodiffError) as error:
+        analyze_derivative_dependencies(
+            program, forward_graph=forward_graph, seed_value_ids=("cotangent",)
+        )
+
+    assert error.value.category == "ambiguous_producer"
+    assert "alpha" in error.value.message
+    assert DEPENDENCY_PROVENANCE_DECLARED_INPUT in error.value.message
+    assert DEPENDENCY_PROVENANCE_FORWARD_CAPTURE in error.value.message
+
+
 def test_duplicate_producers_raise_ambiguous_producer():
     graph = TensorGraph(
         nodes=[
