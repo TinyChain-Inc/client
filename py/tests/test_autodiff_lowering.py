@@ -281,6 +281,26 @@ def _fusion_graph_with_live_intermediate() -> TensorGraph:
     )
 
 
+def _fusion_graph_with_trailing_operation() -> TensorGraph:
+    """transpose(alpha) @ beta, then that result added to itself."""
+    return TensorGraph(
+        nodes=[
+            _node(
+                "n0",
+                "alpha_t",
+                TransposeOperator(),
+                ["alpha"],
+                _typespec("f32", [3, 2]),
+                {"perm": [1, 0]},
+            ),
+            _node("n1", "out", MatmulOperator(), ["alpha_t", "beta"], _typespec("f32", [3, 4])),
+            _node("n2", "doubled", AddOperator(), ["out", "out"], _typespec("f32", [3, 4])),
+        ],
+        inputs=[("alpha", _typespec("f32", [2, 3])), ("beta", _typespec("f32", [2, 4]))],
+        outputs=["doubled"],
+    )
+
+
 def _lower(graph: TensorGraph, registry: OperationHandlerRegistry, **kwargs) -> LoweredProgram:
     return lower_graph(graph, handlers=registry, bind_input=_bind_input, **kwargs)
 
@@ -572,7 +592,7 @@ def test_fusion_is_deterministic_across_repeated_lowering():
 
 
 def test_the_fusion_candidate_window_is_bounded_by_the_declared_lookahead():
-    graph = _fusion_graph_with_live_intermediate()
+    graph = _fusion_graph_with_trailing_operation()
     fusion = TransposeMatmulFusion(lookahead=2)
 
     _lower(graph, _full_registry(), fusion=fusion)
