@@ -685,6 +685,218 @@ autodiff, a backend artifact registry or backend artifact schema,
 hidden/internal route compiler behavior, Rust contracts, or production
 `tc-server` derivative execution.
 
+### Structured dependency analysis, extensible program lowering, and traced optimizer updates (experimental)
+
+This surface extends public typed Tensor tracing with three additive pieces
+under `tinychain.autodiff`: a structured analysis of what a selected forward
+or derivative output depends on, a framework-owned traversal that hands
+individual operations to consumer-supplied lowering handlers, and a small
+composition helper for tracing an optimizer update as ordinary Tensor code.
+All three are **experimental**, live only under `tinychain.autodiff`, and
+carry no post-0.x stability guarantee, matching the rest of this section.
+
+The framework owns graph meaning, reachability, topological order, and
+selected-output handling. A consumer owns its own target representation,
+its supported-operator mapping, its fusion policy, and its runtime. The
+framework never imports, inspects, compares, hashes, or iterates a
+consumer's target value — it only carries it from the handler that produced
+it to the handlers (or the final output selection) that consume it.
+
+#### Structured dependency analysis
+
+`analyze_graph_dependencies(graph, *, outputs=None)` and
+`analyze_derivative_dependencies(program, *, forward_graph, seed_value_ids,
+outputs=None)` both return a `DependencyAnalysis`: every value the selected
+outputs depend on, together with a provenance category and normalized
+`dtype`/`shape` metadata. Each dependency is exactly one of:
+
+- `DEPENDENCY_PROVENANCE_DECLARED_INPUT` — a value the forward trace declared
+  as a named graph input (a parameter, training data, a label). The caller
+  supplies it.
+- `DEPENDENCY_PROVENANCE_SEED_INPUT` — an upstream cotangent the derivative
+  transform introduced. The caller supplies it, typically as ones shaped like
+  the differentiated output. Only present for a derivative-program analysis.
+- `DEPENDENCY_PROVENANCE_FORWARD_CAPTURE` — an intermediate the forward graph
+  produced and the derivative program consumes again. The caller must run the
+  forward graph and retain this value before running the derivative program.
+  Only present for a derivative-program analysis.
+- `DEPENDENCY_PROVENANCE_LOCAL_VALUE` — a value produced inside the analyzed
+  selection itself. Nothing to bind.
+
+`DependencyAnalysis.declared_inputs`, `.seed_inputs`, `.forward_captures`,
+`.local_values`, and `.required_inputs` (every non-local dependency) filter by
+category. Ordering is deterministic and documented: dependencies are grouped
+in `DEPENDENCY_PROVENANCE_ORDER`, declared inputs follow forward-graph
+declaration order, seeds follow caller declaration order, forward captures
+follow forward-graph topological order, and local values follow the
+topological order of the analyzed selection — so repeated analyses of
+equivalent traces compare equal. A consumer never needs a private node map,
+an ID-prefix convention, or a producer scan to work out what to bind; the
+analysis is structural, never derived from how a value id happens to be
+spelled.
+
+Malformed selections fail closed with a categorized `AutodiffError` before any
+target program is produced: `missing_dependency` (a reachable value has no
+producer and no provenance), `ambiguous_producer` (one value would carry two
+provenances, or two nodes produce the same value), `invalid_selected_output`
+(the selection is empty or names an unknown value), `malformed_derivative_ir`
+(a cycle in the reachable region), and `missing_dtype_metadata` /
+`missing_shape_metadata` (incomplete type metadata on a value that requires
+it). Analysis for a forward graph requires complete metadata everywhere,
+matching typed-graph finalization; analysis for a derivative program is
+best-effort where the program itself is best-effort, resolving metadata from
+the program's recorded value typespecs first, then its nodes, then the
+forward graph, and reporting `dtype=None`/`shape=None` only where no metadata
+exists anywhere for that value — metadata that is present anywhere must still
+be complete.
+
+#### Extensible program lowering
+
+`lower_graph(graph, *, handlers, outputs=None, fusion=None, bind_input=None)`
+and `lower_derivative_program(program, *, forward_graph, seed_value_ids,
+handlers, outputs=None, fusion=None, bind_input=None)` walk the same analyzed
+region and return a `LoweredProgram`: `operations` in traversal order,
+`values` mapping every bound value id to the consumer's opaque target value
+for it, and `dependencies` (the `DependencyAnalysis` the traversal was
+derived from). `LoweredProgram.output_values` returns the target values of
+the selected outputs in selection order.
+
+A consumer supplies:
+
+- An `OperationHandlerRegistry` with one `OperationHandler` per concrete
+  `TensorOperator` type it supports. `handler.operator_type` declares the
+  type; `handler.lower(context)` receives an `OperationContext` — the
+  operator instance, its normalized `op_params`, its already-lowered `inputs`
+  in operand order, each input's dependency provenance, and the output value
+  id/typespec — and returns the consumer's opaque target value for that
+  operation. Dispatch is by exact concrete operator type, never by route name
+  or any other string; two operators that happen to share a route name are
+  still two distinct dispatch targets.
+- Optionally, a `FusionHook` (`lookahead: int`, `fuse(context) ->
+  FusionResult | None`) that may recognize a local pattern over a bounded
+  look-ahead window (`FusionContext.candidates`, capped at `lookahead`, always
+  starting with the operation being offered) and replace it with one
+  instruction. A `FusionResult` names the consumed operation ids (a subset of
+  the offered candidates, including the offered operation, with no repeats)
+  and the one opaque target value the fused region still owes the rest of the
+  program. `FusionContext.value_of(value_id)` resolves an already-bound
+  operand for the hook.
+- Optionally, `bind_input`, converting each analyzed free dependency
+  (`ValueDependency`) into the consumer's target value for it. The default
+  binds the `ValueDependency` itself, which already carries the value id,
+  provenance, and type metadata a consumer typically needs to construct its
+  own runtime binding.
+
+Every reachable operation is lowered by exactly one handler, replaced by
+exactly one fusion, or the whole call fails before any target program is
+returned — an injected handler may lower an operation or report it
+unsupported, but it may never silently fall back to executing ordinary Python
+arithmetic in its place. A fusion may only claim operands that are already
+bound or produced by another operation in the same claimed set, and it may
+leave at most one value still needed outside the fused region; a region that
+would silently discard a second such value is rejected instead. Failures
+raise a categorized `AutodiffError`: `unsupported_operator` (no handler
+claims an operation, or the reachable region has an operation nothing
+claimed), and `handler_contract_violation` for any other way a handler,
+registration, or fusion hook breaks the seam's contract — including a
+consumer's own exception type, which the framework cannot enumerate ahead of
+time and therefore normalizes rather than lets escape uncategorized.
+`KeyboardInterrupt` and `SystemExit` are interpreter control flow, not a
+handler reporting failure, and are deliberately left to propagate rather than
+being folded into `handler_contract_violation`.
+
+#### Traced optimizer updates
+
+`trace_parameter_update(update, *, parameter, gradient,
+optimizer_inputs=None)` traces an ordinary Tensor callable — an optimizer
+step — the same way an application loss is traced. `parameter`, `gradient`,
+and each `optimizer_inputs` value are typed input specs
+(`{"dtype": ..., "shape": ...}`) forwarded to the same typed-tracing builder
+described above; `update` is called once, by keyword, with a `Tensor` for
+each declared input, and must return the single updated-parameter `Tensor`
+expressed with ordinary Tensor operations. The result is a `TracedUpdate`
+carrying the finalized `graph`, the `updated_parameter_id`, and
+`input_value_ids` (declared input name to its stable value id in `graph`),
+so a caller binds runtime values by name rather than scanning `graph.inputs`.
+
+`sgd_update(*, parameter, gradient, learning_rate)` is the one reference
+update this module ships: `parameter - learning_rate * gradient`, written
+entirely with the Tensor `-`/`*` operators. Neither it nor
+`trace_parameter_update` constructs a graph-record or operator type directly;
+doing so is a spec invariant, not just a style preference, and is checked by
+a dedicated regression test that additionally scans the module's own
+namespace so an import alias or a helper reached through attribute access
+cannot quietly reintroduce direct construction either.
+
+Update-callable well-formedness is checked once, before any input is
+declared or the builder is entered, so an invalid callable's body never runs;
+a signature that does not accept exactly the declared inputs by keyword
+raises `AutodiffError("invalid_update_signature", ...)`. A callable that does
+not return a `Tensor` raises `AutodiffError("invalid_update_output", ...)`
+after it runs. Typed-input completeness and traced-expression shape/dtype
+compatibility are not re-validated here — they are the same checks typed
+tracing already performs on every other traced expression. This module
+defines no optimizer catalog and no optimizer state lifecycle; it is a
+composition helper, not a training loop.
+
+#### Compatibility
+
+These three pieces are purely additive. They add no new field to
+`DerivativeProgram.to_dict()` or any other existing serialized payload;
+`DependencyAnalysis`, `ValueDependency`, and `LoweredProgram` are in-memory
+analysis results, not part of any wire format today. Existing
+`TensorGraphBuilder`, VJP generation, derivative program compilation, and
+`ExecutionScheduler` behavior are unchanged — dependency analysis and lowering
+read a graph or program after it exists; they do not participate in tracing,
+VJP generation, or execution scheduling. All new names are reached the same
+lazily-loaded way as the artifact and route-derivative surfaces already
+documented above: `import tinychain.autodiff as autodiff` and access the name
+directly, or import it from the specific submodule.
+
+#### Extension example
+
+A consumer registers a handler per concrete operator type it supports and
+lowers a selection in one call. `my_target_ir` below stands in for whatever
+representation the consumer owns — the framework never sees it:
+
+```python
+import tinychain as tc
+from tinychain.autodiff import OperationHandlerRegistry, lower_graph
+
+class AddToTargetIR:
+    operator_type = tc.autodiff.AddOperator
+
+    def lower(self, context):
+        left, right = context.inputs
+        return my_target_ir.add(left, right)  # opaque to the framework
+
+registry = OperationHandlerRegistry()
+registry.register(AddToTargetIR())
+# ... register one handler per supported concrete operator type ...
+
+lowered = lower_graph(graph, handlers=registry, outputs=[output_value_id])
+program = lowered.output_values  # the consumer's own opaque target values
+```
+
+A consumer that wants a local fusion supplies a `fusion=` hook alongside
+`handlers=`; declining a fusion (`fuse(...)` returning `None`) always falls
+back to the per-operator handler path for that operation.
+
+#### What this surface does and does not guard against ILC-style coupling
+
+A dedicated regression test walks every module under `tinychain/autodiff/`
+and fails if any of them imports a module whose dotted path names an ILC
+consumer. That check is mechanical and narrow: it catches an accidental
+import-level dependency on a specific downstream consumer, which is the
+concrete, checkable half of keeping this seam generic. It does not attempt to
+detect every possible way framework code could informally assume something
+about one consumer's target representation or physical layout — that remains
+a review concern, not an automated one. A separate test proves the seam
+itself is generic in practice: a throwaway, non-ILC consumer that defines its
+own target expression type, registers handlers for two concrete operators,
+supplies one supported fusion hook, and lowers a real traced graph through
+this seam using only the public `tinychain.autodiff` names above.
+
 ### Executor auth and routing contract
 
 `tc.backend(...)` uses one remote auth rule:
