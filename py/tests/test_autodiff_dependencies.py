@@ -554,3 +554,67 @@ def test_node_output_without_metadata_raises_missing_dtype_metadata():
     )
 
     _assert_category("missing_dtype_metadata", lambda: analyze_graph_dependencies(graph))
+
+
+# --------------------------------------------------------------------------
+# AC4b — malformed seed identifier shapes fail with a categorized error, not
+# a raw TypeError, matching the sibling selected-output guard's convention
+# --------------------------------------------------------------------------
+
+
+def _minimal_derivative_setup() -> tuple[TensorGraph, DerivativeProgram]:
+    forward_graph = TensorGraph(
+        nodes=[],
+        inputs=[("parameter", _typespec("f32", [2]))],
+        outputs=["parameter"],
+    )
+    program = _derivative_program(
+        nodes=[_node("an0", "local", ["parameter"], _typespec("f32", [2]))],
+        gradients={"parameter": "local"},
+    )
+    return forward_graph, program
+
+
+@pytest.mark.parametrize(
+    "malformed_seed_value_ids",
+    [None, "not-a-sequence", [123], [""]],
+    ids=["none", "bare-string", "non-string-element", "empty-string-element"],
+)
+def test_malformed_seed_value_ids_raise_invalid_selected_output(malformed_seed_value_ids):
+    forward_graph, program = _minimal_derivative_setup()
+
+    _assert_category(
+        "invalid_selected_output",
+        lambda: analyze_derivative_dependencies(
+            program,
+            forward_graph=forward_graph,
+            seed_value_ids=malformed_seed_value_ids,
+        ),
+    )
+
+
+# --------------------------------------------------------------------------
+# AC — reachability over a deep chain does not exhaust the recursion limit
+# --------------------------------------------------------------------------
+
+
+def _deep_chain_graph(depth: int) -> TensorGraph:
+    typespec = _typespec("f32", [2])
+    nodes: list[TensorNodeRecord] = []
+    previous = "v0"
+    for index in range(1, depth + 1):
+        current = f"v{index}"
+        nodes.append(_node(f"n{index}", current, [previous], typespec))
+        previous = current
+    return TensorGraph(nodes=nodes, inputs=[("v0", typespec)], outputs=[previous])
+
+
+def test_deep_forward_graph_analyzes_without_recursion_error():
+    depth = 1200
+    graph = _deep_chain_graph(depth)
+
+    analysis = analyze_graph_dependencies(graph)
+
+    assert [dependency.value_id for dependency in analysis.local_values] == [
+        f"v{index}" for index in range(1, depth + 1)
+    ]

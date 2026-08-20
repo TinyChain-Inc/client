@@ -1001,3 +1001,51 @@ def test_a_keyboard_interrupt_from_a_handler_propagates_uncaught():
 
     with pytest.raises(KeyboardInterrupt):
         _lower(graph, _registry(InterruptingHandler(AddOperator)))
+
+
+# --------------------------------------------------------------------------
+# malformed seed identifier shapes fail categorized through lowering too
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "malformed_seed_value_ids",
+    [None, "not-a-sequence", [123], [""]],
+    ids=["none", "bare-string", "non-string-element", "empty-string-element"],
+)
+def test_malformed_seed_value_ids_raise_invalid_selected_output(malformed_seed_value_ids):
+    trace, _images, weights, _labels, loss = _trace_linear_mse()
+    graph = trace.build(outputs=loss)
+    program = trace.vjp(loss, wrt=[weights], seed="seed")
+
+    _assert_category(
+        "invalid_selected_output",
+        lambda: lower_derivative_program(
+            program,
+            forward_graph=graph,
+            seed_value_ids=malformed_seed_value_ids,
+            handlers=_full_registry(),
+            bind_input=_bind_input,
+        ),
+    )
+
+
+# --------------------------------------------------------------------------
+# reachability over a deep chain does not exhaust the recursion limit
+# --------------------------------------------------------------------------
+
+
+def test_deep_forward_graph_lowers_without_recursion_error():
+    depth = 1200
+    typespec = _matrix()
+    nodes: list[TensorNodeRecord] = []
+    previous = "v0"
+    for index in range(1, depth + 1):
+        current = f"v{index}"
+        nodes.append(_node(f"n{index}", current, MulOperator(), [previous], typespec))
+        previous = current
+    graph = TensorGraph(nodes=nodes, inputs=[("v0", typespec)], outputs=[previous])
+
+    lowered = _lower(graph, _registry(FakeHandler(MulOperator, "fake.mul")))
+
+    assert len(lowered.operations) == depth
