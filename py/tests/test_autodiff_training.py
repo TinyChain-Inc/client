@@ -20,6 +20,8 @@ from tinychain.autodiff import (
     MulOperator,
     SubOperator,
     TensorGraphBuilder,
+    TensorNodeRecord,
+    TensorOperator,
     get_active_builder,
 )
 from tinychain.autodiff.dependencies import analyze_graph_dependencies
@@ -281,6 +283,27 @@ def test_training_module_contains_no_manual_graph_record_construction() -> None:
     )
     for token in forbidden_constructors:
         assert token not in source, f"found manual graph-record construction: {token!r}"
+
+    # Token matching over source text is evadable: an import alias
+    # (`from .graph import MulOperator as Scale`) or construction moved into a
+    # module-level helper reached through attribute access neither contains a
+    # forbidden literal call token in this module's own source. Neither can
+    # avoid binding a name in this module's namespace, though -- a
+    # `TensorOperator` subclass or `TensorNodeRecord` itself would still show
+    # up there under whatever name it was imported or assigned as. Checking
+    # the namespace directly catches both evasions the token scan above
+    # cannot.
+    for name, value in vars(training).items():
+        if name.startswith("__"):
+            continue
+        assert value is not TensorNodeRecord, (
+            f"training module namespace binds TensorNodeRecord as {name!r}"
+        )
+        if isinstance(value, type) and issubclass(value, TensorOperator):
+            raise AssertionError(
+                "training module namespace binds TensorOperator subclass "
+                f"{value!r} as {name!r}"
+            )
 
 
 def test_sgd_update_example_contains_no_manual_graph_record_construction() -> None:
