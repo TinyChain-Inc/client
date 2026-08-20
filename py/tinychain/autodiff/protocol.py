@@ -36,6 +36,16 @@ AUTODIFF_ERROR_CATEGORIES: tuple[str, ...] = (
     "missing_dependency",
     "ambiguous_producer",
     "invalid_selected_output",
+    # Framework-owned program lowering. `details` are carried in the message as
+    # the offending node ids, value ids, or operator route names.
+    #   handler_contract_violation: a consumer handler, handler registration, or
+    #                               fusion hook broke the lowering seam contract
+    #                               (no target value emitted, an uncategorized
+    #                               failure, two handlers for one operator type,
+    #                               or a fusion claiming operations it was not
+    #                               offered, claiming none of them, claiming one
+    #                               twice, or discarding a value still needed)
+    "handler_contract_violation",
 )
 
 
