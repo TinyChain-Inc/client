@@ -45,7 +45,12 @@ Malformed selections fail closed with categorized :class:`AutodiffError` values
 rather than a raw container exception: ``ambiguous_producer`` when one value
 would carry two provenances or two nodes produce the same value,
 ``invalid_selected_output`` when a selection is empty or names an unknown value,
-``malformed_derivative_ir`` when the reachable region contains a cycle,
+``malformed_derivative_ir`` when a cycle is found -- reachability-scoped for a
+forward graph and for the derivative program itself, but for the forward-graph
+half of a derivative-program analysis gated on whether the selection captures
+anything from the forward graph at all, not on whether a given cycle is
+reachable (see the comment at the forward-capture check in
+``analyze_derivative_dependencies`` for the exact boundary),
 ``missing_dependency`` when a reachable value has no producer and no provenance,
 and ``missing_dtype_metadata`` / ``missing_shape_metadata`` when type metadata is
 incomplete.

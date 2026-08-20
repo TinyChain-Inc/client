@@ -526,10 +526,12 @@ def test_cycle_within_the_derivative_program_raises_malformed_derivative_ir():
 
 
 def test_forward_graph_cycle_reachable_through_a_forward_capture_still_raises():
-    """A cycle in the forward graph that produces a value the derivative
-    selection genuinely captures must still fail -- the skip is only
-    authorized when the selection captures nothing from the forward graph
-    at all, not when it captures something downstream of a cycle."""
+    """A cycle in the forward graph still fails when the selection captures
+    any forward value: capturing anything at all -- not just a value
+    downstream of the cycle -- gates the whole-forward-graph walk back on,
+    and that walk checks every node in the forward graph, so the cycle here
+    (which happens to also produce the captured value) is found regardless
+    of the exact relationship between the two."""
     forward_graph = TensorGraph(
         nodes=[
             _node("f0", "left", ["right"], _typespec("f32", [2])),
@@ -551,12 +553,16 @@ def test_forward_graph_cycle_reachable_through_a_forward_capture_still_raises():
     )
 
 
-def test_forward_graph_cycle_unreached_by_the_selection_is_not_reported():
-    """A forward-graph cycle that no selected output and no captured value
-    can reach is deliberately not reported: the derivative selection here
-    depends only on a declared forward input, never touching the cyclic
-    region, so the whole-forward-graph topological sort that would have
-    found it is skipped by design, not by accident."""
+def test_forward_graph_cycle_is_not_reported_when_the_selection_captures_nothing():
+    """A forward-graph cycle is not reported when the selection captures no
+    forward value at all: the derivative selection here depends only on a
+    declared forward input, so no forward capture exists, the whole-forward-
+    graph topological sort is skipped by design, and the cycle inside it goes
+    unreported as a deliberate consequence -- not because the cycle happens
+    to be unreachable from what was captured. (When at least one forward
+    value is captured, the whole forward graph is walked and any cycle in it
+    is found, including one unrelated to what was captured -- see the
+    forward-capture test above.)"""
     forward_graph = TensorGraph(
         nodes=[
             _node("f0", "left", ["right"], _typespec("f32", [2])),
