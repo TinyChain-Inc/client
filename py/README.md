@@ -740,15 +740,26 @@ target program is produced: `missing_dependency` (a reachable value has no
 producer and no provenance), `ambiguous_producer` (one value would carry two
 provenances, or two nodes produce the same value), `invalid_selected_output`
 (the selection is empty or names an unknown value), `malformed_derivative_ir`
-(a cycle in the reachable region), and `missing_dtype_metadata` /
-`missing_shape_metadata` (incomplete type metadata on a value that requires
-it). Analysis for a forward graph requires complete metadata everywhere,
-matching typed-graph finalization; analysis for a derivative program is
-best-effort where the program itself is best-effort, resolving metadata from
-the program's recorded value typespecs first, then its nodes, then the
-forward graph, and reporting `dtype=None`/`shape=None` only where no metadata
-exists anywhere for that value — metadata that is present anywhere must still
-be complete.
+(a cycle), and `missing_dtype_metadata` / `missing_shape_metadata` (incomplete
+type metadata on a value that requires it). Analysis for a forward graph
+requires complete metadata everywhere, matching typed-graph finalization;
+analysis for a derivative program is best-effort where the program itself is
+best-effort, resolving metadata from the program's recorded value typespecs
+first, then its nodes, then the forward graph, and reporting
+`dtype=None`/`shape=None` only where no metadata exists anywhere for that
+value — metadata that is present anywhere must still be complete.
+
+Cycle detection is reachability-scoped for a forward graph and for the
+derivative program itself: `malformed_derivative_ir` fires exactly when the
+reachable region contains one. For the *forward graph* half of a
+derivative-program analysis, it is not reachability-scoped — it is gated on
+whether the selection captures anything from the forward graph at all.
+Capturing no forward value skips walking the forward graph entirely, so a
+cycle anywhere in it, related to the selection or not, is not reported.
+Capturing any forward value walks the whole forward graph, so a cycle
+anywhere in it is reported, even one with no relationship to what was
+captured. This is a deliberate, coarser boundary, not a precise "was this
+particular cycle on the path to a captured value" check.
 
 #### Extensible program lowering
 
@@ -809,7 +820,13 @@ Lowering runs dependency analysis first, so a lowering call can also fail
 with any category that analysis raises: `missing_dependency`,
 `ambiguous_producer`, `invalid_selected_output`, `malformed_derivative_ir`,
 and the metadata categories `missing_dtype_metadata` and
-`missing_shape_metadata`.
+`missing_shape_metadata`. For a derivative program, `malformed_derivative_ir`
+is not a guarantee that every cycle is caught before lowering runs: it always
+fires for a cycle inside the derivative program itself, but a cycle in the
+forward graph is only found when the selection captures some forward value —
+see "when a cycle is and is not reported" above. Lowering a program built
+from a forward graph with an unreported cycle can still fail later, from
+whatever the fused or per-operation handlers do with the resulting values.
 
 #### Traced optimizer updates
 

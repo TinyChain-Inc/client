@@ -296,9 +296,18 @@ def analyze_derivative_dependencies(
         for value_id in free_value_ids
     )
     if has_forward_captures:
-        # The whole forward graph is only walked when the selection actually
-        # captures a forward-produced value; a selection with none of those
-        # gains nothing from sorting a graph it never reports on.
+        # This is also the only forward-graph cycle check: `_topological_nodes`
+        # walks every node of `forward_graph`, not just the ones between a
+        # capture and its consumer. The boundary this skip draws is therefore
+        # gated on whether ANY forward value is captured, not on whether a
+        # given cycle is reachable from one:
+        #   - no capture at all  -> the forward graph is never walked, so a
+        #     cycle anywhere in it, related or not, is not reported.
+        #   - at least one capture -> the whole forward graph is walked, so
+        #     every cycle in it is found, including one with no relationship
+        #     to what was actually captured.
+        # A precisely reachability-scoped cycle check (walk only from each
+        # captured value) is a different, larger change and is not made here.
         for node in _topological_nodes(forward_graph):
             value_id = node.output_value_id
             if value_id in free_value_ids:
