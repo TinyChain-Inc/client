@@ -3,8 +3,8 @@
 These tests pin the contract that an optimizer update -- an SGD step in
 particular -- is authored as plain Tensor code, traced through the same
 public builder path as an application loss, and validated/compiled through
-the existing structured dependency analysis (T-01) and extensible lowering
-seam (T-02). No manual `TensorNodeRecord`/`TensorOperator` construction is
+the existing structured dependency analysis and extensible program lowering
+seam. No manual `TensorNodeRecord`/`TensorOperator` construction is
 allowed in production or example code (spec invariant 6).
 """
 

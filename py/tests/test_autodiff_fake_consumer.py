@@ -217,13 +217,15 @@ def test_fake_consumer_module_imports_no_private_autodiff_submodule() -> None:
     import tests.test_autodiff_fake_consumer as this_module
 
     tree = ast.parse(inspect.getsource(this_module))
-    imported_modules = [
+    tinychain_imports = [
         node.module
         for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom) and node.module
+        if isinstance(node, ast.ImportFrom)
+        and node.module
+        and node.module.startswith("tinychain")
     ]
-    assert imported_modules
-    for module_name in imported_modules:
+    assert tinychain_imports
+    for module_name in tinychain_imports:
         assert module_name == "tinychain.autodiff", (
             f"fake consumer must import only the public package, found {module_name!r}"
         )
