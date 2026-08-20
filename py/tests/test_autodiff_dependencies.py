@@ -500,6 +500,86 @@ def test_cycle_raises_malformed_derivative_ir():
     _assert_category("malformed_derivative_ir", lambda: analyze_graph_dependencies(graph))
 
 
+def test_cycle_within_the_derivative_program_raises_malformed_derivative_ir():
+    """A cycle reachable from a selected output, entirely inside the derivative
+    program itself, still fails -- this path never routed through the
+    forward-graph topological sort and is unaffected by skipping it."""
+    forward_graph = TensorGraph(
+        nodes=[],
+        inputs=[("parameter", _typespec("f32", [2]))],
+        outputs=["parameter"],
+    )
+    program = _derivative_program(
+        nodes=[
+            _node("an0", "left", ["right"], _typespec("f32", [2])),
+            _node("an1", "right", ["left"], _typespec("f32", [2])),
+        ],
+        gradients={"parameter": "left"},
+    )
+
+    _assert_category(
+        "malformed_derivative_ir",
+        lambda: analyze_derivative_dependencies(
+            program, forward_graph=forward_graph, seed_value_ids=()
+        ),
+    )
+
+
+def test_forward_graph_cycle_reachable_through_a_forward_capture_still_raises():
+    """A cycle in the forward graph that produces a value the derivative
+    selection genuinely captures must still fail -- the skip is only
+    authorized when the selection captures nothing from the forward graph
+    at all, not when it captures something downstream of a cycle."""
+    forward_graph = TensorGraph(
+        nodes=[
+            _node("f0", "left", ["right"], _typespec("f32", [2])),
+            _node("f1", "right", ["left"], _typespec("f32", [2])),
+        ],
+        inputs=[],
+        outputs=["left"],
+    )
+    program = _derivative_program(
+        nodes=[_node("an0", "local", ["left"], _typespec("f32", [2]))],
+        gradients={"unused": "local"},
+    )
+
+    _assert_category(
+        "malformed_derivative_ir",
+        lambda: analyze_derivative_dependencies(
+            program, forward_graph=forward_graph, seed_value_ids=()
+        ),
+    )
+
+
+def test_forward_graph_cycle_unreached_by_the_selection_is_not_reported():
+    """A forward-graph cycle that no selected output and no captured value
+    can reach is deliberately not reported: the derivative selection here
+    depends only on a declared forward input, never touching the cyclic
+    region, so the whole-forward-graph topological sort that would have
+    found it is skipped by design, not by accident."""
+    forward_graph = TensorGraph(
+        nodes=[
+            _node("f0", "left", ["right"], _typespec("f32", [2])),
+            _node("f1", "right", ["left"], _typespec("f32", [2])),
+        ],
+        inputs=[("parameter", _typespec("f32", [2]))],
+        outputs=["left"],
+    )
+    program = _derivative_program(
+        nodes=[_node("an0", "local", ["parameter"], _typespec("f32", [2]))],
+        gradients={"parameter": "local"},
+    )
+
+    analysis = analyze_derivative_dependencies(
+        program, forward_graph=forward_graph, seed_value_ids=()
+    )
+
+    provenance = _provenance_map(analysis)
+    assert provenance["parameter"] == DEPENDENCY_PROVENANCE_DECLARED_INPUT
+    assert "left" not in provenance
+    assert "right" not in provenance
+
+
 def test_unknown_selected_output_raises_invalid_selected_output():
     graph = TensorGraph(
         nodes=[_node("n0", "out", ["alpha"], _typespec("f32", [2]))],
