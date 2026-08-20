@@ -77,17 +77,6 @@ LOWERING_CLAIM_HANDLER = "handler"
 #: An operation replaced, together with its fused neighbours, by one instruction.
 LOWERING_CLAIM_FUSION = "fusion"
 
-#: Exceptions a consumer callback may leak that become a contract violation.
-_CONSUMER_FAILURES = (
-    AssertionError,
-    AttributeError,
-    IndexError,
-    KeyError,
-    TypeError,
-    ValueError,
-)
-
-
 @dataclass(frozen=True)
 class OperationContext:
     """One reachable operation, normalized for a consumer handler.
@@ -121,8 +110,9 @@ class OperationHandler(Protocol):
         """Return the consumer's target value for *context*.
 
         Reporting the operation unsupported means raising
-        ``AutodiffError("unsupported_operator", ...)``. Returning nothing, or
-        failing with an uncategorized exception, is a contract violation.
+        ``AutodiffError("unsupported_operator", ...)``, which propagates with the
+        consumer's own category. Returning nothing, or failing with any other
+        ordinary exception, is a contract violation and is reported as one.
         """
 
 
@@ -143,13 +133,16 @@ class FusionContext:
 
 @dataclass(frozen=True)
 class FusionResult:
-    """One consumer instruction replacing a contiguous run of operations.
+    """One consumer instruction replacing a set of operations.
 
     ``consumed_node_ids`` must be a subset of the offered candidates, must be
-    free of repeats, and must include the offered operation. Exactly one of the
-    consumed operations may have a value that is still needed outside the region
-    -- that value becomes ``value``; a region that would discard a second such
-    value is rejected rather than silently dropped.
+    free of repeats, and must include the offered operation. The claimed
+    operations need not be adjacent, but every operand they read must already be
+    bound or be produced by another operation inside the set, so the region can
+    be emitted as a single instruction. Exactly one of the consumed operations
+    may have a value that is still needed outside the region -- that value
+    becomes ``value``; a region that would discard a second such value is
+    rejected rather than silently dropped.
     """
 
     value: object
@@ -474,6 +467,12 @@ def _lower_fused(
         )
 
     consumed = _fusion_consumed_node_ids(result, offered=offered, candidates=candidates)
+    _require_fusion_operands_available(
+        consumed,
+        offered=offered,
+        nodes_by_id=nodes_by_id,
+        values=values,
+    )
     result_value_id = _fusion_result_value_id(
         consumed,
         offered=offered,
@@ -757,6 +756,45 @@ def _fusion_consumed_node_ids(
     return tuple(node_id for node_id in offered_ids if node_id in claimed)
 
 
+def _require_fusion_operands_available(
+    consumed: tuple[str, ...],
+    *,
+    offered: TensorNodeRecord,
+    nodes_by_id: Mapping[str, TensorNodeRecord],
+    values: Mapping[str, object],
+) -> None:
+    """Require every operand of a fused region to exist when the region is emitted.
+
+    A fused region becomes one instruction, so it may only read values that are
+    already bound or that it produces itself. Claiming past an operation whose
+    output the region still consumes would emit the region before that operand
+    exists, leaving a program in an order no consumer can execute. The
+    single-handler path already has this guarantee, because
+    :func:`_operation_context` resolves every operand through :func:`_value_of`
+    and fails closed on an unbound one; without this check the fusion path would
+    be the one route into the program that does not.
+
+    The rule is operand availability, deliberately not adjacency in traversal
+    order. A hook sees the operations it is offered and never their positions, so
+    an adjacency check would refuse a legal claim for a reason the consumer
+    cannot observe, and it would quietly change meaning if the traversal order
+    were ever revised. Availability is a property of the claimed set itself and
+    stays correct either way, so it is the rule to keep even where the two
+    happen to coincide.
+    """
+    produced = {nodes_by_id[node_id].output_value_id for node_id in consumed}
+    for node_id in consumed:
+        for value_id in nodes_by_id[node_id].input_value_ids:
+            if value_id in values or value_id in produced:
+                continue
+            raise AutodiffError(
+                "handler_contract_violation",
+                f"the fusion offered operation {offered.node_id!r} claims operation "
+                f"{node_id!r}, which reads value {value_id!r}: that value is neither "
+                "already bound nor produced by the claimed operations",
+            )
+
+
 def _fusion_result_value_id(
     consumed: tuple[str, ...],
     *,
@@ -816,12 +854,24 @@ def _default_bind_input(dependency: ValueDependency) -> object:
 
 
 def _call_consumer(callback: Callable[..., object], argument: object) -> object:
-    """Invoke a consumer callback, categorizing anything uncategorized it leaks."""
+    """Invoke a consumer callback, categorizing any uncategorized failure it leaks.
+
+    A consumer that already reported a categorized :class:`AutodiffError` keeps
+    its own category. Every other ordinary exception becomes
+    ``handler_contract_violation``, including a consumer's own exception classes,
+    which the framework has no way to enumerate ahead of time -- so an
+    uncategorized failure cannot escape the seam.
+
+    ``KeyboardInterrupt`` and ``SystemExit`` deliberately do not become contract
+    violations. They are interpreter control flow rather than a consumer
+    reporting that it could not lower an operation, and swallowing them would
+    make a cancelled run indistinguishable from a broken handler.
+    """
     try:
         return callback(argument)
     except AutodiffError:
         raise
-    except _CONSUMER_FAILURES as exc:
+    except Exception as exc:
         raise AutodiffError(
             "handler_contract_violation",
             f"consumer callback {getattr(callback, '__qualname__', callback)!r} "
