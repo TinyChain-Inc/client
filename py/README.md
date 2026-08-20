@@ -729,8 +729,10 @@ category. Ordering is deterministic and documented: dependencies are grouped
 in `DEPENDENCY_PROVENANCE_ORDER`, declared inputs follow forward-graph
 declaration order, seeds follow caller declaration order, forward captures
 follow forward-graph topological order, and local values follow the
-topological order of the analyzed selection — so repeated analyses of
-equivalent traces compare equal. A consumer never needs a private node map,
+analyzed selection's schedule — topologically valid, with each operation
+emitted as late as its consumers allow, so a producer stays next to the
+operation that reads it and a consumer's bounded fusion window can see the
+two together — so repeated analyses of equivalent traces compare equal. A consumer never needs a private node map,
 an ID-prefix convention, or a producer scan to work out what to bind; the
 analysis is structural, never derived from how a value id happens to be
 spelled.
