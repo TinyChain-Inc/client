@@ -1049,3 +1049,138 @@ def test_deep_forward_graph_lowers_without_recursion_error():
     lowered = _lower(graph, _registry(FakeHandler(MulOperator, "fake.mul")))
 
     assert len(lowered.operations) == depth
+
+
+# --------------------------------------------------------------------------
+# the motivating fusion: a transpose into a matmul whose other operand
+# arrives from an independent chain
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class TransposeWithoutStandaloneSupport:
+    """A consumer that can only express a transpose folded into a matmul.
+
+    Registering it satisfies the pre-flight support check, which resolves a
+    handler for every reachable operation without calling it. Reaching
+    ``lower`` for one of ``must_be_fused`` means the transpose fell through to
+    a per-operator handler this consumer does not really have, so a fusion that
+    silently failed to happen fails the test loudly instead of passing.
+    """
+
+    must_be_fused: frozenset[str]
+    operator_type: type = TransposeOperator
+
+    def lower(self, context: OperationContext) -> object:
+        if context.node_id in self.must_be_fused:
+            raise AssertionError(
+                f"transpose {context.node_id!r} feeding a matmul reached the "
+                "standalone handler instead of being offered for fusion"
+            )
+        return FakeTarget("fake.transpose", tuple(context.inputs))
+
+
+def _independent_operand_fusion_graph() -> TensorGraph:
+    """transpose(alpha) @ (beta + beta) — the matmul's operands are independent."""
+    return TensorGraph(
+        nodes=[
+            _node(
+                "n0",
+                "alpha_t",
+                TransposeOperator(),
+                ["alpha"],
+                _typespec("f32", [3, 2]),
+                {"perm": [1, 0]},
+            ),
+            _node("n1", "beta_sum", AddOperator(), ["beta", "beta"], _typespec("f32", [2, 4])),
+            _node("n2", "out", MatmulOperator(), ["alpha_t", "beta_sum"], _typespec("f32", [3, 4])),
+        ],
+        inputs=[("alpha", _typespec("f32", [2, 3])), ("beta", _typespec("f32", [2, 4]))],
+        outputs=["out"],
+    )
+
+
+def _registry_requiring_fusion(must_be_fused: set[str]) -> OperationHandlerRegistry:
+    registry = OperationHandlerRegistry()
+    for operator_type in CONCRETE_OPERATOR_TYPES:
+        if operator_type is TransposeOperator:
+            continue
+        registry.register(FakeHandler(operator_type, f"fake.{operator_type.__name__}"))
+    registry.register(TransposeWithoutStandaloneSupport(frozenset(must_be_fused)))
+    return registry
+
+
+def _trace_transposed_product():
+    """mean(transpose(a) @ (b + b)) — the specification's motivating shape."""
+    trace = TensorGraphBuilder()
+    with tc.state.scoped_context():
+        with trace:
+            alpha = trace.input("alpha", dtype="f32", shape=(2, 3))
+            beta = trace.input("beta", dtype="f32", shape=(2, 4))
+            product = alpha.transpose([1, 0]) @ (beta + beta)
+            loss = product.mean([0, 1])
+    return trace, alpha, beta, loss
+
+
+def test_a_transpose_fuses_into_its_matmul_when_the_other_operand_is_an_independent_chain():
+    """The specification's motivating fusion, on the shape that breaks it: the
+    matmul's second operand comes from a chain the transpose has nothing to do
+    with. The consumer cannot lower a transpose that feeds a matmul on its own,
+    so the pair must be offered together or the lowering fails."""
+    graph = _independent_operand_fusion_graph()
+    fusion = TransposeMatmulFusion()
+
+    lowered = _lower(graph, _registry_requiring_fusion({"n0"}), fusion=fusion)
+
+    fused = [
+        operation.source_node_ids for operation in lowered.operations if operation.is_fused
+    ]
+    assert fused == [("n0", "n2")]
+    assert lowered.values["out"].kind == "fake.transposed_matmul"
+
+
+@pytest.mark.parametrize("differentiated", ["alpha", "beta"])
+def test_the_transpose_matmul_fusion_is_expressible_for_either_differentiated_parameter(
+    differentiated: str,
+):
+    """The same consumer and the same hook must express the fusion whichever
+    parameter was differentiated. Differentiating the other one reverses the
+    generated matmul's operand order, which is a framework-internal detail a
+    consumer can neither predict nor work around."""
+    trace, alpha, beta, loss = _trace_transposed_product()
+    forward_graph = trace.build(outputs=[loss])
+    wrt = alpha if differentiated == "alpha" else beta
+    program = trace.vjp(loss, wrt=[wrt], seed="seed")
+
+    matmuls = {
+        node.node_id: node
+        for node in program.nodes
+        if isinstance(node.operator, MatmulOperator)
+    }
+    assert matmuls, "the generated derivative must contain a matmul to fuse into"
+    must_be_fused = {
+        node.node_id
+        for node in program.nodes
+        if isinstance(node.operator, TransposeOperator)
+        and any(
+            node.output_value_id in matmul.input_value_ids for matmul in matmuls.values()
+        )
+    }
+    assert must_be_fused, "the generated derivative must transpose into a matmul"
+
+    fusion = TransposeMatmulFusion()
+    lowered = lower_derivative_program(
+        program,
+        forward_graph=forward_graph,
+        seed_value_ids=["seed"],
+        handlers=_registry_requiring_fusion(must_be_fused),
+        fusion=fusion,
+        bind_input=_bind_input,
+    )
+
+    fused = [
+        operation.source_node_ids for operation in lowered.operations if operation.is_fused
+    ]
+    assert len(fused) == len(must_be_fused)
+    assert {node_ids[0] for node_ids in fused} == must_be_fused
+    assert all(node_ids[1] in matmuls for node_ids in fused)

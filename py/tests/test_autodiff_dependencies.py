@@ -7,6 +7,11 @@ map, and without any convention about how value ids are spelled.
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+import textwrap
+
 import pytest
 import tinychain as tc
 from tinychain.autodiff import (
@@ -525,7 +530,7 @@ def test_cycle_within_the_derivative_program_raises_malformed_derivative_ir():
     )
 
 
-def test_forward_graph_cycle_reachable_through_a_forward_capture_still_raises():
+def test_forward_graph_cycle_is_reported_when_the_selection_captures_any_forward_value():
     """A cycle in the forward graph still fails when the selection captures
     any forward value: capturing anything at all -- not just a value
     downstream of the cycle -- gates the whole-forward-graph walk back on,
@@ -704,3 +709,287 @@ def test_deep_forward_graph_analyzes_without_recursion_error():
     assert [dependency.value_id for dependency in analysis.local_values] == [
         f"v{index}" for index in range(1, depth + 1)
     ]
+
+
+# --------------------------------------------------------------------------
+# an unrelated forward-graph cycle is still reported once anything is captured
+# --------------------------------------------------------------------------
+
+
+def test_an_unrelated_forward_graph_cycle_is_reported_when_a_forward_value_is_captured():
+    """A forward-graph cycle with no relationship at all to the captured value
+    is still reported. The sibling tests cover a cycle that itself produces the
+    captured value; this one separates the two, because the rule is gated on
+    whether the selection captures anything -- not on whether the cycle is
+    reachable from what was captured. Without this, the surprising half of the
+    rule is described in prose and constrained by nothing."""
+    forward_graph = TensorGraph(
+        nodes=[
+            _node("f0", "left", ["right"], _typespec("f32", [2])),
+            _node("f1", "right", ["left"], _typespec("f32", [2])),
+            _node("f2", "h", ["p"], _typespec("f32", [2])),
+        ],
+        inputs=[("p", _typespec("f32", [2]))],
+        outputs=["h"],
+    )
+    program = _derivative_program(
+        nodes=[_node("an0", "local", ["h"], _typespec("f32", [2]))],
+        gradients={"p": "local"},
+    )
+
+    _assert_category(
+        "malformed_derivative_ir",
+        lambda: analyze_derivative_dependencies(
+            program, forward_graph=forward_graph, seed_value_ids=()
+        ),
+    )
+
+
+# --------------------------------------------------------------------------
+# emission order: each operation is scheduled as late as its consumers allow
+# --------------------------------------------------------------------------
+
+
+def _emission_order(graph: TensorGraph, outputs: list[str] | None = None) -> list[str]:
+    """The value ids of the analyzed selection's own operations, in emission order."""
+    analysis = analyze_graph_dependencies(graph, outputs=outputs)
+    return [dependency.value_id for dependency in analysis.local_values]
+
+
+def _independent_operand_graph() -> TensorGraph:
+    """transpose(a) @ (b + b): the matmul's operands come from two independent chains."""
+    typespec = _typespec("f32", [2, 2])
+    return TensorGraph(
+        nodes=[
+            _node("n0", "a_t", ["a"], typespec),
+            _node("n1", "bb", ["b", "b"], typespec),
+            _node("n2", "out", ["a_t", "bb"], typespec),
+        ],
+        inputs=[("a", typespec), ("b", typespec)],
+        outputs=["out"],
+    )
+
+
+def _split_chain_graph(transpose_operand_position: int) -> TensorGraph:
+    """One long producer chain and one single operation, joined by one consumer.
+
+    ``transpose_operand_position`` decides whether the single operation is the
+    consumer's first or second operand. Nothing about the graph's meaning
+    changes with it, so nothing about the emission order should either -- that
+    is exactly the asymmetry a differentiated-parameter change introduces.
+    """
+    typespec = _typespec("f32", [2, 2])
+    operands = ["t", "c3"] if transpose_operand_position == 0 else ["c3", "t"]
+    return TensorGraph(
+        nodes=[
+            _node("nc1", "c1", ["p"], typespec),
+            _node("nc2", "c2", ["c1"], typespec),
+            _node("nc3", "c3", ["c2"], typespec),
+            _node("nt", "t", ["x"], typespec),
+            _node("nout", "out", operands, typespec),
+        ],
+        inputs=[("p", typespec), ("x", typespec)],
+        outputs=["out"],
+    )
+
+
+def test_a_producer_is_emitted_immediately_before_the_consumer_that_reads_it():
+    """The transpose is emitted next to the matmul that consumes it, and the
+    independent chain producing the other operand is pushed ahead of both. A
+    producer emitted as early as its own operands allow instead lands at the
+    front, separated from its consumer by work that has nothing to do with it."""
+    order = _emission_order(_independent_operand_graph())
+
+    assert order == ["bb", "a_t", "out"]
+
+
+@pytest.mark.parametrize("transpose_operand_position", [0, 1])
+def test_the_shortest_producer_chain_is_emitted_next_to_its_consumer(
+    transpose_operand_position: int,
+):
+    """Two graphs that differ only in operand order schedule identically: the
+    long chain is emitted first because it needs the room, and the single
+    operation stays beside the consumer that reads it."""
+    graph = _split_chain_graph(transpose_operand_position)
+
+    order = _emission_order(graph)
+
+    assert order == ["c1", "c2", "c3", "t", "out"]
+
+
+def _ordering_shape_catalogue() -> list[tuple[str, TensorGraph, list[str] | None]]:
+    """Graph shapes whose emission order the scheduler must keep executable."""
+    typespec = _typespec("f32", [2, 2])
+    chain = TensorGraph(
+        nodes=[
+            _node("n0", "v1", ["v0"], typespec),
+            _node("n1", "v2", ["v1"], typespec),
+            _node("n2", "v3", ["v2"], typespec),
+        ],
+        inputs=[("v0", typespec)],
+        outputs=["v3"],
+    )
+    diamond = TensorGraph(
+        nodes=[
+            _node("n0", "left", ["root"], typespec),
+            _node("n1", "right", ["root"], typespec),
+            _node("n2", "joined", ["left", "right"], typespec),
+        ],
+        inputs=[("root", typespec)],
+        outputs=["joined"],
+    )
+    fan_in = TensorGraph(
+        nodes=[
+            _node("n0", "one", ["alpha"], typespec),
+            _node("n1", "two", ["beta"], typespec),
+            _node("n2", "three", ["gamma"], typespec),
+            _node("n3", "pair", ["one", "two"], typespec),
+            _node("n4", "all", ["pair", "three"], typespec),
+        ],
+        inputs=[("alpha", typespec), ("beta", typespec), ("gamma", typespec)],
+        outputs=["all"],
+    )
+    repeated_operand = TensorGraph(
+        nodes=[
+            _node("n0", "doubled", ["alpha", "alpha"], typespec),
+            _node("n1", "again", ["doubled", "doubled"], typespec),
+        ],
+        inputs=[("alpha", typespec)],
+        outputs=["again"],
+    )
+    shared_producer = TensorGraph(
+        nodes=[
+            _node("n0", "shared", ["alpha"], typespec),
+            _node("n1", "first", ["shared", "beta"], typespec),
+            _node("n2", "second", ["shared", "gamma"], typespec),
+        ],
+        inputs=[("alpha", typespec), ("beta", typespec), ("gamma", typespec)],
+        outputs=["first", "second"],
+    )
+    partially_selected = TensorGraph(
+        nodes=[
+            _node("n0", "used", ["alpha"], typespec),
+            _node("n1", "unused", ["beta"], typespec),
+            _node("n2", "out", ["used", "gamma"], typespec),
+        ],
+        inputs=[("alpha", typespec), ("beta", typespec), ("gamma", typespec)],
+        outputs=["out", "unused"],
+    )
+    return [
+        ("chain", chain, None),
+        ("diamond", diamond, None),
+        ("fan-in", fan_in, None),
+        ("repeated operand", repeated_operand, None),
+        ("shared producer", shared_producer, None),
+        ("independent operands", _independent_operand_graph(), None),
+        ("split chain, first operand", _split_chain_graph(0), None),
+        ("split chain, second operand", _split_chain_graph(1), None),
+        ("narrowed selection", partially_selected, ["out"]),
+        ("deep chain", _deep_chain_graph(64), None),
+    ]
+
+
+def test_emission_order_places_every_operand_before_the_operation_reading_it():
+    """Topological validity checked as a property of the order itself, not
+    inferred from a consumer that happens to succeed: at each position, every
+    value the operation reads is either free or already emitted."""
+    for label, graph, outputs in _ordering_shape_catalogue():
+        analysis = analyze_graph_dependencies(graph, outputs=outputs)
+        emitted = [dependency.value_id for dependency in analysis.local_values]
+        produced_by = {node.output_value_id: node for node in graph.nodes}
+
+        available: set[str] = set()
+        for value_id in emitted:
+            node = produced_by[value_id]
+            for input_value_id in node.input_value_ids:
+                if input_value_id in produced_by and input_value_id in emitted:
+                    assert input_value_id in available, (
+                        f"{label}: {value_id!r} reads {input_value_id!r}, "
+                        f"which is emitted later at {emitted.index(input_value_id)}"
+                    )
+            available.add(value_id)
+
+
+def test_emission_order_contains_exactly_the_reachable_operations():
+    """Reordering may not add, drop, or duplicate an operation. The reachable
+    set is recomputed here from the graph alone, so the assertion does not
+    depend on the traversal it is checking."""
+    for label, graph, outputs in _ordering_shape_catalogue():
+        analysis = analyze_graph_dependencies(graph, outputs=outputs)
+        emitted = [dependency.value_id for dependency in analysis.local_values]
+        produced_by = {node.output_value_id: node for node in graph.nodes}
+
+        expected: set[str] = set()
+        pending = list(analysis.selected_outputs)
+        while pending:
+            value_id = pending.pop()
+            if value_id in expected or value_id not in produced_by:
+                continue
+            expected.add(value_id)
+            pending.extend(produced_by[value_id].input_value_ids)
+
+        assert len(emitted) == len(set(emitted)), f"{label}: an operation is emitted twice"
+        assert set(emitted) == expected, f"{label}: the emitted set is not the reachable set"
+
+
+def test_repeated_analyses_emit_an_identical_order():
+    """Equivalent graphs schedule identically, so a consumer may bind to the
+    order across separate analyses of the same trace."""
+    for _label, graph, outputs in _ordering_shape_catalogue():
+        first = _emission_order(graph, outputs)
+        second = _emission_order(graph, outputs)
+
+        assert first == second
+
+
+def test_emission_order_is_identical_under_varied_hash_seeds():
+    """The tie-break must not read set iteration, hash order, or object
+    identity. Each seed runs in its own interpreter, because PYTHONHASHSEED is
+    fixed at startup and cannot be varied in-process."""
+    snippet = textwrap.dedent(
+        """
+        from tinychain.autodiff import TensorGraph, TensorNodeRecord, AddOperator, MulOperator
+        from tinychain.autodiff.dependencies import analyze_graph_dependencies
+
+        typespec = {"dtype": "f32", "shape": [2, 2]}
+
+        def node(node_id, output, inputs):
+            return TensorNodeRecord(
+                node_id=node_id,
+                output_value_id=output,
+                operator=AddOperator() if len(inputs) == 2 else MulOperator(),
+                op_params={},
+                input_value_ids=list(inputs),
+                output_typespec=typespec,
+            )
+
+        graph = TensorGraph(
+            nodes=[
+                node("n0", "a_t", ["a"]),
+                node("n1", "bb", ["b", "b"]),
+                node("nc1", "c1", ["c"]),
+                node("nc2", "c2", ["c1"]),
+                node("n2", "out", ["a_t", "bb"]),
+                node("n3", "joined", ["out", "c2"]),
+            ],
+            inputs=[("a", typespec), ("b", typespec), ("c", typespec)],
+            outputs=["joined"],
+        )
+        analysis = analyze_graph_dependencies(graph)
+        print(",".join(d.value_id for d in analysis.local_values))
+        """
+    )
+
+    orders = []
+    for seed in range(5):
+        environment = dict(os.environ, PYTHONHASHSEED=str(seed))
+        completed = subprocess.run(
+            [sys.executable, "-c", snippet],
+            capture_output=True,
+            text=True,
+            check=True,
+            env=environment,
+        )
+        orders.append(completed.stdout.strip())
+
+    assert len(set(orders)) == 1, f"emission order varied across hash seeds: {orders}"
