@@ -36,6 +36,7 @@ from tinychain.autodiff.dependencies import (
     analyze_derivative_dependencies,
     analyze_graph_dependencies,
 )
+from tinychain.autodiff.dependencies import _order_reachable_nodes
 
 
 # --------------------------------------------------------------------------
@@ -993,3 +994,20 @@ def test_emission_order_is_identical_under_varied_hash_seeds():
         orders.append(completed.stdout.strip())
 
     assert len(set(orders)) == 1, f"emission order varied across hash seeds: {orders}"
+
+
+def test_sequencing_a_cyclic_reachable_set_is_reported_rather_than_dropped():
+    """The scheduler cannot place an operation whose consumers never all get
+    placed. Reaching this through a public entry point is impossible, because
+    the reachability walk rejects a cycle first, so the set is handed to the
+    sequencing step directly. It must report rather than emit the operations
+    it did manage to place, which would be a program in an order no consumer
+    can run."""
+    typespec = _typespec("f32", [2])
+    left = _node("n0", "left", ["right"], typespec)
+    right = _node("n1", "right", ["left"], typespec)
+
+    _assert_category(
+        "malformed_derivative_ir",
+        lambda: _order_reachable_nodes({"n0": left, "n1": right}),
+    )

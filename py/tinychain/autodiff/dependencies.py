@@ -29,8 +29,11 @@ deterministic and documented: dependencies are grouped in
 :data:`DEPENDENCY_PROVENANCE_ORDER`, declared inputs follow forward-graph
 declaration order, seeds follow the order the caller declared them, forward
 captures follow forward-graph topological order, and local values follow the
-topological order of the analyzed selection. Repeated analyses of equivalent
-traces therefore compare equal.
+analyzed selection's schedule -- topologically valid, with each operation
+emitted as late as its consumers allow so that a producer stays beside the
+operation that reads it (see :func:`_order_reachable_nodes` for the rule and
+its tie-break). Repeated analyses of equivalent traces therefore compare
+equal.
 
 One value id must have exactly one provenance, and that invariant is enforced
 in one place rather than per index. A single assignment pass walks the reachable
@@ -474,7 +477,7 @@ def _reachable_region(
     selected_outputs: Sequence[str],
     producers: Mapping[str, "TensorNodeRecord"],
 ) -> tuple[list["TensorNodeRecord"], set[str]]:
-    """Return the reachable nodes in topological order plus the reachable free values.
+    """Return the reachable nodes in emitted order plus the reachable free values.
 
     Reachability (which nodes and free values the selection depends on, with
     cycle detection) and emission order are computed as two separate steps --
@@ -498,11 +501,12 @@ def _walk_reachable(
     progress" from the moment its inputs begin traversal until every input has
     been fully resolved; encountering an in-progress node again means a cycle,
     detected and categorized exactly as the prior recursive walk did. The
-    returned mapping's insertion order is already the documented topological
-    (post-order) order -- each node is inserted only after every value it
-    reads has been fully resolved -- so callers that only need the set may
-    ignore order, and :func:`_order_reachable_nodes` reads it back out
-    unchanged.
+    returned mapping's insertion order is a topological (post-order) order --
+    each node is inserted only after every value it reads has been fully
+    resolved -- but it is not the emitted order: :func:`_order_reachable_nodes`
+    reschedules it. Callers that only need the set may ignore order; the
+    ordering step relies on this one being topological, and on nothing else
+    about it beyond its determinism.
     """
     reachable: dict[str, "TensorNodeRecord"] = {}
     free_value_ids: set[str] = set()
@@ -544,10 +548,125 @@ def _order_reachable_nodes(
     Deliberately takes only the reachable mapping, not the selection or the
     producer index that decided it, so this function can only reorder the
     given set -- it has no way to add or drop a node. Isolated from
-    :func:`_walk_reachable` so a future traversal-order change replaces this
-    function alone.
+    :func:`_walk_reachable` so a traversal-order change replaces this function
+    alone. The producer relation used below is rebuilt from the given mapping
+    itself, so that boundary holds.
+
+    Latest legal position
+    ---------------------
+    Each operation is emitted as late as its consumers allow rather than as
+    early as its producers allow. Emitting early puts a producer at the front
+    of the region, separated from the operation that reads it by unrelated
+    work; emitting late leaves the two adjacent whenever nothing forces them
+    apart. Adjacency is what a consumer's bounded look-ahead window needs in
+    order to see a producer and its consumer together, so this is the ordering
+    that makes a local fusion -- a transpose folded into the matmul that reads
+    it -- expressible at all.
+
+    The order is built back to front. An operation is *ready* once every
+    operation in the set that reads its output has already been placed; the
+    ready operation chosen next is placed immediately before everything
+    already placed, and its own producers are then released.
+
+    Tie-break
+    ---------
+    Several operations are often ready at once, and the choice between them is
+    what decides which producer ends up adjacent to its consumer, so it is
+    fixed by rule rather than left to iteration order:
+
+    1. Prefer the shortest chain of producers within the set. A long chain
+       needs the most room ahead of it, so it is placed earliest; a short one
+       can wait beside its consumer.
+    2. Among equal chains, prefer the operation released most recently -- that
+       is, by the operation just placed -- which keeps a producer beside the
+       consumer that released it.
+    3. A consumer releases its producers in reverse operand order, and the
+       operations that begin ready are seeded in the set's own discovery
+       order, so rule 2 resolves to the first operand and to discovery order
+       respectively when nothing else separates the candidates.
+
+    Rule 1 is not the obvious rule, and the obvious one is wrong. A plain
+    reverse pass that simply follows operands merely inverts which case fails:
+    the derivative programs for two different differentiated parameters of one
+    expression are the same operations differing only in a matmul's operand
+    order, so any rule keyed on operand position keeps one of them working by
+    breaking the other. Chain length is a property of the graph rather than of
+    how one operation happens to spell its operands, which is why it separates
+    the two cases identically.
+
+    Every input to the rule -- chain length, release order, discovery order --
+    is derived from the given mapping's insertion order and each operation's
+    recorded operands. Nothing reads set iteration order, dictionary ordering
+    that is not insertion-stable, hash values, or object identity, so
+    equivalent graphs are sequenced identically in any interpreter.
     """
-    return list(reachable_nodes.values())
+    nodes = list(reachable_nodes.values())
+    producer_of_output = {node.output_value_id: node for node in nodes}
+
+    def producers_of(node: "TensorNodeRecord") -> list["TensorNodeRecord"]:
+        """The distinct operations in this set producing *node*'s operands."""
+        found: list["TensorNodeRecord"] = []
+        seen: set[str] = set()
+        for value_id in node.input_value_ids:
+            producer = producer_of_output.get(value_id)
+            if producer is None or producer.node_id in seen:
+                continue
+            seen.add(producer.node_id)
+            found.append(producer)
+        return found
+
+    # The mapping's insertion order is topological, so one forward pass is
+    # enough to measure how long a chain of producers ends at each node. That
+    # is also the only assumption this function makes about the order it is
+    # given, so it is checked here rather than assumed: a producer not yet
+    # measured means the order was not topological, which means a cycle. The
+    # reachability walk rejects a cycle before this function is called, so the
+    # check is unreachable through the public entry points -- but sequencing a
+    # cyclic set would otherwise strand operations, and emitting the rest
+    # would be a program in an order no consumer can run.
+    chain_length: dict[str, int] = {}
+    unplaced_consumers: dict[str, int] = {node.node_id: 0 for node in nodes}
+    for node in nodes:
+        producers = producers_of(node)
+        for producer in producers:
+            if producer.node_id not in chain_length:
+                raise AutodiffError(
+                    "malformed_derivative_ir",
+                    f"the reachable operations cannot be sequenced: operation "
+                    f"{node.node_id!r} reads a value produced by {producer.node_id!r}, "
+                    "which is part of a cycle",
+                )
+            unplaced_consumers[producer.node_id] += 1
+        chain_length[node.node_id] = max(
+            (chain_length[producer.node_id] + 1 for producer in producers),
+            default=0,
+        )
+
+    ready = [node for node in nodes if unplaced_consumers[node.node_id] == 0]
+    placed: list["TensorNodeRecord"] = []
+    while ready:
+        # Scanning from the end keeps the most recently released candidate
+        # unless an earlier one has a strictly shorter chain, which is rule 2
+        # applied only where rule 1 leaves a tie.
+        chosen = len(ready) - 1
+        for index in range(len(ready) - 2, -1, -1):
+            if chain_length[ready[index].node_id] < chain_length[ready[chosen].node_id]:
+                chosen = index
+        node = ready.pop(chosen)
+        placed.append(node)
+
+        released: list["TensorNodeRecord"] = []
+        for producer in producers_of(node):
+            unplaced_consumers[producer.node_id] -= 1
+            if unplaced_consumers[producer.node_id] == 0:
+                released.append(producer)
+        ready.extend(reversed(released))
+
+    # Every operation is placed: the order above is known to be topological,
+    # and releasing a producer only once its last consumer is placed always
+    # terminates having placed the whole set.
+    placed.reverse()
+    return placed
 
 
 def _topological_nodes(graph: "TensorGraph") -> list["TensorNodeRecord"]:

@@ -1111,7 +1111,8 @@ def _registry_requiring_fusion(must_be_fused: set[str]) -> OperationHandlerRegis
 
 
 def _trace_transposed_product():
-    """mean(transpose(a) @ (b + b)) — the specification's motivating shape."""
+    """mean(transpose(a) @ (b + b)) — a transpose feeding a matmul whose other
+    operand arrives from an independent chain."""
     trace = TensorGraphBuilder()
     with tc.state.scoped_context():
         with trace:
@@ -1123,7 +1124,8 @@ def _trace_transposed_product():
 
 
 def test_a_transpose_fuses_into_its_matmul_when_the_other_operand_is_an_independent_chain():
-    """The specification's motivating fusion, on the shape that breaks it: the
+    """A transpose folded into the matmul that reads it, on the shape that
+    breaks the fusion rather than the shape that flatters it: the
     matmul's second operand comes from a chain the transpose has nothing to do
     with. The consumer cannot lower a transpose that feeds a matmul on its own,
     so the pair must be offered together or the lowering fails."""
