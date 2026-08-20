@@ -63,6 +63,14 @@ def test_autodiff_error_categories_cover_spec_codes():
         "ambiguous_producer",
         "invalid_selected_output",
         "handler_contract_violation",
+        # Traced optimizer/parameter updates authored as ordinary Tensor
+        # callables. `details` are carried in the message as the offending
+        # callable's signature mismatch or the value the callable returned.
+        #   invalid_update_signature: the update callable's signature does not
+        #                             accept exactly the declared typed inputs
+        #   invalid_update_output:    the update callable did not return a Tensor
+        "invalid_update_signature",
+        "invalid_update_output",
     }
 
     assert set(AUTODIFF_ERROR_CATEGORIES) == expected
