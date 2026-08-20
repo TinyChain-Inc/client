@@ -884,18 +884,50 @@ back to the per-operator handler path for that operation.
 
 #### What this surface does and does not guard against ILC-style coupling
 
+Two separate artifacts each prove a narrow, specific claim. Neither is a
+general regression guard against the framework becoming coupled to a
+specific consumer over time, and the boundary of each is worth stating
+explicitly rather than leaving a reader to discover it later.
+
 A dedicated regression test walks every module under `tinychain/autodiff/`
-and fails if any of them imports a module whose dotted path names an ILC
-consumer. That check is mechanical and narrow: it catches an accidental
-import-level dependency on a specific downstream consumer, which is the
-concrete, checkable half of keeping this seam generic. It does not attempt to
-detect every possible way framework code could informally assume something
-about one consumer's target representation or physical layout — that remains
-a review concern, not an automated one. A separate test proves the seam
-itself is generic in practice: a throwaway, non-ILC consumer that defines its
-own target expression type, registers handlers for two concrete operators,
-supplies one supported fusion hook, and lowers a real traced graph through
-this seam using only the public `tinychain.autodiff` names above.
+and fails if any of them **imports** a module whose dotted path names an ILC
+consumer. This is a static AST scan over `import`/`from ... import`
+statements — it catches `import ilc_api` and `from ilc_api.target import
+Foo` written directly in an autodiff module's source. It does **not** catch
+a dynamic import that only names the module at runtime, for example
+`importlib.import_module("ilc_api.target")` — the module name never appears
+as a literal import statement, so the AST walk has nothing to match. It also
+does not attempt to detect every way framework code could informally assume
+something about one consumer's target representation or physical layout
+without ever importing that consumer's package by name; that remains a
+review concern, not an automated one.
+
+A separate test proves the extension seam is *usable* generically: a
+throwaway, non-ILC consumer that defines its own target expression type,
+registers handlers for two concrete operators, supplies one supported fusion
+hook, and lowers a real traced graph through this seam using only the public
+`tinychain.autodiff` names above, with no framework-private access and no
+target-specific concept. That is a capability demonstration, not a
+regression guard — it proves the seam *can* be used generically today, not
+that it *stays* generic. A framework change that added consumer-specific
+behavior to the lowering path while leaving the public names and their
+signatures alone would leave this consumer passing unchanged, because its
+own inputs and expectations never changed.
+
+The related regression test guarding traced optimizer updates against
+manual graph-record construction (see above) has a matching limit: it
+catches a literal unaliased construction call in `training.py`'s own source,
+and it additionally catches an import alias or any other name in
+`training.py`'s own namespace that resolves to a graph-record type. It does
+**not** catch construction that lives in another module and is only reached
+at call time — a helper module built for this purpose and imported by
+`training.py` binds a module object or a function in `training.py`'s
+namespace, not the record type itself, so the namespace scan cannot see
+through it. Nor does it catch a function-local aliased import nested inside
+one of `training.py`'s own functions, since that alias is bound in the
+function's local scope rather than the module's namespace. These checks are
+aimed at the realistic accident, not at deliberate circumvention by someone
+with commit access to this package.
 
 ### Executor auth and routing contract
 

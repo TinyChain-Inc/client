@@ -3,17 +3,22 @@
 Spec acceptance criterion 3 requires a fake consumer that lowers at least two
 concrete operators and one supported fusion through the framework traversal
 seam, using no framework-private access and no ILC concept. This module is
-that proof.
+that proof: a consumer with no framework-private access and no target-specific
+concept can lower two concrete operators and one supported fusion into its own
+representation, reaching the seam through public `tinychain.autodiff` names
+alone.
 
 `FakeExpr` below is this test's own throwaway expression tree -- it shares no
 type, no naming, and no representation with any encrypted or ILC target IR.
-Everything imported here comes from the public `tinychain.autodiff` package
-surface (never a private submodule), so if the framework ever grew a
-dependency on a specific consumer's concept, one of two things would happen:
-either this consumer could no longer reach the seam through public names
-alone (the import-level tests below would fail), or its independently
-designed target representation would stop round-tripping through lowering
-(the structural assertions would fail).
+This module demonstrates that the seam is *usable* generically; it is not a
+regression guard against the framework *becoming* coupled to a specific
+consumer's concept after the fact. A framework change that hard-codes
+consumer-specific behavior on the lowering path while leaving the public
+names and their signatures alone would not be caught by this module -- this
+consumer would keep passing because its own inputs and expectations never
+changed, not because the framework stayed generic. Import-level coupling is
+what `test_autodiff_no_forbidden_dependencies.py` checks (and only for a
+static, name-based import; see that module's own documented limits).
 """
 
 from __future__ import annotations
@@ -205,11 +210,12 @@ def test_fake_consumer_module_imports_no_private_autodiff_submodule() -> None:
     This is the mechanical half of the "generic seam" claim: nothing in this
     file imports `tinychain.autodiff.graph`, `.lowering`, or `.dependencies`
     directly, so a consumer never needs private submodule access to reach the
-    extension seam. If the framework later made public re-export depend on a
-    specific consumer's concept, this file's own imports -- unchanged since
-    they only ever named public package attributes -- would still resolve
-    fine; it is the export tests in `test_autodiff_extension_contract.py` that
-    would catch a broken or narrowed public surface.
+    extension seam. This checks only this file's own import statements; it
+    does not check, and cannot detect, whether the framework's public surface
+    or lowering behavior has itself become coupled to a specific consumer's
+    concept. `test_autodiff_extension_contract.py` pins that the expected
+    names remain exported, which is a narrower and different claim than
+    "the seam stayed generic."
     """
     import ast
     import inspect
