@@ -291,18 +291,26 @@ def analyze_derivative_dependencies(
                     is_required=False,
                 )
             )
-    for node in _topological_nodes(forward_graph):
-        value_id = node.output_value_id
-        if value_id in free_value_ids:
-            dependencies.append(
-                _dependency(
-                    value_id,
-                    DEPENDENCY_PROVENANCE_FORWARD_CAPTURE,
-                    typespecs.get(value_id),
-                    label=f"forward capture {value_id!r}",
-                    is_required=False,
+    has_forward_captures = any(
+        assignments.get(value_id) == DEPENDENCY_PROVENANCE_FORWARD_CAPTURE
+        for value_id in free_value_ids
+    )
+    if has_forward_captures:
+        # The whole forward graph is only walked when the selection actually
+        # captures a forward-produced value; a selection with none of those
+        # gains nothing from sorting a graph it never reports on.
+        for node in _topological_nodes(forward_graph):
+            value_id = node.output_value_id
+            if value_id in free_value_ids:
+                dependencies.append(
+                    _dependency(
+                        value_id,
+                        DEPENDENCY_PROVENANCE_FORWARD_CAPTURE,
+                        typespecs.get(value_id),
+                        label=f"forward capture {value_id!r}",
+                        is_required=False,
+                    )
                 )
-            )
     for node in reachable_nodes:
         dependencies.append(
             _dependency(
@@ -320,13 +328,25 @@ def analyze_derivative_dependencies(
 
 
 def _resolve_seed_value_ids(seed_value_ids: Sequence[str]) -> tuple[str, ...]:
-    """Normalize declared seed ids, preserving caller order and dropping repeats."""
+    """Normalize declared seed ids, preserving caller order and dropping repeats.
+
+    Mirrors :func:`_resolve_selected_outputs`'s guard: a malformed shape here is
+    exactly as much a caller-provided selection error as a malformed selected
+    output, so it fails the same way, with the same category, rather than
+    escaping as a raw container-type exception.
+    """
     if isinstance(seed_value_ids, (str, bytes)) or not isinstance(seed_value_ids, Sequence):
-        raise TypeError("seed_value_ids must be a non-string sequence of value ids")
+        raise AutodiffError(
+            "invalid_selected_output",
+            "seed_value_ids must be a non-string sequence of value ids",
+        )
     resolved: list[str] = []
     for seed_value_id in seed_value_ids:
         if not isinstance(seed_value_id, str) or not seed_value_id:
-            raise TypeError("seed value ids must be non-empty strings")
+            raise AutodiffError(
+                "invalid_selected_output",
+                f"seed value id {seed_value_id!r} is not a non-empty value id",
+            )
         if seed_value_id not in resolved:
             resolved.append(seed_value_id)
     return tuple(resolved)
@@ -440,34 +460,80 @@ def _reachable_region(
     selected_outputs: Sequence[str],
     producers: Mapping[str, "TensorNodeRecord"],
 ) -> tuple[list["TensorNodeRecord"], set[str]]:
-    """Return the reachable nodes in topological order plus the reachable free values."""
-    ordered: list["TensorNodeRecord"] = []
-    visited: set[str] = set()
-    visiting: set[str] = set()
-    free_value_ids: set[str] = set()
+    """Return the reachable nodes in topological order plus the reachable free values.
 
-    def visit(value_id: str) -> None:
+    Reachability (which nodes and free values the selection depends on, with
+    cycle detection) and emission order are computed as two separate steps --
+    :func:`_walk_reachable` decides the set, :func:`_order_reachable_nodes`
+    only sequences it -- so a future change to traversal order can replace the
+    ordering step alone without re-deriving reachability or cycle detection.
+    """
+    reachable_nodes, free_value_ids = _walk_reachable(selected_outputs, producers)
+    ordered = _order_reachable_nodes(reachable_nodes)
+    return ordered, free_value_ids
+
+
+def _walk_reachable(
+    selected_outputs: Sequence[str],
+    producers: Mapping[str, "TensorNodeRecord"],
+) -> tuple[dict[str, "TensorNodeRecord"], set[str]]:
+    """Iteratively determine every node and free value reachable from *selected_outputs*.
+
+    Uses an explicit worklist instead of recursion so a deep dependency chain
+    does not exhaust the interpreter's recursion limit. A node is "in
+    progress" from the moment its inputs begin traversal until every input has
+    been fully resolved; encountering an in-progress node again means a cycle,
+    detected and categorized exactly as the prior recursive walk did. The
+    returned mapping's insertion order is already the documented topological
+    (post-order) order -- each node is inserted only after every value it
+    reads has been fully resolved -- so callers that only need the set may
+    ignore order, and :func:`_order_reachable_nodes` reads it back out
+    unchanged.
+    """
+    reachable: dict[str, "TensorNodeRecord"] = {}
+    free_value_ids: set[str] = set()
+    in_progress: set[str] = set()
+    # Reversed so the stack pops selected outputs in their original order --
+    # the same order a `for value_id in selected_outputs: visit(value_id)`
+    # recursive walk would visit them, matching how each node's own inputs
+    # are pushed reversed below.
+    stack: list[tuple[str, bool]] = [(value_id, False) for value_id in reversed(selected_outputs)]
+    while stack:
+        value_id, expanded = stack.pop()
         node = producers.get(value_id)
         if node is None:
             free_value_ids.add(value_id)
-            return
-        if node.node_id in visited:
-            return
-        if node.node_id in visiting:
+            continue
+        if node.node_id in reachable:
+            continue
+        if expanded:
+            in_progress.discard(node.node_id)
+            reachable[node.node_id] = node
+            continue
+        if node.node_id in in_progress:
             raise AutodiffError(
                 "malformed_derivative_ir",
                 f"cycle detected while traversing node {node.node_id!r}",
             )
-        visiting.add(node.node_id)
-        for input_value_id in node.input_value_ids:
-            visit(input_value_id)
-        visiting.discard(node.node_id)
-        visited.add(node.node_id)
-        ordered.append(node)
+        in_progress.add(node.node_id)
+        stack.append((value_id, True))
+        for input_value_id in reversed(node.input_value_ids):
+            stack.append((input_value_id, False))
+    return reachable, free_value_ids
 
-    for value_id in selected_outputs:
-        visit(value_id)
-    return ordered, free_value_ids
+
+def _order_reachable_nodes(
+    reachable_nodes: Mapping[str, "TensorNodeRecord"],
+) -> list["TensorNodeRecord"]:
+    """Sequence an already-computed reachable set into the documented order.
+
+    Deliberately takes only the reachable mapping, not the selection or the
+    producer index that decided it, so this function can only reorder the
+    given set -- it has no way to add or drop a node. Isolated from
+    :func:`_walk_reachable` so a future traversal-order change replaces this
+    function alone.
+    """
+    return list(reachable_nodes.values())
 
 
 def _topological_nodes(graph: "TensorGraph") -> list["TensorNodeRecord"]:
