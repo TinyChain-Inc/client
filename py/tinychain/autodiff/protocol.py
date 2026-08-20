@@ -46,6 +46,14 @@ AUTODIFF_ERROR_CATEGORIES: tuple[str, ...] = (
     #                               offered, claiming none of them, claiming one
     #                               twice, or discarding a value still needed)
     "handler_contract_violation",
+    # Traced optimizer/parameter updates authored as ordinary Tensor
+    # callables. `details` are carried in the message as the offending
+    # callable's signature mismatch or the value the callable returned.
+    #   invalid_update_signature: the update callable's signature does not
+    #                             accept exactly the declared typed inputs
+    #   invalid_update_output:    the update callable did not return a Tensor
+    "invalid_update_signature",
+    "invalid_update_output",
 )
 
 
