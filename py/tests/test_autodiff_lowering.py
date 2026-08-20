@@ -851,3 +851,153 @@ def test_every_derivative_operation_is_claimed_exactly_once():
     assert len(claimed) == len(set(claimed))
     assert set(claimed) <= {node.node_id for node in program.nodes}
     assert isinstance(lowered.operations[0], LoweredOperation)
+
+
+# --------------------------------------------------------------------------
+# operand availability — a fusion may not claim past a value it never produces
+# --------------------------------------------------------------------------
+
+
+class ConsumerFailure(Exception):
+    """An exception class owned by the consumer, unknown to the framework."""
+
+
+@dataclass(frozen=True)
+class DeferredPairFusion:
+    """Fuse the pair starting at one named operation, declining every other offer."""
+
+    start_node_id: str
+    lookahead: int = 2
+
+    def fuse(self, context: FusionContext) -> Optional[FusionResult]:
+        if context.candidates[0].node_id != self.start_node_id:
+            return None
+        if len(context.candidates) < 2:
+            return None
+        first, second = context.candidates[0], context.candidates[1]
+        operands = tuple(context.value_of(value_id) for value_id in first.input_value_ids)
+        return FusionResult(
+            value=FakeTarget("fake.pair", operands),
+            consumed_node_ids=(first.node_id, second.node_id),
+        )
+
+
+def _forked_graph() -> TensorGraph:
+    """Two independent operations feeding one join, so a claim can skip a branch."""
+    return TensorGraph(
+        nodes=[
+            _node("n0", "a", AddOperator(), ["x", "x"], _matrix()),
+            _node("n1", "b", AddOperator(), ["x", "x"], _matrix()),
+            _node("n2", "c", AddOperator(), ["a", "b"], _matrix()),
+        ],
+        inputs=[("x", _matrix())],
+        outputs=["c"],
+    )
+
+
+def _chained_graph() -> TensorGraph:
+    """A straight chain, so a later fusion draws an operand from an emitted value."""
+    return TensorGraph(
+        nodes=[
+            _node("n0", "a", AddOperator(), ["x", "x"], _matrix()),
+            _node("n1", "b", AddOperator(), ["a", "x"], _matrix()),
+            _node("n2", "c", AddOperator(), ["b", "x"], _matrix()),
+        ],
+        inputs=[("x", _matrix())],
+        outputs=["c"],
+    )
+
+
+def _assert_operands_available_in_emitted_order(graph: TensorGraph, lowered: LoweredProgram) -> None:
+    """Assert each emitted operation's operands exist by the time it is emitted."""
+    nodes = {node.node_id: node for node in graph.nodes}
+    available = {dependency.value_id for dependency in lowered.dependencies.required_inputs}
+    for operation in lowered.operations:
+        produced = {nodes[node_id].output_value_id for node_id in operation.source_node_ids}
+        for node_id in operation.source_node_ids:
+            for value_id in nodes[node_id].input_value_ids:
+                assert value_id in available or value_id in produced, (
+                    f"operation {operation.source_node_ids} consumes {value_id!r} "
+                    "before anything produces it"
+                )
+        available |= produced
+
+
+def test_a_fusion_claiming_past_an_operand_it_never_produces_is_rejected():
+    graph = _forked_graph()
+    fusion = ScriptedFusion(
+        FusionResult(value=FakeTarget("fake.fused"), consumed_node_ids=("n0", "n2")),
+        lookahead=3,
+    )
+
+    with pytest.raises(AutodiffError) as error:
+        _lower(graph, _full_registry(), fusion=fusion)
+
+    assert error.value.category == "handler_contract_violation"
+    assert "'b'" in error.value.message or "'n1'" in error.value.message
+
+
+def test_a_fusion_may_draw_operands_from_already_bound_values():
+    graph = _chained_graph()
+    fusion = DeferredPairFusion(start_node_id="n1")
+
+    lowered = _lower(graph, _full_registry(), fusion=fusion)
+
+    assert [operation.source_node_ids for operation in lowered.operations] == [
+        ("n0",),
+        ("n1", "n2"),
+    ]
+    assert [operation.is_fused for operation in lowered.operations] == [False, True]
+    assert lowered.output_values == (lowered.values["c"],)
+    _assert_operands_available_in_emitted_order(graph, lowered)
+
+
+# --------------------------------------------------------------------------
+# consumer failures are normalized, but interpreter control flow is not
+# --------------------------------------------------------------------------
+
+
+def test_a_handler_raising_a_runtime_error_is_reported_as_a_contract_violation():
+    @dataclass(frozen=True)
+    class RuntimeFailingHandler:
+        operator_type: type
+
+        def lower(self, context: OperationContext) -> object:
+            raise RuntimeError("the consumer target backend is unavailable")
+
+    graph = _repeated_value_graph()
+
+    _assert_category(
+        "handler_contract_violation",
+        lambda: _lower(graph, _registry(RuntimeFailingHandler(AddOperator))),
+    )
+
+
+def test_a_handler_raising_its_own_exception_class_is_reported_as_a_contract_violation():
+    @dataclass(frozen=True)
+    class ConsumerFailingHandler:
+        operator_type: type
+
+        def lower(self, context: OperationContext) -> object:
+            raise ConsumerFailure("the consumer rejected this operation")
+
+    graph = _repeated_value_graph()
+
+    _assert_category(
+        "handler_contract_violation",
+        lambda: _lower(graph, _registry(ConsumerFailingHandler(AddOperator))),
+    )
+
+
+def test_a_keyboard_interrupt_from_a_handler_propagates_uncaught():
+    @dataclass(frozen=True)
+    class InterruptingHandler:
+        operator_type: type
+
+        def lower(self, context: OperationContext) -> object:
+            raise KeyboardInterrupt
+
+    graph = _repeated_value_graph()
+
+    with pytest.raises(KeyboardInterrupt):
+        _lower(graph, _registry(InterruptingHandler(AddOperator)))
