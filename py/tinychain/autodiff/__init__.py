@@ -101,6 +101,45 @@ _CALLSITE_EXPORTS = frozenset({"grad"})
 
 _COMPILE_EXPORTS = frozenset({"CompiledDerivativeProgram", "compile_derivative_program"})
 
+_DEPENDENCY_EXPORTS = frozenset(
+    {
+        "DEPENDENCY_PROVENANCE_DECLARED_INPUT",
+        "DEPENDENCY_PROVENANCE_SEED_INPUT",
+        "DEPENDENCY_PROVENANCE_FORWARD_CAPTURE",
+        "DEPENDENCY_PROVENANCE_LOCAL_VALUE",
+        "DEPENDENCY_PROVENANCE_ORDER",
+        "DependencyAnalysis",
+        "ValueDependency",
+        "analyze_derivative_dependencies",
+        "analyze_graph_dependencies",
+    }
+)
+
+_LOWERING_EXPORTS = frozenset(
+    {
+        "LOWERING_CLAIM_HANDLER",
+        "LOWERING_CLAIM_FUSION",
+        "FusionContext",
+        "FusionHook",
+        "FusionResult",
+        "LoweredOperation",
+        "LoweredProgram",
+        "OperationContext",
+        "OperationHandler",
+        "OperationHandlerRegistry",
+        "lower_derivative_program",
+        "lower_graph",
+    }
+)
+
+_TRAINING_EXPORTS = frozenset(
+    {
+        "TracedUpdate",
+        "sgd_update",
+        "trace_parameter_update",
+    }
+)
+
 
 def __getattr__(name: str) -> object:
     if name in _ARTIFACT_EXPORTS:
@@ -121,6 +160,21 @@ def __getattr__(name: str) -> object:
     if name in _COMPILE_EXPORTS:
         compile_module = import_module(".compile", __name__)
         value = getattr(compile_module, name)
+        globals()[name] = value
+        return value
+    if name in _DEPENDENCY_EXPORTS:
+        dependencies_module = import_module(".dependencies", __name__)
+        value = getattr(dependencies_module, name)
+        globals()[name] = value
+        return value
+    if name in _LOWERING_EXPORTS:
+        lowering_module = import_module(".lowering", __name__)
+        value = getattr(lowering_module, name)
+        globals()[name] = value
+        return value
+    if name in _TRAINING_EXPORTS:
+        training_module = import_module(".training", __name__)
+        value = getattr(training_module, name)
         globals()[name] = value
         return value
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
@@ -212,4 +266,28 @@ __all__ = [
     "get_active_builder",
     "reflect_derivative_program",
     "tensor_typespec_to_type_spec",
+    "DEPENDENCY_PROVENANCE_DECLARED_INPUT",
+    "DEPENDENCY_PROVENANCE_SEED_INPUT",
+    "DEPENDENCY_PROVENANCE_FORWARD_CAPTURE",
+    "DEPENDENCY_PROVENANCE_LOCAL_VALUE",
+    "DEPENDENCY_PROVENANCE_ORDER",
+    "DependencyAnalysis",
+    "ValueDependency",
+    "analyze_derivative_dependencies",
+    "analyze_graph_dependencies",
+    "LOWERING_CLAIM_HANDLER",
+    "LOWERING_CLAIM_FUSION",
+    "FusionContext",
+    "FusionHook",
+    "FusionResult",
+    "LoweredOperation",
+    "LoweredProgram",
+    "OperationContext",
+    "OperationHandler",
+    "OperationHandlerRegistry",
+    "lower_derivative_program",
+    "lower_graph",
+    "TracedUpdate",
+    "sgd_update",
+    "trace_parameter_update",
 ]
