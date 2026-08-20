@@ -825,8 +825,9 @@ entirely with the Tensor `-`/`*` operators. Neither it nor
 `trace_parameter_update` constructs a graph-record or operator type directly;
 doing so is a spec invariant, not just a style preference, and is checked by
 a dedicated regression test that additionally scans the module's own
-namespace so an import alias or a helper reached through attribute access
-cannot quietly reintroduce direct construction either.
+namespace so an import alias cannot quietly reintroduce direct construction
+either. See "What this surface does and does not guard against ILC-style
+coupling" below for the exact boundary of that check.
 
 Update-callable well-formedness is checked once, before any input is
 declared or the builder is entered, so an invalid callable's body never runs;
