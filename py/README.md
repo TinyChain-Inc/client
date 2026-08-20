@@ -805,6 +805,12 @@ time and therefore normalizes rather than lets escape uncategorized.
 handler reporting failure, and are deliberately left to propagate rather than
 being folded into `handler_contract_violation`.
 
+Lowering runs dependency analysis first, so a lowering call can also fail
+with any category that analysis raises: `missing_dependency`,
+`ambiguous_producer`, `invalid_selected_output`, `malformed_derivative_ir`,
+and the metadata categories `missing_dtype_metadata` and
+`missing_shape_metadata`.
+
 #### Traced optimizer updates
 
 `trace_parameter_update(update, *, parameter, gradient,
@@ -842,7 +848,11 @@ composition helper, not a training loop.
 
 #### Compatibility
 
-These three pieces are purely additive. They add no new field to
+These three pieces are additive to every existing serialized payload, but not
+to the public error-category surface: `AUTODIFF_ERROR_CATEGORIES` grew from 20
+to 26 entries to name the dependency-analysis, lowering, and traced-update
+failure modes above, which is an observable change for a consumer matching
+exhaustively on that frozenset. They add no new field to
 `DerivativeProgram.to_dict()` or any other existing serialized payload;
 `DependencyAnalysis`, `ValueDependency`, and `LoweredProgram` are in-memory
 analysis results, not part of any wire format today. Existing
