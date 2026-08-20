@@ -62,6 +62,7 @@ def test_autodiff_error_categories_cover_spec_codes():
         "missing_dependency",
         "ambiguous_producer",
         "invalid_selected_output",
+        "handler_contract_violation",
     }
 
     assert set(AUTODIFF_ERROR_CATEGORIES) == expected
