@@ -548,6 +548,68 @@ def test_an_optimizer_returning_a_non_tensor_is_still_rejected() -> None:
 
 
 # --------------------------------------------------------------------------
+# a failure message names whichever form actually failed
+#
+# The category is shared, and must stay shared -- the two paths fail for the
+# same reason. Only the noun differs, because a consumer reading the message
+# at failure time needs to know whether to look at the callable they passed or
+# at their optimizer's update method. Nothing pinned this text before, which is
+# how it came to name the wrong one.
+# --------------------------------------------------------------------------
+
+
+def _error_from(update, **optimizer_inputs) -> AutodiffError:
+    with pytest.raises(AutodiffError) as error:
+        trace_parameter_update(
+            update,
+            parameter=PARAMETER_SPEC,
+            gradient=GRADIENT_SPEC,
+            optimizer_inputs=optimizer_inputs or None,
+        )
+    assert get_active_builder() is None
+    return error.value
+
+
+def test_a_non_tensor_output_names_whichever_form_returned_it() -> None:
+    class _BadOptimizerOutput(Optimizer):
+        required_optimizer_inputs = ("step_size",)
+
+        def update(self, *, parameter, gradient, step_size):
+            return 5.0
+
+    def bad_callable(*, parameter, gradient, step_size):
+        return 5.0
+
+    optimizer_error = _error_from(_BadOptimizerOutput(), step_size=RATE_SPEC)
+    callable_error = _error_from(bad_callable, step_size=RATE_SPEC)
+
+    # One category for one kind of mistake, on both paths.
+    assert (
+        optimizer_error.category
+        == callable_error.category
+        == "invalid_update_output"
+    )
+
+    # Both still report what was actually returned.
+    assert "'float'" in optimizer_error.message
+    assert "'float'" in callable_error.message
+
+    # The optimizer path names the optimizer and its update method, and does
+    # not call it a callable the consumer passed.
+    assert "_BadOptimizerOutput" in optimizer_error.message
+    assert "update method" in optimizer_error.message
+    assert "update callable" not in optimizer_error.message
+
+    # The plain-callable path is unchanged, and does not borrow the optimizer
+    # wording.
+    assert "update callable" in callable_error.message
+    assert "update method" not in callable_error.message
+
+    # They cannot converge again without this failing.
+    assert optimizer_error.message != callable_error.message
+
+
+# --------------------------------------------------------------------------
 # the existing reference function is a compatibility path
 # --------------------------------------------------------------------------
 
