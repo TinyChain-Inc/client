@@ -323,3 +323,124 @@ def test_sgd_update_example_contains_no_manual_graph_record_construction() -> No
     forbidden_constructors = ("TensorNodeRecord(", "SubOperator(", "MulOperator(")
     for token in forbidden_constructors:
         assert token not in source, f"found manual graph-record construction: {token!r}"
+
+
+# --------------------------------------------------------------------------
+# Every malformed typed-input spec is categorized.
+#
+# The specs are unpacked as `**dict(spec)` before `TensorGraphBuilder.input`
+# is reached, so the unpack -- not the builder's dtype/shape validation --
+# decides what a consumer sees. Every malformation therefore has to be
+# categorized here, using the same categories the sibling analysis module
+# already uses for an incomplete type spec.
+# --------------------------------------------------------------------------
+
+
+_MALFORMED_SPEC_CASES = [
+    ("parameter_is_none", {"parameter": None}, "missing_dtype_metadata", "parameter"),
+    ("parameter_is_empty", {"parameter": {}}, "missing_dtype_metadata", "parameter"),
+    (
+        "parameter_dtype_key_typo",
+        {"parameter": {"dtpye": "f32", "shape": (2, 3)}},
+        "missing_dtype_metadata",
+        "parameter",
+    ),
+    ("parameter_is_an_int", {"parameter": 5}, "missing_dtype_metadata", "parameter"),
+    ("parameter_is_a_string", {"parameter": "f32"}, "missing_dtype_metadata", "parameter"),
+    # Already categorized today, by the builder's own dtype validation: pinned
+    # here so the new spec validation does not re-categorize it.
+    (
+        "parameter_dtype_value_is_not_a_dtype",
+        {"parameter": {"dtype": 32, "shape": (2, 3)}},
+        "dtype_not_differentiable",
+        "32",
+    ),
+    (
+        "gradient_has_no_shape",
+        {"gradient": {"dtype": "f32"}},
+        "missing_shape_metadata",
+        "gradient",
+    ),
+    (
+        "gradient_shape_is_not_a_sequence",
+        {"gradient": {"dtype": "f32", "shape": 3}},
+        "missing_shape_metadata",
+        "gradient",
+    ),
+    (
+        "gradient_shape_has_a_negative_dimension",
+        {"gradient": {"dtype": "f32", "shape": (-1, 3)}},
+        "missing_shape_metadata",
+        "gradient",
+    ),
+    (
+        "optimizer_input_spec_is_none",
+        {"optimizer_inputs": {"learning_rate": None}},
+        "missing_dtype_metadata",
+        "learning_rate",
+    ),
+    (
+        "optimizer_inputs_is_not_a_mapping",
+        {"optimizer_inputs": 5},
+        "invalid_update_signature",
+        "optimizer_inputs",
+    ),
+]
+
+
+def _malformed_call_kwargs(overrides: dict) -> dict:
+    kwargs = {
+        "parameter": PARAMETER_SPEC,
+        "gradient": GRADIENT_SPEC,
+        "optimizer_inputs": {"learning_rate": LEARNING_RATE_SPEC},
+    }
+    kwargs.update(overrides)
+    return kwargs
+
+
+@pytest.mark.parametrize(
+    ("overrides", "category", "named"),
+    [case[1:] for case in _MALFORMED_SPEC_CASES],
+    ids=[case[0] for case in _MALFORMED_SPEC_CASES],
+)
+def test_malformed_typed_input_specs_are_categorized(overrides, category, named) -> None:
+    with pytest.raises(AutodiffError) as error:
+        trace_parameter_update(sgd_update, **_malformed_call_kwargs(overrides))
+
+    assert error.value.category == category
+    assert named in error.value.message
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [case[1] for case in _MALFORMED_SPEC_CASES],
+    ids=[case[0] for case in _MALFORMED_SPEC_CASES],
+)
+def test_a_malformed_typed_input_spec_fails_before_the_update_runs(overrides) -> None:
+    """The same structural property the signature check already guarantees.
+
+    A rejected declaration must never reach the consumer's callable body, so
+    the rejection cannot depend on statement order inside the trace.
+    """
+    invocations: list[dict] = []
+
+    def recording_update(**kwargs):
+        invocations.append(kwargs)
+        return sgd_update(**kwargs)
+
+    with pytest.raises(AutodiffError):
+        trace_parameter_update(recording_update, **_malformed_call_kwargs(overrides))
+
+    assert invocations == []
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [case[1] for case in _MALFORMED_SPEC_CASES],
+    ids=[case[0] for case in _MALFORMED_SPEC_CASES],
+)
+def test_a_malformed_typed_input_spec_leaves_no_builder_active(overrides) -> None:
+    with pytest.raises(AutodiffError):
+        trace_parameter_update(sgd_update, **_malformed_call_kwargs(overrides))
+
+    assert get_active_builder() is None

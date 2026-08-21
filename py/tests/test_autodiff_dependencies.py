@@ -1011,3 +1011,78 @@ def test_sequencing_a_cyclic_reachable_set_is_reported_rather_than_dropped():
         "malformed_derivative_ir",
         lambda: _order_reachable_nodes({"n0": left, "n1": right}),
     )
+
+
+# --------------------------------------------------------------------------
+# A repeated node identifier is rejected, not conflated.
+#
+# The reachable walk keys visited operations by `node_id`, so two distinct
+# nodes sharing one id are treated as one node. Independent duplicates then
+# make the analysis SUCCEED with a silently incomplete answer -- a consumer
+# binding from the analysis alone builds a wrong program -- while chained
+# duplicates are misdiagnosed as a cycle that does not exist. A repeated
+# *value* id is already rejected as `ambiguous_producer`; a repeated node id
+# is the same class of malformation and is rejected the same way.
+# --------------------------------------------------------------------------
+
+
+def test_duplicate_node_ids_raise_ambiguous_producer():
+    """Independent duplicates: the answer is silently incomplete without this."""
+    graph = TensorGraph(
+        nodes=[
+            _node("n0", "left", ["alpha"], _typespec("f32", [2])),
+            _node("n0", "right", ["beta"], _typespec("f32", [2])),
+            _node("n1", "out", ["left", "right"], _typespec("f32", [2])),
+        ],
+        inputs=[("alpha", _typespec("f32", [2])), ("beta", _typespec("f32", [2]))],
+        outputs=["out"],
+    )
+
+    with pytest.raises(AutodiffError) as error:
+        analyze_graph_dependencies(graph)
+
+    assert error.value.category == "ambiguous_producer"
+    assert "n0" in error.value.message
+
+
+def test_chained_duplicate_node_ids_raise_ambiguous_producer_not_a_cycle():
+    """Chained duplicates: today this is misdiagnosed as a cycle that does not exist."""
+    graph = TensorGraph(
+        nodes=[
+            _node("n0", "mid", ["alpha"], _typespec("f32", [2])),
+            _node("n0", "out", ["mid"], _typespec("f32", [2])),
+        ],
+        inputs=[("alpha", _typespec("f32", [2]))],
+        outputs=["out"],
+    )
+
+    with pytest.raises(AutodiffError) as error:
+        analyze_graph_dependencies(graph)
+
+    assert error.value.category == "ambiguous_producer"
+    assert "n0" in error.value.message
+    assert "cycle" not in error.value.message
+
+
+def test_duplicate_node_ids_in_a_derivative_program_raise_ambiguous_producer():
+    """The derivative entry point indexes its nodes through the same guard."""
+    forward_graph = TensorGraph(
+        nodes=[],
+        inputs=[("parameter", _typespec("f32", [2]))],
+        outputs=["parameter"],
+    )
+    program = _derivative_program(
+        nodes=[
+            _node("an0", "local", ["parameter"], _typespec("f32", [2])),
+            _node("an0", "spare", ["parameter"], _typespec("f32", [2])),
+        ],
+        gradients={"parameter": "local"},
+    )
+
+    with pytest.raises(AutodiffError) as error:
+        analyze_derivative_dependencies(
+            program, forward_graph=forward_graph, seed_value_ids=("seed",)
+        )
+
+    assert error.value.category == "ambiguous_producer"
+    assert "an0" in error.value.message
