@@ -8,11 +8,18 @@ output -- so an update can be authored and traced entirely with ordinary
 `Tensor` operations (spec invariant 6) and then handed to the same structured
 dependency analysis and extensible lowering seam as any other traced graph.
 
-This module defines no optimizer catalog, no state lifecycle, and no consumer
-policy. `sgd_update` below is the one reference expression the Issue 86 MVP
-needs: `parameter - learning_rate * gradient`, written with the `-`/`*`
-operators `Tensor` already supports -- nothing here constructs a
-`TensorNodeRecord` or a concrete `TensorOperator` directly.
+`Optimizer` below is the contract that binds an update expression to the names
+of the inputs it reads, and `SGD` is its one concrete implementation:
+`parameter - learning_rate * gradient`, written with the `-`/`*` operators
+`Tensor` already supports -- nothing here constructs a `TensorNodeRecord` or a
+concrete `TensorOperator` directly. `sgd_update` is the compatibility path for
+callers that already import the reference expression as a function.
+
+This module still defines no optimizer catalog, no state lifecycle, and no
+consumer policy. An optimizer owns its expression, its declared input names,
+and its own configuration; graph construction, dependency analysis, lowering,
+provider execution, encrypted state lifecycle, and the training loop are all
+outside it.
 
 Named invariants and where each is enforced (spec-driven, each in one place):
 
@@ -22,6 +29,13 @@ Named invariants and where each is enforced (spec-driven, each in one place):
   "invalid update callables fail before consumer execution" a structural
   property rather than an accident of statement order: the callable's body
   cannot run before its signature has been validated.
+* **Declared inputs match what an optimizer reads.** For an `Optimizer`, the
+  invariant above is enforced by name instead of by signature, once, in
+  :func:`_validate_declared_optimizer_inputs`, in the same place and at the
+  same moment. It must be by name: an optimizer is invoked through
+  `Optimizer.__call__`, which accepts arbitrary keywords, so binding its
+  signature would accept any declaration at all and leave the check vacuous
+  for exactly these values.
 * **Traced output validity.** The callable must return a `Tensor`. Checked
   once, immediately after invoking the callable and before `builder.build`.
 * **Typed input spec well-formedness.** Each declared spec must be a mapping
@@ -58,6 +72,7 @@ from __future__ import annotations
 
 import inspect
 import keyword
+from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Optional
@@ -68,6 +83,94 @@ from .shape import parse_shape
 
 
 _RESERVED_INPUT_NAMES: tuple[str, ...] = ("parameter", "gradient")
+
+
+class Optimizer(ABC):
+    """The contract an optimizer implements, and nothing wider than that.
+
+    An update expression and the names of the inputs that expression reads are
+    two facts that must agree. Without a contract binding them, a caller
+    imports an update function by name and separately remembers to declare the
+    inputs it needs, and nothing checks the pair. This class is that binding,
+    and that is the whole of its justification: it is not a catalog, and it
+    designs no second optimizer family.
+
+    An optimizer owns exactly three things:
+
+    * **The update expression**, authored in ordinary `Tensor` operations --
+      :meth:`update`.
+    * **The names of the optimizer inputs that expression reads** --
+      :attr:`required_optimizer_inputs`.
+    * **Validation of its own configuration**, where it has any. There is no
+      member for this, deliberately: an implementation with configuration
+      validates it in its own constructor, so the contract *admits*
+      configuration without *mandating* it, and an implementation with none --
+      like :class:`SGD` -- carries no empty hook.
+
+    It owns nothing else. Graph construction, dependency analysis, lowering,
+    provider execution, encrypted state lifecycle, and the training loop are
+    all outside it. It holds no state and no persistence, and it knows nothing
+    about dtype or shape: a caller still declares those, because they are
+    properties of the values being trained rather than of the algorithm.
+
+    An instance is callable, so it is usable wherever a plain update callable
+    is. That call path accepts arbitrary keywords, which is exactly why
+    :func:`trace_parameter_update` does *not* signature-check an optimizer --
+    binding such a signature accepts any declaration at all. It validates
+    :attr:`required_optimizer_inputs` instead.
+    """
+
+    @property
+    @abstractmethod
+    def required_optimizer_inputs(self) -> tuple[str, ...]:
+        """The names of the optimizer inputs :meth:`update` reads.
+
+        These are the *optimizer* inputs only: ``parameter`` and ``gradient``
+        are declared by every traced update and are never named here. The
+        names must match the keys of the ``optimizer_inputs`` a caller
+        declares to :func:`trace_parameter_update`, which is the check that
+        replaces signature binding on this path.
+
+        An implementation may answer per instance -- configuration is free to
+        decide which inputs the expression reads.
+        """
+
+    @abstractmethod
+    def update(
+        self, *, parameter: object, gradient: object, **optimizer_inputs: object
+    ) -> object:
+        """Return the updated parameter, as an ordinary `Tensor` expression.
+
+        Called once per trace, by keyword, with a `Tensor` for ``parameter``,
+        a `Tensor` for ``gradient``, and a `Tensor` for each name in
+        :attr:`required_optimizer_inputs`. It must return the single updated
+        parameter `Tensor`, and must build it with ordinary `Tensor`
+        operations -- never by constructing a graph, a node record, or a
+        concrete operator.
+        """
+
+    def __call__(self, **optimizer_inputs: object) -> object:
+        """Make an optimizer usable wherever a plain update callable is."""
+        return self.update(**optimizer_inputs)
+
+
+class SGD(Optimizer):
+    """Stochastic gradient descent: ``parameter - learning_rate * gradient``.
+
+    The first and, today, the only concrete :class:`Optimizer`. It declares
+    one required optimizer input, ``learning_rate``, and carries no
+    configuration, so it has nothing to validate in its constructor.
+
+    The expression is written with the `Tensor` ``-``/``*`` operators; no
+    `TensorNodeRecord` and no concrete `TensorOperator` is constructed here.
+    """
+
+    required_optimizer_inputs: tuple[str, ...] = ("learning_rate",)
+
+    def update(
+        self, *, parameter: object, gradient: object, learning_rate: object
+    ) -> object:
+        return parameter - learning_rate * gradient
 
 
 @dataclass(frozen=True)
@@ -86,7 +189,7 @@ class TracedUpdate:
 
 
 def trace_parameter_update(
-    update: Callable[..., object],
+    update: "Optimizer | Callable[..., object]",
     *,
     parameter: Mapping[str, object],
     gradient: Mapping[str, object],
@@ -106,9 +209,19 @@ def trace_parameter_update(
     malformed declaration never reaches the consumer's callable body.
     """
     resolved_optimizer_inputs = _resolve_optimizer_inputs(optimizer_inputs)
-    _validate_update_signature(
-        update, parameter=parameter, gradient=gradient, optimizer_inputs=resolved_optimizer_inputs
-    )
+    if isinstance(update, Optimizer):
+        # Not a signature check, and deliberately so: an optimizer is invoked
+        # through `Optimizer.__call__`, which accepts arbitrary keywords, so
+        # binding its signature would accept any declaration at all and the
+        # check below it would be vacuous for exactly these values.
+        _validate_declared_optimizer_inputs(update, resolved_optimizer_inputs)
+    else:
+        _validate_update_signature(
+            update,
+            parameter=parameter,
+            gradient=gradient,
+            optimizer_inputs=resolved_optimizer_inputs,
+        )
     # Ahead of the builder, like the signature check above and for the same
     # reason: failing before any trace begins is then a structural property
     # rather than an accident of statement order inside the trace.
@@ -327,11 +440,60 @@ def _validate_update_signature(
         ) from exc
 
 
-def sgd_update(*, parameter: object, gradient: object, learning_rate: object) -> object:
-    """Reference SGD update expressed with ordinary Tensor operations.
+def _validate_declared_optimizer_inputs(
+    optimizer: Optimizer, optimizer_inputs: Mapping[str, Mapping[str, object]]
+) -> None:
+    """Require the declared optimizer inputs to be exactly what *optimizer* reads.
 
-    ``parameter - learning_rate * gradient``, written with the `Tensor`
-    `-`/`*` operators -- no `TensorNodeRecord` or `TensorOperator` is
-    constructed here.
+    This is the optimizer half of update-callable well-formedness. It runs in
+    the same place and at the same moment as the signature check does for a
+    plain callable -- before the builder is entered and before any typed input
+    spec is read -- so a rejected declaration never reaches the optimizer's
+    expression.
+
+    It exists because signature binding cannot do the job here.
+    `Optimizer.__call__` accepts arbitrary keywords, so
+    `inspect.signature(optimizer).bind(...)` succeeds for *any* declared input
+    set; applying the callable check to an optimizer would report success on
+    a declaration that names nothing the expression reads. The declared names
+    are what restores a real check on this path.
+
+    The comparison is by name set: the inputs are passed by keyword, so their
+    order carries no meaning. An implementation whose
+    ``required_optimizer_inputs`` is not a collection of names is its own
+    bug -- it simply fails to match any sensible declaration and is reported
+    here as a mismatch, rather than being re-validated on the caller's behalf.
     """
-    return parameter - learning_rate * gradient
+    required_names = tuple(optimizer.required_optimizer_inputs)
+    declared_names = tuple(optimizer_inputs)
+    missing = tuple(name for name in required_names if name not in optimizer_inputs)
+    unexpected = tuple(name for name in declared_names if name not in required_names)
+    if missing or unexpected:
+        raise AutodiffError(
+            "invalid_update_signature",
+            f"optimizer {type(optimizer).__name__!r} reads the optimizer "
+            f"inputs {required_names!r}, but the declared optimizer_inputs "
+            f"are {declared_names!r}: missing {missing!r}, unexpected "
+            f"{unexpected!r}",
+        )
+
+
+_SGD_COMPATIBILITY_REFERENCE = SGD()
+
+
+def sgd_update(*, parameter: object, gradient: object, learning_rate: object) -> object:
+    """Compatibility path for the reference SGD update.
+
+    This is the function that existed before :class:`Optimizer`, kept working
+    for callers that already import it. It authors nothing of its own: the
+    expression ``parameter - learning_rate * gradient`` now lives in
+    :class:`SGD`, and this delegates to a shared instance of it, so the two
+    can never drift apart. `SGD` is stateless, so one shared instance is safe.
+
+    New callers should pass ``SGD()`` to :func:`trace_parameter_update`
+    instead, which additionally checks the declared optimizer inputs against
+    what the expression actually reads -- a check a plain callable cannot get.
+    """
+    return _SGD_COMPATIBILITY_REFERENCE.update(
+        parameter=parameter, gradient=gradient, learning_rate=learning_rate
+    )

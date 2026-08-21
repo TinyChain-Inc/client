@@ -134,6 +134,8 @@ _LOWERING_EXPORTS = frozenset(
 
 _TRAINING_EXPORTS = frozenset(
     {
+        "SGD",
+        "Optimizer",
         "TracedUpdate",
         "sgd_update",
         "trace_parameter_update",
@@ -287,6 +289,8 @@ __all__ = [
     "OperationHandlerRegistry",
     "lower_derivative_program",
     "lower_graph",
+    "Optimizer",
+    "SGD",
     "TracedUpdate",
     "sgd_update",
     "trace_parameter_update",
