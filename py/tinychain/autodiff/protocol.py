@@ -78,7 +78,10 @@ class AutodiffError(Exception):
 
 
 # The exception machinery's own attributes -- not a hand-picked list of the
-# ones we happened to see fail. Python's exception protocol assigns these on
+# ones we happened to see fail. The identical block on `artifact.ArtifactError`
+# fixes the only other frozen-dataclass exception in this package; the two are
+# repeated rather than shared, so that module needs no dependency on this one
+# for its exception mechanics. Python's exception protocol assigns these on
 # the instance being raised, propagated, or annotated, and some of those
 # assignments are made from Python rather than from C: a generator-based
 # `@contextlib.contextmanager` re-raises by assigning `__traceback__`, and

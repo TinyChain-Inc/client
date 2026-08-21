@@ -45,6 +45,52 @@ class ArtifactError(Exception):
         return cls(category=str(data["category"]), message=str(data["message"]))
 
 
+# The exception machinery's own attributes -- see the identical block on
+# `protocol.AutodiffError`, the only other frozen-dataclass exception in this
+# package. Python's exception protocol assigns these on the instance being
+# raised, propagated, or annotated, and some of those assignments are made
+# from Python rather than from C: a generator-based
+# `@contextlib.contextmanager` re-raises by assigning `__traceback__`, and
+# `BaseException.add_note` assigns `__notes__`. A frozen `__setattr__` refuses
+# them, so an `ArtifactError` crossing an ordinary consumer context manager
+# was replaced by a `FrozenInstanceError` and its category was erased.
+#
+# The two blocks are deliberately repeated rather than shared: factoring them
+# out would make this module depend on `protocol` for its exception
+# mechanics, and these are Python's own protocol attributes, which do not
+# drift.
+#
+# Everything outside this boundary stays frozen: both declared fields, and any
+# attribute a caller invents.
+_EXCEPTION_MACHINERY_ATTRIBUTES = frozenset(
+    {
+        "__traceback__",
+        "__cause__",
+        "__context__",
+        "__suppress_context__",
+        "__notes__",
+    }
+)
+
+_frozen_setattr = ArtifactError.__setattr__
+
+
+def _set_artifact_error_attribute(
+    error: ArtifactError, name: str, value: object
+) -> None:
+    if name in _EXCEPTION_MACHINERY_ATTRIBUTES:
+        object.__setattr__(error, name, value)
+        return
+    _frozen_setattr(error, name, value)
+
+
+# Installed after the class body, not in it: `@dataclass(frozen=True)`
+# generates its own `__setattr__` and raises `TypeError: Cannot overwrite
+# attribute __setattr__ in class ArtifactError` at class-definition time if
+# the body defines one. Moving this into the class will not work.
+ArtifactError.__setattr__ = _set_artifact_error_attribute
+
+
 @dataclass(frozen=True)
 class ArtifactPublicIdentity:
     publisher: str

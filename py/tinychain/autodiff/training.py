@@ -57,6 +57,7 @@ Named invariants and where each is enforced (spec-driven, each in one place):
 from __future__ import annotations
 
 import inspect
+import keyword
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Optional
@@ -64,6 +65,9 @@ from typing import Optional
 from .graph import TensorGraph, TensorGraphBuilder
 from .protocol import AutodiffError
 from .shape import parse_shape
+
+
+_RESERVED_INPUT_NAMES: tuple[str, ...] = ("parameter", "gradient")
 
 
 @dataclass(frozen=True)
@@ -177,7 +181,51 @@ def _resolve_optimizer_inputs(optimizer_inputs: object) -> Mapping[str, object]:
             "declared input set cannot be established, so the callable's "
             "signature cannot be checked against it",
         )
+    for name in optimizer_inputs:
+        _validate_optimizer_input_name(name)
     return optimizer_inputs
+
+
+def _validate_optimizer_input_name(name: object) -> None:
+    """Require one declared optimizer input name to be usable as an input.
+
+    Whether a bad name is otherwise noticed depends entirely on the update
+    callable, which is why it cannot be left to the builder. A callable
+    declaring exact parameters cannot bind a name like ``"a b"``, so
+    :func:`_validate_update_signature` rejects it first and the builder is
+    never reached; a callable taking ``**kwargs`` binds any name at all, so
+    the same declaration reaches ``TensorGraphBuilder.input`` and fails there
+    with a raw ``ValueError``/``TypeError``. A ``**kwargs`` optimizer update
+    is an ordinary shape to write, so the name set is validated in its own
+    right rather than incidentally.
+
+    The reserved names are checked here for a second reason: a collision is
+    already reported for an exact-parameter callable, but for the wrong
+    reason. Deduplicating the declared names leaves that callable an argument
+    short, so the caller is told their *function* is missing a parameter when
+    what is actually wrong is the name they gave an optimizer input.
+    """
+    if not isinstance(name, str) or not name:
+        raise AutodiffError(
+            "invalid_update_signature",
+            "each optimizer_inputs key declares an input name, so it must be "
+            f"a non-empty string; got {name!r}",
+        )
+    if name in _RESERVED_INPUT_NAMES:
+        raise AutodiffError(
+            "invalid_update_signature",
+            f"optimizer_inputs declares an input named {name!r}, which is "
+            "already declared by the argument of that name; the fault is the "
+            "declared name, not the update callable -- rename the optimizer "
+            f"input, as {_RESERVED_INPUT_NAMES!r} are reserved",
+        )
+    if not name.isidentifier() or keyword.iskeyword(name):
+        raise AutodiffError(
+            "invalid_update_signature",
+            f"optimizer_inputs declares an input named {name!r}, which cannot "
+            "be a keyword argument: an input name must be a valid, "
+            "non-keyword Python identifier",
+        )
 
 
 def _typed_input_spec(spec: object, *, label: str) -> dict[str, object]:
@@ -187,7 +235,18 @@ def _typed_input_spec(spec: object, *, label: str) -> dict[str, object]:
     rather than unpacked, an absent or unreadable ``dtype`` is
     ``missing_dtype_metadata``, an absent or malformed ``shape`` is
     ``missing_shape_metadata``, and an extra key is ignored. A consumer then
-    meets one category per class of mistake wherever they hit it.
+    meets one category per *structural* mistake -- a spec that is not a
+    mapping, or that is missing or cannot produce one of the two keys --
+    wherever they hit it.
+
+    That parity is structural only, and deliberately does not extend to the
+    values. A dtype that is present but not a dtype is ``dtype_not_
+    differentiable`` here and ``missing_dtype_metadata`` in the analysis,
+    because the value is judged by the builder rather than re-judged here.
+
+    One limit is shared rather than fixed: a container that raises something
+    outside ``(IndexError, TypeError, ValueError)`` while being read still
+    escapes raw, from this function and from the analysis helper alike.
 
     The dtype *value* is deliberately not judged here. `TensorGraphBuilder`'s
     ``check_differentiable_dtype`` already categorizes it, and re-checking
@@ -214,8 +273,24 @@ def _typed_input_spec(spec: object, *, label: str) -> dict[str, object]:
             f"typed input {label!r} declares no 'shape'; it has "
             f"{sorted(str(key) for key in spec)}",
         )
-    parse_shape(spec["shape"], label=f"typed input {label!r} shape")
-    return {"dtype": spec["dtype"], "shape": spec["shape"]}
+    # Read outside the guard, exactly as the analysis helper reads its own
+    # value with `.get` outside its `try`: a container whose `__getitem__`
+    # itself raises is at parity with that helper rather than diverging from
+    # the thing this function claims to mirror.
+    declared_shape = spec["shape"]
+    try:
+        parse_shape(declared_shape, label=f"typed input {label!r} shape")
+    except AutodiffError:
+        raise
+    except (IndexError, TypeError, ValueError) as exc:
+        # The same three types the analysis helper normalizes, for the same
+        # reason: a shape that raises while being read is an unreadable shape,
+        # not a raw container exception for a consumer to catch.
+        raise AutodiffError(
+            "missing_shape_metadata",
+            f"typed input {label!r} has no readable ranked shape",
+        ) from exc
+    return {"dtype": spec["dtype"], "shape": declared_shape}
 
 
 def _validate_update_signature(
