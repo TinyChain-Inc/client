@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import enum
 import inspect
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from types import SimpleNamespace
 
 import numpy as np
@@ -26,7 +26,7 @@ from tinychain.autodiff import (
     TensorOperator,
     get_active_builder,
 )
-from tinychain.autodiff.dependencies import analyze_graph_dependencies
+from tinychain.autodiff.dependencies import analyze_graph_dependencies, _complete_typespec
 from tinychain.autodiff.lowering import (
     OperationHandlerRegistry,
     lower_graph,
@@ -760,3 +760,89 @@ def test_a_bool_shape_dimension_is_still_rejected(boolean_dimension) -> None:
         )
 
     assert error.value.category == "missing_shape_metadata"
+
+
+# --------------------------------------------------------------------------
+# The tracer's spec read must behave exactly as the analysis helper it claims
+# to mirror. Asserting only the tracer's own outcome would keep passing while
+# the parity claim was false, so this is written as a differential: the claim
+# is about agreement, so the test is about agreement.
+# --------------------------------------------------------------------------
+
+
+def _spec_whose_shape_lookup_raises(raised: type[BaseException]) -> Mapping:
+    """A typed input spec whose ``"shape"`` lookup raises, and whose dtype does not.
+
+    Note that this raises from ``__getitem__``, so it is reached by a
+    membership test (`Mapping.__contains__` calls ``__getitem__``) just as
+    much as by an explicit read.
+    """
+
+    class ShapeLookupRaises(Mapping):
+        def __getitem__(self, key):
+            if key == "shape":
+                raise raised("boom from the shape lookup")
+            return "f32"
+
+        def __iter__(self):
+            return iter(("dtype", "shape"))
+
+        def __len__(self) -> int:
+            return 2
+
+    return ShapeLookupRaises()
+
+
+def _spec_read_outcome(read, spec) -> tuple[str, str]:
+    try:
+        read(spec, label="parameter")
+    except AutodiffError as error:
+        return ("categorized", error.category)
+    except Exception as error:  # noqa: BLE001 - the outcome under test
+        return ("raw", type(error).__name__)
+    return ("no raise", "")
+
+
+@pytest.mark.parametrize(
+    ("raised", "expected"),
+    [
+        (IndexError, ("categorized", "missing_shape_metadata")),
+        (TypeError, ("categorized", "missing_shape_metadata")),
+        (ValueError, ("categorized", "missing_shape_metadata")),
+        # Outside the three types either side normalizes: a shared limit,
+        # not a divergence. Pinned so it stays shared.
+        (RuntimeError, ("raw", "RuntimeError")),
+    ],
+    ids=["index_error", "type_error", "value_error", "runtime_error"],
+)
+def test_the_spec_read_matches_the_analysis_helper(raised, expected) -> None:
+    tracer_outcome = _spec_read_outcome(
+        training._typed_input_spec, _spec_whose_shape_lookup_raises(raised)
+    )
+    analysis_outcome = _spec_read_outcome(
+        _complete_typespec, _spec_whose_shape_lookup_raises(raised)
+    )
+
+    assert tracer_outcome == analysis_outcome, (
+        "the tracer's spec read and the analysis helper it mirrors must agree"
+    )
+    assert tracer_outcome == expected
+
+
+@pytest.mark.parametrize(
+    "raised",
+    [IndexError, TypeError, ValueError],
+    ids=["index_error", "type_error", "value_error"],
+)
+def test_a_shape_lookup_that_raises_is_categorized_through_the_public_api(raised) -> None:
+    """The same defect as it actually reaches a consumer."""
+    with pytest.raises(AutodiffError) as error:
+        trace_parameter_update(
+            sgd_update,
+            parameter=_spec_whose_shape_lookup_raises(raised),
+            gradient=GRADIENT_SPEC,
+            optimizer_inputs={"learning_rate": LEARNING_RATE_SPEC},
+        )
+
+    assert error.value.category == "missing_shape_metadata"
+    assert "parameter" in error.value.message
