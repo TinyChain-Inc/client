@@ -731,8 +731,29 @@ declaration order, seeds follow caller declaration order, forward captures
 follow forward-graph topological order, and local values follow the
 analyzed selection's schedule — topologically valid, with each operation
 emitted as late as its consumers allow, so a producer stays next to the
-operation that reads it and a consumer's bounded fusion window can see the
-two together — so repeated analyses of equivalent traces compare equal. A consumer never needs a private node map,
+operation that reads it *whenever nothing forces them apart*, and a
+consumer's bounded fusion window can usually see the two together — so
+repeated analyses of equivalent traces compare equal.
+
+Size a fusion look-ahead from the qualifier, not from the adjacency. "As late
+as its consumers allow" leaves a producer adjacent to its consumer only when
+that consumer has one operand left to wait for. A wider fan-in necessarily
+separates them: the consumer must wait for all of its operands, and only the
+last operand emitted can end up beside it. An operation reading four produced
+values emits `['t3', 't2', 't1', 't0', 'out']` — only `t0` is adjacent to
+`out`, and `t3` is four positions away from the operation that reads it. Put
+intermediate consumers in between and the same effect appears one level down:
+`['t3', 't2', 'c1', 't1', 't0', 'c0', 'out']`, where `t3` is separated from
+its consumer `c1` by `t2`.
+
+A hook with `lookahead = 2` offered `t3` sees `['t3', 't2']` in either case,
+and never the consumer it wants to fuse into. So a consumer whose pattern
+spans a producer and a multi-operand consumer must size its window for the
+fan-in it expects to meet — and must still tolerate never being offered the
+pair, since `FusionHook.fuse` returning `None` is always a legal outcome and
+the operation then lowers through its own handler.
+
+A consumer never needs a private node map,
 an ID-prefix convention, or a producer scan to work out what to bind; the
 analysis is structural, never derived from how a value id happens to be
 spelled.
@@ -820,6 +841,65 @@ time and therefore normalizes rather than lets escape uncategorized.
 `KeyboardInterrupt` and `SystemExit` are interpreter control flow, not a
 handler reporting failure, and are deliberately left to propagate rather than
 being folded into `handler_contract_violation`.
+
+### Every reachable operation needs a registered handler, fusion or not
+
+**Precondition.** Support is checked for every reachable operation *before*
+any lowering or fusion runs. An operation with no registered handler raises
+`unsupported_operator` even when a fusion hook would have consumed it and the
+handler would never have been called. The hook is not offered anything: the
+call has already failed.
+
+This bites precisely where a consumer least expects it. A target with no
+standalone transpose instruction, which only ever wants a transpose folded
+into the matmul that reads it, is exactly the shape fusion exists for — and
+registering a hook for `(transpose, matmul)` while registering no transpose
+handler fails with `unsupported_operator` naming the transpose.
+
+**Why it is this way.** Fusion collapses operations that are *already*
+supported into a cheaper form; it does not confer support. Making support
+conditional on a hook would mean the same program lowers or fails depending
+on which pattern a hook happened to recognize at run time, and an operation
+the hook declined would surface as a failure deep inside traversal instead of
+before it. The precondition keeps "can this program be lowered at all?" a
+question answered once, up front, from the registry alone.
+
+**What to register.** Declare the operator supported with a stub handler
+whose `lower` raises:
+
+```python
+from dataclasses import dataclass
+
+from tinychain.autodiff import AutodiffError, TransposeOperator
+
+
+@dataclass(frozen=True)
+class FusedOnlyTranspose:
+    """Declares transpose supported; it is only ever reachable via fusion."""
+
+    operator_type: type = TransposeOperator
+
+    def lower(self, context):
+        raise AutodiffError(
+            "unsupported_operator",
+            f"transpose {context.output_value_id!r} reached the standalone "
+            "lowering path; this target only supports a transpose fused into "
+            "the matmul that reads it",
+        )
+
+
+registry.register(FusedOnlyTranspose())
+```
+
+**The stub must raise — that is the point of it.** A stub that returns some
+plausible target value instead would let an unfused transpose lower silently
+and produce a wrong program, and nothing downstream would flag it: lowering
+would report success. Raising makes the same situation a categorized failure
+that names the operation, so a fusion window that turned out too narrow, or a
+pattern the hook declined, is reported rather than absorbed. Raise
+`AutodiffError` with a category of your own choosing — `unsupported_operator`
+reads best here — and it propagates with that category intact; any other
+exception type is normalized to `handler_contract_violation`.
 
 Lowering runs dependency analysis first, so a lowering call can also fail
 with any category that analysis raises: `missing_dependency`,
