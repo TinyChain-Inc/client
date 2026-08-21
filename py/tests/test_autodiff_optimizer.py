@@ -358,19 +358,26 @@ def test_a_configured_consumer_optimizer_traces_the_inputs_its_configuration_dec
 
 
 def test_signature_binding_alone_would_accept_a_declaration_the_optimizer_rejects() -> None:
-    """The vacuity this contract is designed for, demonstrated then closed.
+    """Binding the *call path* is vacuous; binding is not useless in general.
 
-    An optimizer is invoked through a call path that accepts arbitrary
-    keywords, so binding its signature accepts *any* declared input set. The
-    first half of this test shows the check that would have been applied
-    accepting a declaration that is plainly wrong; the second half shows the
-    declared-name check rejecting it.
+    An optimizer instance is invoked through `Optimizer.__call__`, which
+    accepts arbitrary keywords, so binding *that* signature accepts any
+    declared input set at all -- which is why the declared names are checked
+    as well. It does not follow that binding has nothing to say here: binding
+    the `update` method, which is what actually runs, rejects the same
+    declaration. The two checks catch different mistakes, so the fix is to
+    bind `update` *and* check the names, not to drop binding.
     """
     optimizer = SGD()
 
-    # Vacuous: this is exactly the check `trace_parameter_update` applies to a
-    # plain callable, and it raises nothing at all here.
+    # Vacuous on the call path: this raises nothing at all.
     inspect.signature(optimizer).bind(parameter=None, gradient=None, momentum=None)
+
+    # Not vacuous on the method that actually runs.
+    with pytest.raises(TypeError, match="learning_rate"):
+        inspect.signature(optimizer.update).bind(
+            parameter=None, gradient=None, momentum=None
+        )
 
     with pytest.raises(AutodiffError) as error:
         trace_parameter_update(
@@ -629,6 +636,147 @@ def test_no_optimizer_implementation_constructs_a_graph_record_or_operator() -> 
             assert not (isinstance(value, type) and issubclass(value, TensorOperator)), (
                 f"{implementation.__name__} binds a TensorOperator subclass as {name!r}"
             )
+
+
+# --------------------------------------------------------------------------
+# the optimizer path is checked at least as strictly as the callable path
+#
+# Binding and the declared-name check cover different mistakes. Binding
+# catches an implementation whose `update` parameters do not match the
+# declared inputs; the name check catches a declaration naming inputs the
+# expression never reads. An optimizer must get both, because dropping
+# binding would make this path strictly weaker than the plain-callable path
+# for exactly the mistakes it was introduced to catch. Each test below states
+# one mistake in both forms and requires the same category from each.
+# --------------------------------------------------------------------------
+
+
+class _UpdateMissingRequiredParameter(Optimizer):
+    """Declares an input its update method does not accept."""
+
+    required_optimizer_inputs = ("learning_rate",)
+
+    def update(self, *, parameter, gradient):
+        return parameter - gradient
+
+
+class _UpdateWithAnUndeclaredRequiredParameter(Optimizer):
+    """Its update method mandates a parameter nothing declares."""
+
+    required_optimizer_inputs = ("learning_rate",)
+
+    def update(self, *, parameter, gradient, learning_rate, momentum):
+        return parameter - learning_rate * gradient
+
+
+def _category_of(update, **optimizer_inputs) -> str:
+    with pytest.raises(AutodiffError) as error:
+        trace_parameter_update(
+            update,
+            parameter=PARAMETER_SPEC,
+            gradient=GRADIENT_SPEC,
+            optimizer_inputs=optimizer_inputs or None,
+        )
+    assert get_active_builder() is None
+    return error.value.category
+
+
+def test_an_update_method_missing_a_declared_input_matches_the_callable_path() -> None:
+    def equivalent_callable(*, parameter, gradient):
+        return parameter - gradient
+
+    optimizer_category = _category_of(
+        _UpdateMissingRequiredParameter(), learning_rate=RATE_SPEC
+    )
+    callable_category = _category_of(equivalent_callable, learning_rate=RATE_SPEC)
+
+    assert optimizer_category == callable_category == "invalid_update_signature"
+
+
+def test_an_update_method_with_an_undeclared_parameter_matches_the_callable_path() -> None:
+    def equivalent_callable(*, parameter, gradient, learning_rate, momentum):
+        return parameter - learning_rate * gradient
+
+    optimizer_category = _category_of(
+        _UpdateWithAnUndeclaredRequiredParameter(), learning_rate=RATE_SPEC
+    )
+    callable_category = _category_of(equivalent_callable, learning_rate=RATE_SPEC)
+
+    assert optimizer_category == callable_category == "invalid_update_signature"
+
+
+def test_no_optimizer_declaration_fault_escapes_uncategorized() -> None:
+    """Every fault on this path leaves through AutodiffError, never raw.
+
+    The optimizer path must not be the one entry into this function that lets
+    a raw TypeError out, which is what the three changes beneath this one were
+    for.
+    """
+    for optimizer in (
+        _UpdateMissingRequiredParameter(),
+        _UpdateWithAnUndeclaredRequiredParameter(),
+    ):
+        with pytest.raises(AutodiffError):
+            trace_parameter_update(
+                optimizer,
+                parameter=PARAMETER_SPEC,
+                gradient=GRADIENT_SPEC,
+                optimizer_inputs={"learning_rate": RATE_SPEC},
+            )
+
+
+def test_binding_the_update_method_does_not_make_the_name_check_redundant() -> None:
+    """Both checks are needed: this one binds anything, and still must fail."""
+
+    class _AbsorbingUpdate(Optimizer):
+        required_optimizer_inputs = ("learning_rate",)
+
+        def update(self, **optimizer_inputs):
+            return optimizer_inputs["parameter"]
+
+    # Binding says nothing about this implementation.
+    inspect.signature(_AbsorbingUpdate().update).bind(
+        parameter=None, gradient=None, momentum=None
+    )
+
+    assert (
+        _category_of(_AbsorbingUpdate(), momentum=RATE_SPEC)
+        == "invalid_update_signature"
+    )
+
+
+# --------------------------------------------------------------------------
+# a malformed declaration of the required names is categorized too
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "declared",
+    [
+        pytest.param(None, id="none"),
+        pytest.param(42, id="int"),
+        pytest.param(object(), id="not_iterable"),
+        pytest.param("learning_rate", id="a_bare_string_is_not_a_name_collection"),
+        pytest.param(("learning_rate", 7), id="a_name_that_is_not_a_string"),
+        pytest.param(("",), id="an_empty_name"),
+    ],
+)
+def test_a_malformed_required_input_declaration_is_categorized(declared) -> None:
+    class _MalformedDeclaration(Optimizer):
+        required_optimizer_inputs = declared
+
+        def update(self, *, parameter, gradient, **optimizer_inputs):
+            return parameter - gradient
+
+    with pytest.raises(AutodiffError) as error:
+        trace_parameter_update(
+            _MalformedDeclaration(),
+            parameter=PARAMETER_SPEC,
+            gradient=GRADIENT_SPEC,
+            optimizer_inputs={"learning_rate": RATE_SPEC},
+        )
+    assert error.value.category == "invalid_update_signature"
+    assert get_active_builder() is None
 
 
 # --------------------------------------------------------------------------
