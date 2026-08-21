@@ -239,6 +239,12 @@ def trace_parameter_update(
     malformed declaration never reaches the consumer's callable body.
     """
     resolved_optimizer_inputs = _resolve_optimizer_inputs(optimizer_inputs)
+    # One noun for this update, computed once and used by every failure it can
+    # cause. A consumer reading a message at failure time has to know whether
+    # to look at the callable they passed or at their optimizer's update
+    # method, and two independently written nouns are two chances to name the
+    # wrong one.
+    update_label = _update_label(update)
     if isinstance(update, Optimizer):
         # Two checks, because they catch two different mistakes. The names
         # catch a declaration naming inputs the expression never reads;
@@ -256,7 +262,7 @@ def trace_parameter_update(
             parameter=parameter,
             gradient=gradient,
             optimizer_inputs=resolved_optimizer_inputs,
-            label=f"optimizer {type(update).__name__!r} update method",
+            label=update_label,
         )
     else:
         _validate_update_signature(
@@ -264,6 +270,7 @@ def trace_parameter_update(
             parameter=parameter,
             gradient=gradient,
             optimizer_inputs=resolved_optimizer_inputs,
+            label=update_label,
         )
     # Ahead of the builder, like the signature check above and for the same
     # reason: failing before any trace begins is then a structural property
@@ -296,7 +303,7 @@ def trace_parameter_update(
     if not isinstance(updated_parameter, Tensor):
         raise AutodiffError(
             "invalid_update_output",
-            "update callable must return a Tensor, got "
+            f"{update_label} must return a Tensor, got "
             f"{type(updated_parameter).__name__!r}",
         )
 
@@ -458,6 +465,21 @@ def _typed_input_spec(spec: object, *, label: str) -> dict[str, object]:
     return {"dtype": spec["dtype"], "shape": declared_shape}
 
 
+def _update_label(update: "Optimizer | Callable[..., object]") -> str:
+    """Name whichever form of update *update* is, for use in every message.
+
+    A consumer meeting a failure needs to know where to look. For a plain
+    callable that is the callable they passed; for an `Optimizer` it is the
+    implementation's `update` method, which they did not pass and which
+    "update callable" would misname. Both the signature check and the
+    traced-output check take their noun from here, so the two cannot come to
+    disagree about what failed.
+    """
+    if isinstance(update, Optimizer):
+        return f"optimizer {type(update).__name__!r} update method"
+    return "update callable"
+
+
 def _validate_update_signature(
     update: Callable[..., object],
     *,
@@ -478,7 +500,9 @@ def _validate_update_signature(
     itself. For an `Optimizer`, it is the bound `update` method rather than
     the instance -- binding the instance would bind `Optimizer.__call__`,
     which accepts arbitrary keywords and therefore accepts anything. *label*
-    names whichever of the two is at fault.
+    names whichever of the two is at fault; callers pass the one
+    :func:`_update_label` computed, so this default is a fallback and not a
+    second place the noun is decided.
     """
     required_names = ("parameter", "gradient", *optimizer_inputs.keys())
     try:
