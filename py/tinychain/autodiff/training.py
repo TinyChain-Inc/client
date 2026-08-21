@@ -30,12 +30,18 @@ Named invariants and where each is enforced (spec-driven, each in one place):
   property rather than an accident of statement order: the callable's body
   cannot run before its signature has been validated.
 * **Declared inputs match what an optimizer reads.** For an `Optimizer`, the
-  invariant above is enforced by name instead of by signature, once, in
-  :func:`_validate_declared_optimizer_inputs`, in the same place and at the
-  same moment. It must be by name: an optimizer is invoked through
-  `Optimizer.__call__`, which accepts arbitrary keywords, so binding its
-  signature would accept any declaration at all and leave the check vacuous
-  for exactly these values.
+  invariant above is enforced twice over, in the same place and at the same
+  moment, because two different mistakes are possible. The signature check is
+  applied to the `update` *method* -- not to the instance, whose
+  `Optimizer.__call__` accepts arbitrary keywords and would therefore accept
+  any declaration at all -- and catches an implementation whose parameters do
+  not match the declared inputs. :func:`_validate_declared_optimizer_inputs`
+  then catches a declaration naming inputs the expression never reads.
+  Supplementing the signature check rather than replacing it is what keeps
+  this path from being weaker than the plain-callable path; the declared names
+  themselves are read through
+  :func:`_required_optimizer_input_names`, so a malformed declaration is
+  categorized rather than escaping as a raw `TypeError`.
 * **Traced output validity.** The callable must return a `Tensor`. Checked
   once, immediately after invoking the callable and before `builder.build`.
 * **Typed input spec well-formedness.** Each declared spec must be a mapping
@@ -210,11 +216,24 @@ def trace_parameter_update(
     """
     resolved_optimizer_inputs = _resolve_optimizer_inputs(optimizer_inputs)
     if isinstance(update, Optimizer):
-        # Not a signature check, and deliberately so: an optimizer is invoked
-        # through `Optimizer.__call__`, which accepts arbitrary keywords, so
-        # binding its signature would accept any declaration at all and the
-        # check below it would be vacuous for exactly these values.
+        # Two checks, because they catch two different mistakes. The names
+        # catch a declaration naming inputs the expression never reads;
+        # binding catches an implementation whose `update` parameters do not
+        # match the declared inputs. Binding is applied to `update` -- the
+        # method that actually runs -- and not to the instance: an optimizer
+        # is invoked through `Optimizer.__call__`, which accepts arbitrary
+        # keywords, so binding *that* signature would accept any declaration
+        # at all. Dropping binding entirely would leave this path weaker than
+        # the plain-callable path below for the very mistakes an optimizer
+        # exists to catch.
         _validate_declared_optimizer_inputs(update, resolved_optimizer_inputs)
+        _validate_update_signature(
+            update.update,
+            parameter=parameter,
+            gradient=gradient,
+            optimizer_inputs=resolved_optimizer_inputs,
+            label=f"optimizer {type(update).__name__!r} update method",
+        )
     else:
         _validate_update_signature(
             update,
@@ -421,12 +440,19 @@ def _validate_update_signature(
     parameter: Mapping[str, object],
     gradient: Mapping[str, object],
     optimizer_inputs: Mapping[str, Mapping[str, object]],
+    label: str = "update callable",
 ) -> None:
     """Require *update* to accept exactly the declared typed inputs by keyword.
 
     This is the single point where update-callable well-formedness is
     enforced, and it runs before any builder is entered or any typed input is
-    declared, so a rejected callable never has its body invoked (AC4).
+    declared, so a rejected callable never has its body invoked.
+
+    It serves both entry paths. For a plain callable, *update* is the callable
+    itself. For an `Optimizer`, it is the bound `update` method rather than
+    the instance -- binding the instance would bind `Optimizer.__call__`,
+    which accepts arbitrary keywords and therefore accepts anything. *label*
+    names whichever of the two is at fault.
     """
     required_names = ("parameter", "gradient", *optimizer_inputs.keys())
     try:
@@ -435,9 +461,52 @@ def _validate_update_signature(
     except TypeError as exc:
         raise AutodiffError(
             "invalid_update_signature",
-            "update callable must accept exactly the declared typed inputs "
+            f"{label} must accept exactly the declared typed inputs "
             f"{required_names!r} by keyword: {exc}",
         ) from exc
+
+
+def _required_optimizer_input_names(optimizer: Optimizer) -> tuple[str, ...]:
+    """Read one optimizer's declared input names, failing closed with a category.
+
+    ``required_optimizer_inputs`` is written by an implementation, so a
+    malformed one is that implementation's bug -- but it arrives through this
+    public entry point, and nothing here may leave through a raw `TypeError`.
+    A declaration that cannot be read as a collection of names is therefore
+    reported as what it is: a declaration fault, in the same category as every
+    other one on this path.
+
+    A bare string is rejected rather than iterated. It is the likely mistake
+    for an optimizer with a single input, and iterating it would silently
+    declare one input per character.
+    """
+    declared = optimizer.required_optimizer_inputs
+    if isinstance(declared, str):
+        raise AutodiffError(
+            "invalid_update_signature",
+            f"optimizer {type(optimizer).__name__!r} declares its required "
+            f"optimizer inputs as the string {declared!r}; a single name must "
+            "still be declared as a collection, for example "
+            f"({declared!r},) -- otherwise it declares one input per character",
+        )
+    try:
+        names = tuple(declared)
+    except TypeError as exc:
+        raise AutodiffError(
+            "invalid_update_signature",
+            f"optimizer {type(optimizer).__name__!r} must declare its "
+            "required optimizer inputs as a collection of names, got "
+            f"{type(declared).__name__!r}",
+        ) from exc
+    for name in names:
+        if not isinstance(name, str) or not name:
+            raise AutodiffError(
+                "invalid_update_signature",
+                f"optimizer {type(optimizer).__name__!r} declares a required "
+                f"optimizer input named {name!r}; each declared name must be "
+                "a non-empty string",
+            )
+    return names
 
 
 def _validate_declared_optimizer_inputs(
@@ -451,20 +520,18 @@ def _validate_declared_optimizer_inputs(
     spec is read -- so a rejected declaration never reaches the optimizer's
     expression.
 
-    It exists because signature binding cannot do the job here.
-    `Optimizer.__call__` accepts arbitrary keywords, so
-    `inspect.signature(optimizer).bind(...)` succeeds for *any* declared input
-    set; applying the callable check to an optimizer would report success on
-    a declaration that names nothing the expression reads. The declared names
-    are what restores a real check on this path.
+    It supplements binding rather than replacing it. Binding the *instance*
+    is vacuous -- `Optimizer.__call__` accepts arbitrary keywords, so
+    `inspect.signature(optimizer).bind(...)` succeeds for any declared input
+    set -- but binding the `update` method is not, and the caller does both.
+    The two catch different mistakes: binding catches an implementation whose
+    parameters do not match the declared inputs, and this catches a
+    declaration naming inputs the expression never reads.
 
     The comparison is by name set: the inputs are passed by keyword, so their
-    order carries no meaning. An implementation whose
-    ``required_optimizer_inputs`` is not a collection of names is its own
-    bug -- it simply fails to match any sensible declaration and is reported
-    here as a mismatch, rather than being re-validated on the caller's behalf.
+    order carries no meaning.
     """
-    required_names = tuple(optimizer.required_optimizer_inputs)
+    required_names = _required_optimizer_input_names(optimizer)
     declared_names = tuple(optimizer_inputs)
     missing = tuple(name for name in required_names if name not in optimizer_inputs)
     unexpected = tuple(name for name in declared_names if name not in required_names)

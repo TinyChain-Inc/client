@@ -979,27 +979,38 @@ traced = trace_parameter_update(
 )
 ```
 
-**Given an optimizer, the declared inputs are checked by name, not by
-signature.** An optimizer is invoked through a call path that accepts
-arbitrary keywords, so `inspect.signature(optimizer).bind(...)` succeeds for
-*any* declared input set — applying the plain-callable signature check to an
-optimizer would report success on a declaration naming nothing the expression
-reads. `trace_parameter_update` therefore compares the declared
-`optimizer_inputs` keys against `required_optimizer_inputs` instead, and a
-mismatch in either direction raises
-`AutodiffError("invalid_update_signature", ...)` naming what is missing and
-what was unexpected. This runs in the same place as the signature check it
-replaces — before the builder is entered and before any spec is read — so a
-rejected declaration never reaches the expression. A plain callable is traced
-exactly as before, including a `**kwargs` callable, which still binds any
-declaration and lets its own body decide.
+**Given an optimizer, the declared inputs are checked twice — by signature
+and by name.** Two different mistakes are possible, and each check catches
+one:
+
+- The **signature** check binds the `update` *method* against the declared
+  inputs, catching an implementation whose parameters do not match what it
+  declares. It is applied to `update` rather than to the instance because an
+  optimizer is invoked through a call path that accepts arbitrary keywords:
+  `inspect.signature(optimizer).bind(...)` succeeds for *any* declared input
+  set, while `inspect.signature(optimizer.update).bind(...)` does not.
+- The **name** check compares the declared `optimizer_inputs` keys against
+  `required_optimizer_inputs`, catching a declaration that names inputs the
+  expression never reads — which binding cannot catch when `update` absorbs
+  keywords.
+
+Both raise `AutodiffError("invalid_update_signature", ...)`, and a
+malformed `required_optimizer_inputs` — one that is not a collection of
+names, or a bare string, which would otherwise declare one input per
+character — raises the same category rather than escaping as a raw
+`TypeError`. All of it runs before the builder is entered and before any spec
+is read, so a rejected declaration never reaches the expression. The result is
+that an optimizer is checked at least as strictly as the equivalent plain
+callable: the same mistake yields the same category on both paths. A plain
+callable is traced exactly as before, including a `**kwargs` callable, which
+still binds any declaration and lets its own body decide.
 
 `sgd_update(*, parameter, gradient, learning_rate)` is the compatibility path
 for callers that already import the reference update as a function. It
 authors nothing of its own — the expression lives in `SGD`, and the function
 delegates to a shared instance of it, so the two cannot drift apart. New
-callers should pass `SGD()` instead, which additionally gets the declared-input
-check above. Neither it, nor `SGD`, nor
+callers should pass `SGD()` instead, which additionally gets the name check
+above. Neither it, nor `SGD`, nor
 `trace_parameter_update` constructs a graph-record or operator type directly;
 doing so is a spec invariant, not just a style preference, and is checked by
 a dedicated regression test that additionally scans the module's own
@@ -1011,8 +1022,9 @@ Update-callable well-formedness is checked once, before any input is
 declared or the builder is entered, so an invalid callable's body never runs;
 a signature that does not accept exactly the declared inputs by keyword
 raises `AutodiffError("invalid_update_signature", ...)`; for an `Optimizer`
-the same category reports a declared-input mismatch, so the contract adds no
-new error category. A callable that does
+the same category reports a declared-input mismatch and a malformed
+declaration of the required names, so the contract adds no new error
+category. A callable that does
 not return a `Tensor` raises `AutodiffError("invalid_update_output", ...)`
 after it runs. Typed-input completeness and traced-expression shape/dtype
 compatibility are not re-validated here — they are the same checks typed
