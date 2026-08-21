@@ -374,15 +374,36 @@ def _producers_by_value(
     *,
     label: str,
 ) -> dict[str, "TensorNodeRecord"]:
-    """Index nodes by produced value, rejecting a value with two producers.
+    """Index nodes by produced value, rejecting a repeated node or value id.
 
     This check stays ahead of the provenance assignment pass rather than
     folding into it, because traversal is defined in terms of this index: with
     two producers for one value, the reachable set itself is ambiguous and the
     pass would only ever see whichever node the index kept.
+
+    A repeated *node* id is rejected here for the same reason and in the same
+    way. The reachable walk keys visited operations by node id, so two
+    distinct operations sharing one id are conflated into one: independent
+    duplicates make the walk skip the second silently, and the analysis then
+    succeeds with an answer that reports one of the operations neither as a
+    local value nor as a missing dependency -- a consumer binding from that
+    answer builds a wrong program. Chained duplicates instead look like the
+    walk re-entering an in-progress node and are reported as a cycle that does
+    not exist. Both are one value id or node id standing for two things, which
+    is what ``ambiguous_producer`` already means.
     """
     producers: dict[str, "TensorNodeRecord"] = {}
+    nodes_by_id: dict[str, "TensorNodeRecord"] = {}
     for node in nodes:
+        previous = nodes_by_id.get(node.node_id)
+        if previous is not None:
+            raise AutodiffError(
+                "ambiguous_producer",
+                f"{label} node id {node.node_id!r} identifies both the operation "
+                f"producing value {previous.output_value_id!r} and the operation "
+                f"producing value {node.output_value_id!r}",
+            )
+        nodes_by_id[node.node_id] = node
         existing = producers.get(node.output_value_id)
         if existing is not None:
             raise AutodiffError(

@@ -24,9 +24,27 @@ Named invariants and where each is enforced (spec-driven, each in one place):
   cannot run before its signature has been validated.
 * **Traced output validity.** The callable must return a `Tensor`. Checked
   once, immediately after invoking the callable and before `builder.build`.
-* **Typed input completeness.** Delegated entirely to
-  `TensorGraphBuilder.input`'s existing dtype/shape validation -- this module
-  does not re-validate a type spec mapping.
+* **Typed input spec well-formedness.** Each declared spec must be a mapping
+  providing a ``dtype`` and a ``shape``. Checked once, in
+  :func:`_typed_input_spec`, before the builder is entered. This is *not*
+  delegated to `TensorGraphBuilder.input`, and cannot be: the specs used to be
+  unpacked into it as ``**dict(spec)``, so a spec that was not a mapping, or
+  that named its keys wrongly, failed in the unpack -- before the builder was
+  ever reached -- and a keyword-argument `TypeError` carries no category. The
+  spec is therefore read by key instead, exactly as the structured dependency
+  analysis reads a type spec, and an unrecognized extra key is ignored for the
+  same reason it is ignored there: one spec must not be accepted by the
+  analysis and rejected by the tracer.
+* **Declared optimizer inputs.** ``optimizer_inputs`` declares *which*
+  keyword inputs exist, so a container that is not a mapping leaves the
+  declared input set unestablished and the update callable's signature
+  uncheckable. Checked once, in :func:`_resolve_optimizer_inputs`.
+* **Typed input dtype and shape validity.** The dtype *value* is delegated
+  entirely to `TensorGraphBuilder.input`'s existing
+  `check_differentiable_dtype`. The shape's rank and dimensions are checked
+  against `shape.parse_shape`, the same shared parser the dependency analysis
+  uses, so the builder's own normalization can no longer be reached with a
+  value it would reject with an uncategorized `ValueError`.
 * **Shape/dtype compatibility of the traced expression** (for example a
   gradient shape incompatible with the parameter shape). Delegated entirely to
   the existing typed-tracing Sub/Mul shape inference; this module does not
@@ -45,6 +63,7 @@ from typing import Optional
 
 from .graph import TensorGraph, TensorGraphBuilder
 from .protocol import AutodiffError
+from .shape import parse_shape
 
 
 @dataclass(frozen=True)
@@ -72,16 +91,29 @@ def trace_parameter_update(
     """Trace an ordinary Tensor *update* callable into a finalized typed graph.
 
     ``parameter``, ``gradient``, and each ``optimizer_inputs`` value are typed
-    input specs (``{"dtype": ..., "shape": ...}``) forwarded verbatim to
-    :meth:`TensorGraphBuilder.input`. ``update`` is called once, by keyword,
-    with a ``Tensor`` for ``parameter``, a ``Tensor`` for ``gradient``, and a
-    ``Tensor`` for each declared optimizer input; it must return the single
-    updated-parameter ``Tensor``, expressed with ordinary Tensor operations.
+    input specs (``{"dtype": ..., "shape": ...}``), read by key and passed on
+    to :meth:`TensorGraphBuilder.input`; an unrecognized extra key is ignored.
+    ``update`` is called once, by keyword, with a ``Tensor`` for
+    ``parameter``, a ``Tensor`` for ``gradient``, and a ``Tensor`` for each
+    declared optimizer input; it must return the single updated-parameter
+    ``Tensor``, expressed with ordinary Tensor operations.
+
+    Every declared spec is validated before the builder is entered, so a
+    malformed declaration never reaches the consumer's callable body.
     """
-    resolved_optimizer_inputs = optimizer_inputs or {}
+    resolved_optimizer_inputs = _resolve_optimizer_inputs(optimizer_inputs)
     _validate_update_signature(
         update, parameter=parameter, gradient=gradient, optimizer_inputs=resolved_optimizer_inputs
     )
+    # Ahead of the builder, like the signature check above and for the same
+    # reason: failing before any trace begins is then a structural property
+    # rather than an accident of statement order inside the trace.
+    declared_specs = {
+        "parameter": _typed_input_spec(parameter, label="parameter"),
+        "gradient": _typed_input_spec(gradient, label="gradient"),
+    }
+    for name, spec in resolved_optimizer_inputs.items():
+        declared_specs[name] = _typed_input_spec(spec, label=name)
 
     # Deferred import: importing collection.tensor at module scope would
     # initialize Tensor, whose recorder imports this package for concrete
@@ -89,11 +121,11 @@ def trace_parameter_update(
     from ..collection.tensor import Tensor
 
     with TensorGraphBuilder() as builder:
-        parameter_tensor = builder.input("parameter", **dict(parameter))
-        gradient_tensor = builder.input("gradient", **dict(gradient))
+        parameter_tensor = builder.input("parameter", **declared_specs["parameter"])
+        gradient_tensor = builder.input("gradient", **declared_specs["gradient"])
         optimizer_tensors = {
-            name: builder.input(name, **dict(spec))
-            for name, spec in resolved_optimizer_inputs.items()
+            name: builder.input(name, **declared_specs[name])
+            for name in resolved_optimizer_inputs
         }
         updated_parameter = update(
             parameter=parameter_tensor,
@@ -122,6 +154,68 @@ def trace_parameter_update(
         updated_parameter_id=builder.value_id(updated_parameter),
         input_value_ids=input_value_ids,
     )
+
+
+def _resolve_optimizer_inputs(optimizer_inputs: object) -> Mapping[str, object]:
+    """Normalize the declared optimizer inputs, rejecting a malformed container.
+
+    ``optimizer_inputs`` declares *which* keyword inputs exist, so a container
+    that is not a mapping leaves the declared input set unestablished and the
+    update callable's signature uncheckable -- which is the failure
+    ``invalid_update_signature`` owns. The category name points a reader at
+    the callable, so the message says plainly that the argument is at fault
+    and the callable is not.
+    """
+    if optimizer_inputs is None:
+        return {}
+    if not isinstance(optimizer_inputs, Mapping):
+        raise AutodiffError(
+            "invalid_update_signature",
+            "the optimizer_inputs argument is at fault here, not the update "
+            "callable: optimizer_inputs must be a mapping of input name to "
+            f"typed input spec, got {type(optimizer_inputs).__name__!r}; the "
+            "declared input set cannot be established, so the callable's "
+            "signature cannot be checked against it",
+        )
+    return optimizer_inputs
+
+
+def _typed_input_spec(spec: object, *, label: str) -> dict[str, object]:
+    """Read one declared typed input spec, failing closed with a category.
+
+    Mirrors ``dependencies._complete_typespec``: the spec is read by key
+    rather than unpacked, an absent or unreadable ``dtype`` is
+    ``missing_dtype_metadata``, an absent or malformed ``shape`` is
+    ``missing_shape_metadata``, and an extra key is ignored. A consumer then
+    meets one category per class of mistake wherever they hit it.
+
+    The dtype *value* is deliberately not judged here. `TensorGraphBuilder`'s
+    ``check_differentiable_dtype`` already categorizes it, and re-checking
+    would give one mistake two decision sites. The shape *is* checked here,
+    because the builder's normalization rejects a malformed dimension with an
+    uncategorized `ValueError`; ``parse_shape`` is the shared parser the
+    dependency analysis uses and accepts exactly what the builder accepts.
+    """
+    if not isinstance(spec, Mapping):
+        raise AutodiffError(
+            "missing_dtype_metadata",
+            f"typed input {label!r} must be declared as a mapping of 'dtype' "
+            f"and 'shape', got {type(spec).__name__!r}",
+        )
+    if "dtype" not in spec:
+        raise AutodiffError(
+            "missing_dtype_metadata",
+            f"typed input {label!r} declares no 'dtype'; it has "
+            f"{sorted(str(key) for key in spec)}",
+        )
+    if "shape" not in spec:
+        raise AutodiffError(
+            "missing_shape_metadata",
+            f"typed input {label!r} declares no 'shape'; it has "
+            f"{sorted(str(key) for key in spec)}",
+        )
+    parse_shape(spec["shape"], label=f"typed input {label!r} shape")
+    return {"dtype": spec["dtype"], "shape": spec["shape"]}
 
 
 def _validate_update_signature(
