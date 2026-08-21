@@ -444,3 +444,120 @@ def test_a_malformed_typed_input_spec_leaves_no_builder_active(overrides) -> Non
         trace_parameter_update(sgd_update, **_malformed_call_kwargs(overrides))
 
     assert get_active_builder() is None
+
+
+def test_a_typed_input_spec_carrying_an_extra_key_is_accepted() -> None:
+    """Pins a deliberate widening, not pre-existing behaviour.
+
+    Before this, the specs were unpacked as ``**dict(spec)``, so an unknown
+    key raised a raw ``TypeError``. Reading ``dtype`` and ``shape`` by key
+    instead -- the only way to categorize a malformed spec without inventing
+    a category for "unexpected key" -- makes an extra key ignored, matching
+    the structured dependency analysis, which has always read a type spec by
+    key and ignored the rest. A consumer must not find one spec accepted by
+    the analysis and rejected by the update tracer.
+
+    If that widening is ever silently reversed, this test is what fails.
+    """
+    traced = trace_parameter_update(
+        sgd_update,
+        parameter={"dtype": "f32", "shape": (2, 3), "device": "cpu"},
+        gradient={"dtype": "f32", "shape": (2, 3), "layout": "dense"},
+        optimizer_inputs={"learning_rate": {"dtype": "f32", "shape": (), "device": "cpu"}},
+    )
+
+    assert set(traced.input_value_ids) == {"parameter", "gradient", "learning_rate"}
+    parameter_id = traced.input_value_ids["parameter"]
+    declared_parameter = dict(traced.graph.inputs)[parameter_id]
+    assert set(declared_parameter) == {"dtype", "shape"}, (
+        "the extra key must be ignored, not recorded on the declared input"
+    )
+    assert declared_parameter["dtype"] == "f32"
+    assert tuple(declared_parameter["shape"]) == (2, 3)
+
+
+@pytest.mark.parametrize(
+    "falsy_container",
+    [0, "", [], ()],
+    ids=["zero", "empty_string", "empty_list", "empty_tuple"],
+)
+def test_a_falsy_non_mapping_optimizer_inputs_is_rejected(falsy_container) -> None:
+    """Pins a deliberate rejection, and pins *which* argument is blamed.
+
+    ``optimizer_inputs`` used to be resolved as ``optimizer_inputs or {}``, so
+    a falsy non-mapping was silently read as "no optimizer inputs". With an
+    update that needs one, as here, the caller was then told their *callable*
+    was missing a ``learning_rate`` parameter -- blaming the function for a
+    fault in the argument beside it.
+
+    The category alone does not discriminate the two: it is
+    ``invalid_update_signature`` either way. The message assertion below is
+    what does, which is why it is not decoration. Restoring
+    ``optimizer_inputs or {}`` for readability leaves the category assertion
+    passing and fails on the message.
+
+    ``None`` is excluded deliberately -- it is the documented default for
+    "no optimizer inputs" and must keep tracing successfully, which a sibling
+    test below pins.
+    """
+    with pytest.raises(AutodiffError) as error:
+        trace_parameter_update(
+            sgd_update,
+            parameter=PARAMETER_SPEC,
+            gradient=GRADIENT_SPEC,
+            optimizer_inputs=falsy_container,
+        )
+
+    assert error.value.category == "invalid_update_signature"
+    assert "optimizer_inputs" in error.value.message
+
+
+@pytest.mark.parametrize(
+    "falsy_container",
+    [0, "", [], ()],
+    ids=["zero", "empty_string", "empty_list", "empty_tuple"],
+)
+def test_a_falsy_non_mapping_optimizer_inputs_no_longer_traces_silently(
+    falsy_container,
+) -> None:
+    """Pins the rejection of something that previously succeeded outright.
+
+    This is the half where the old ``optimizer_inputs or {}`` produced no
+    diagnostic at all: an update needing no optimizer inputs traced happily,
+    so a caller who passed a malformed container got a finished graph and no
+    hint that what they declared had been discarded.
+
+    A previously succeeding call that now fails is the direction that breaks
+    a caller relying on it, even accidentally, so it is pinned as a decision
+    rather than left to read as an accident.
+    """
+
+    def update_without_optimizer_inputs(*, parameter, gradient):
+        return parameter - gradient
+
+    with pytest.raises(AutodiffError) as error:
+        trace_parameter_update(
+            update_without_optimizer_inputs,
+            parameter=PARAMETER_SPEC,
+            gradient=GRADIENT_SPEC,
+            optimizer_inputs=falsy_container,
+        )
+
+    assert error.value.category == "invalid_update_signature"
+    assert "optimizer_inputs" in error.value.message
+
+
+def test_optimizer_inputs_defaulting_to_none_still_declares_no_optimizer_inputs() -> None:
+    """The other half of the rule above: `None` remains the way to declare none."""
+
+    def update_without_optimizer_inputs(*, parameter, gradient):
+        return parameter - gradient
+
+    traced = trace_parameter_update(
+        update_without_optimizer_inputs,
+        parameter=PARAMETER_SPEC,
+        gradient=GRADIENT_SPEC,
+        optimizer_inputs=None,
+    )
+
+    assert set(traced.input_value_ids) == {"parameter", "gradient"}
