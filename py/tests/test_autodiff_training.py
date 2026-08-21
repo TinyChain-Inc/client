@@ -707,28 +707,41 @@ def test_a_shape_that_raises_while_being_read_is_categorized(raised) -> None:
 # --------------------------------------------------------------------------
 
 
-def test_an_int_subclass_shape_dimension_still_traces() -> None:
-    """Guards against narrowing what a shape dimension may be.
+def test_an_int_subclass_shape_dimension_is_rejected_at_the_named_input() -> None:
+    """An `int` subclass dimension is rejected, as it always has been.
 
-    `TensorGraphBuilder.input` accepts any `int` instance that is not a
-    `bool`, so an `IntEnum` dimension traced before the spec pre-check
-    existed. A pre-check stricter than the builder would silently withdraw
-    that, which is a behaviour change this fix is not allowed to make.
+    `TensorGraphBuilder.input` accepts any non-`bool` `int` instance, so it
+    looked as though the spec pre-check had narrowed what a dimension may be.
+    It has not: `parse_shape` requires ``type(dimension) is int`` and governs
+    every later read of the recorded metadata, so an `IntEnum` dimension has
+    always failed with this same category -- before the pre-check existed it
+    simply failed a moment later, during finalization.
+
+    What the pre-check does change is *where* it is reported, and this test
+    pins that. Failing at the declaration names the offending input; failing
+    downstream reports only ``tensor shape metadata``, which does not tell a
+    caller which of their declarations was wrong. Loosening the pre-check to
+    accept an `int` subclass would move the failure back to the vaguer site
+    without making anything traceable, so this test fails if that is done.
     """
 
     class Dimension(enum.IntEnum):
         ROWS = 2
         COLUMNS = 3
 
-    traced = trace_parameter_update(
-        sgd_update,
-        parameter={"dtype": "f32", "shape": (Dimension.ROWS, Dimension.COLUMNS)},
-        gradient={"dtype": "f32", "shape": (Dimension.ROWS, Dimension.COLUMNS)},
-        optimizer_inputs={"learning_rate": LEARNING_RATE_SPEC},
-    )
+    with pytest.raises(AutodiffError) as error:
+        trace_parameter_update(
+            sgd_update,
+            parameter={"dtype": "f32", "shape": (Dimension.ROWS, Dimension.COLUMNS)},
+            gradient={"dtype": "f32", "shape": (Dimension.ROWS, Dimension.COLUMNS)},
+            optimizer_inputs={"learning_rate": LEARNING_RATE_SPEC},
+        )
 
-    declared = dict(traced.graph.inputs)[traced.input_value_ids["parameter"]]
-    assert tuple(declared["shape"]) == (2, 3)
+    assert error.value.category == "missing_shape_metadata"
+    assert "parameter" in error.value.message, (
+        "the failure must name the declaration at fault, not just 'tensor "
+        "shape metadata'"
+    )
 
 
 @pytest.mark.parametrize("boolean_dimension", [True, False], ids=["true", "false"])
