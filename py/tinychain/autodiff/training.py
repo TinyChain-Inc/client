@@ -23,7 +23,8 @@ outside it.
 
 Named invariants and where each is enforced (spec-driven, each in one place):
 
-* **Update-callable well-formedness.** The callable's signature must accept
+* **Update-callable well-formedness.** The signature that will be invoked --
+  a plain callable itself, or an `Optimizer`'s `update` method -- must accept
   exactly the declared keyword inputs. Checked once, before the builder is
   entered, in :func:`_validate_update_signature` -- this is what makes
   "invalid update callables fail before consumer execution" a structural
@@ -120,10 +121,15 @@ class Optimizer(ABC):
     properties of the values being trained rather than of the algorithm.
 
     An instance is callable, so it is usable wherever a plain update callable
-    is. That call path accepts arbitrary keywords, which is exactly why
-    :func:`trace_parameter_update` does *not* signature-check an optimizer --
-    binding such a signature accepts any declaration at all. It validates
-    :attr:`required_optimizer_inputs` instead.
+    is. :func:`trace_parameter_update` checks an optimizer *both* ways, and an
+    implementor should expect both. It binds :meth:`update` against the
+    declared inputs, so an implementation whose parameters do not match what
+    it declares is rejected; and it compares
+    :attr:`required_optimizer_inputs` against the caller's declaration, so a
+    declaration naming inputs the expression never reads is rejected too. The
+    binding is applied to :meth:`update` rather than to the instance because
+    the call path -- :meth:`__call__` -- accepts arbitrary keywords, so
+    binding *that* would accept any declaration at all.
     """
 
     @property
@@ -134,8 +140,9 @@ class Optimizer(ABC):
         These are the *optimizer* inputs only: ``parameter`` and ``gradient``
         are declared by every traced update and are never named here. The
         names must match the keys of the ``optimizer_inputs`` a caller
-        declares to :func:`trace_parameter_update`, which is the check that
-        replaces signature binding on this path.
+        declares to :func:`trace_parameter_update`, and must also match what
+        :meth:`update` accepts -- the two are checked separately, because an
+        implementation can get either one wrong on its own.
 
         An implementation may answer per instance -- configuration is free to
         decide which inputs the expression reads.
@@ -153,10 +160,21 @@ class Optimizer(ABC):
         parameter `Tensor`, and must build it with ordinary `Tensor`
         operations -- never by constructing a graph, a node record, or a
         concrete operator.
+
+        This method's own signature *is* checked: it is bound against the
+        declared inputs before any tracing begins, so parameters that do not
+        match what :attr:`required_optimizer_inputs` declares are reported
+        rather than reaching the expression.
         """
 
     def __call__(self, **optimizer_inputs: object) -> object:
-        """Make an optimizer usable wherever a plain update callable is."""
+        """Make an optimizer usable wherever a plain update callable is.
+
+        This accepts arbitrary keywords deliberately, so that every optimizer
+        is callable through one signature regardless of what it declares. The
+        cost is that binding *this* signature proves nothing, which is why
+        :func:`trace_parameter_update` binds :meth:`update` instead.
+        """
         return self.update(**optimizer_inputs)
 
 
@@ -201,7 +219,13 @@ def trace_parameter_update(
     gradient: Mapping[str, object],
     optimizer_inputs: Optional[Mapping[str, Mapping[str, object]]] = None,
 ) -> TracedUpdate:
-    """Trace an ordinary Tensor *update* callable into a finalized typed graph.
+    """Trace an ordinary Tensor *update* into a finalized typed graph.
+
+    *update* is either a plain callable or an :class:`Optimizer`. The two are
+    traced through the same path and differ only in how the declared inputs
+    are validated: a callable has its own signature bound against them, while
+    an optimizer has :meth:`Optimizer.update` bound against them *and* its
+    :attr:`Optimizer.required_optimizer_inputs` compared with them.
 
     ``parameter``, ``gradient``, and each ``optimizer_inputs`` value are typed
     input specs (``{"dtype": ..., "shape": ...}``), read by key and passed on
@@ -444,9 +468,11 @@ def _validate_update_signature(
 ) -> None:
     """Require *update* to accept exactly the declared typed inputs by keyword.
 
-    This is the single point where update-callable well-formedness is
-    enforced, and it runs before any builder is entered or any typed input is
-    declared, so a rejected callable never has its body invoked.
+    This is the single point where *signature* well-formedness is enforced --
+    the declared *names* an optimizer reads are a separate mistake, checked in
+    :func:`_validate_declared_optimizer_inputs`. It runs before any builder is
+    entered or any typed input is declared, so a rejected callable never has
+    its body invoked.
 
     It serves both entry paths. For a plain callable, *update* is the callable
     itself. For an `Optimizer`, it is the bound `update` method rather than
