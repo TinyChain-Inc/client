@@ -244,9 +244,15 @@ def _typed_input_spec(spec: object, *, label: str) -> dict[str, object]:
     differentiable`` here and ``missing_dtype_metadata`` in the analysis,
     because the value is judged by the builder rather than re-judged here.
 
-    One limit is shared rather than fixed: a container that raises something
-    outside ``(IndexError, TypeError, ValueError)`` while being read still
-    escapes raw, from this function and from the analysis helper alike.
+    The guard is placed where the helper places it. In both, reading the
+    **dtype** happens outside the guard, so a container that raises while its
+    dtype is looked up escapes raw from either. Reading the **shape** happens
+    inside, so ``IndexError``, ``TypeError`` and ``ValueError`` from a shape
+    lookup become ``missing_shape_metadata`` in both.
+
+    One limit is therefore shared rather than fixed: a shape lookup raising
+    anything outside those three types still escapes raw, from this function
+    and from the analysis helper alike.
 
     The dtype *value* is deliberately not judged here. `TensorGraphBuilder`'s
     ``check_differentiable_dtype`` already categorizes it, and re-checking
@@ -267,18 +273,21 @@ def _typed_input_spec(spec: object, *, label: str) -> dict[str, object]:
             f"typed input {label!r} declares no 'dtype'; it has "
             f"{sorted(str(key) for key in spec)}",
         )
-    if "shape" not in spec:
-        raise AutodiffError(
-            "missing_shape_metadata",
-            f"typed input {label!r} declares no 'shape'; it has "
-            f"{sorted(str(key) for key in spec)}",
-        )
-    # Read outside the guard, exactly as the analysis helper reads its own
-    # value with `.get` outside its `try`: a container whose `__getitem__`
-    # itself raises is at parity with that helper rather than diverging from
-    # the thing this function claims to mirror.
-    declared_shape = spec["shape"]
+    # Everything that touches the container for its shape goes inside the
+    # guard, matching where the analysis helper reads its own -- its
+    # `.get("shape")` is inside its `try`, and only its dtype read sits
+    # outside. The membership test belongs inside for the same reason as the
+    # read: `Mapping.__contains__` is defined in terms of `__getitem__`, so
+    # `"shape" not in spec` runs the container's own code and can raise
+    # exactly where the read can.
     try:
+        if "shape" not in spec:
+            raise AutodiffError(
+                "missing_shape_metadata",
+                f"typed input {label!r} declares no 'shape'; it has "
+                f"{sorted(str(key) for key in spec)}",
+            )
+        declared_shape = spec["shape"]
         parse_shape(declared_shape, label=f"typed input {label!r} shape")
     except AutodiffError:
         raise
