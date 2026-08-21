@@ -1,0 +1,647 @@
+"""Unit tests for the abstract optimizer contract and its first implementation.
+
+An update expression and the names of the inputs that expression reads are two
+facts that must agree. Today a consumer keeps them in agreement by hand: it
+imports an update function by name and separately knows to declare a learning
+rate, and nothing checks the pair. These tests pin the contract that binds
+them -- an abstract optimizer owning the update expression, the names of the
+optimizer inputs it reads, and the validation of its own configuration, with
+stochastic gradient descent as the one concrete implementation.
+
+They also pin the sharper reason the declared names exist. An optimizer
+instance is callable through a `__call__` that accepts arbitrary keywords, so
+`inspect.signature(...).bind(...)` accepts *any* declaration for it; the
+existing signature validation is therefore vacuous for exactly the values this
+contract introduces. `test_signature_binding_alone_would_accept_a_declaration_
+the_optimizer_rejects` demonstrates the vacuity directly and then shows the
+declared-name check catching what binding let through.
+
+No optimizer implementation constructs a `TensorNodeRecord` or a concrete
+`TensorOperator`; the update is authored in ordinary Tensor operations only.
+"""
+
+from __future__ import annotations
+
+import inspect
+from types import SimpleNamespace
+
+import numpy as np
+import pytest
+
+import tinychain as tc
+from tinychain.autodiff import (
+    AUTODIFF_ERROR_CATEGORIES,
+    AutodiffError,
+    MulOperator,
+    SubOperator,
+    TensorGraphBuilder,
+    TensorNodeRecord,
+    TensorOperator,
+    get_active_builder,
+)
+from tinychain.autodiff.lowering import OperationHandlerRegistry, lower_graph
+from tinychain.autodiff import training
+from tinychain.autodiff.training import (
+    SGD,
+    Optimizer,
+    TracedUpdate,
+    sgd_update,
+    trace_parameter_update,
+)
+
+from tests.autodiff_execution import NumpyAutodiffDispatcher
+
+
+PARAMETER_SPEC = {"dtype": "f32", "shape": (2, 3)}
+GRADIENT_SPEC = {"dtype": "f32", "shape": (2, 3)}
+RATE_SPEC = {"dtype": "f32", "shape": ()}
+
+
+# --------------------------------------------------------------------------
+# shared helpers
+# --------------------------------------------------------------------------
+
+
+class _NumpyOperationHandler:
+    """Adapts the shared NumPy dispatcher fixture to the lowering handler seam."""
+
+    def __init__(self, operator_type: type) -> None:
+        self.operator_type = operator_type
+        self._dispatcher = NumpyAutodiffDispatcher()
+
+    def lower(self, context) -> object:
+        node_like = SimpleNamespace(operator=context.operator, op_params=context.op_params)
+        return self._dispatcher(node_like, list(context.inputs))
+
+
+def _numeric_registry() -> OperationHandlerRegistry:
+    registry = OperationHandlerRegistry()
+    registry.register(_NumpyOperationHandler(MulOperator))
+    registry.register(_NumpyOperationHandler(SubOperator))
+    return registry
+
+
+def _graph_shape(traced: TracedUpdate) -> dict[str, object]:
+    """A comparable structural description of one traced update.
+
+    Value and node ids are assigned by a per-builder counter in declaration
+    order, so two traces declaring the same inputs in the same order produce
+    identical ids. Comparing this description therefore compares the graphs
+    themselves, not merely their silhouettes.
+    """
+    return {
+        "inputs": [(value_id, typespec) for value_id, typespec in traced.graph.inputs],
+        "outputs": list(traced.graph.outputs),
+        "updated_parameter_id": traced.updated_parameter_id,
+        "input_value_ids": dict(traced.input_value_ids),
+        "nodes": [
+            (
+                node.node_id,
+                type(node.operator).__name__,
+                dict(node.op_params),
+                list(node.input_value_ids),
+                node.output_value_id,
+                node.output_typespec,
+            )
+            for node in traced.graph.nodes
+        ],
+    }
+
+
+def _execute(traced: TracedUpdate, bindings: dict[str, object]) -> object:
+    bound_values = {
+        traced.input_value_ids[name]: value for name, value in bindings.items()
+    }
+    lowered = lower_graph(
+        traced.graph,
+        handlers=_numeric_registry(),
+        outputs=[traced.updated_parameter_id],
+        bind_input=lambda dependency: bound_values[dependency.value_id],
+    )
+    (updated_parameter,) = lowered.output_values
+    return updated_parameter
+
+
+PARAMETER_VALUE = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float32)
+GRADIENT_VALUE = np.array([[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]], dtype=np.float32)
+RATE_VALUE = np.float32(0.5)
+
+
+# --------------------------------------------------------------------------
+# consumer-written optimizers, authored against the public contract alone
+# --------------------------------------------------------------------------
+
+
+class _ScaledStep(Optimizer):
+    """The smallest optimizer a consumer can write against the public contract."""
+
+    required_optimizer_inputs = ("step_size",)
+
+    def update(self, *, parameter, gradient, step_size):
+        return parameter - step_size * gradient
+
+
+class _CorrectedStep(Optimizer):
+    """A consumer optimizer that has configuration, and validates it itself.
+
+    Its configuration decides which optimizer inputs its expression reads, so
+    the declared-name check has to agree with a per-instance answer rather
+    than a per-class one.
+    """
+
+    def __init__(self, *, corrected: bool) -> None:
+        if not isinstance(corrected, bool):
+            raise ValueError(
+                f"corrected must be a bool, got {type(corrected).__name__!r}"
+            )
+        self._corrected = corrected
+
+    @property
+    def required_optimizer_inputs(self):
+        if self._corrected:
+            return ("step_size", "correction")
+        return ("step_size",)
+
+    def update(self, *, parameter, gradient, step_size, **optimizer_inputs):
+        stepped = parameter - step_size * gradient
+        if self._corrected:
+            return stepped - optimizer_inputs["correction"]
+        return stepped
+
+
+# --------------------------------------------------------------------------
+# the abstract contract
+# --------------------------------------------------------------------------
+
+
+def test_the_optimizer_contract_has_exactly_the_two_members_a_consumer_needs() -> None:
+    assert inspect.isabstract(Optimizer)
+    assert set(Optimizer.__abstractmethods__) == {"required_optimizer_inputs", "update"}
+    # The call path is concrete: an instance is usable wherever a callable is.
+    assert callable(Optimizer.__call__)
+    assert "__call__" not in Optimizer.__abstractmethods__
+
+
+def test_an_optimizer_missing_its_update_expression_cannot_be_instantiated() -> None:
+    class _NoUpdate(Optimizer):
+        required_optimizer_inputs = ("step_size",)
+
+    with pytest.raises(TypeError, match="update"):
+        _NoUpdate()
+
+
+def test_an_optimizer_missing_its_declared_input_names_cannot_be_instantiated() -> None:
+    class _NoNames(Optimizer):
+        def update(self, *, parameter, gradient, step_size):
+            return parameter - step_size * gradient
+
+    with pytest.raises(TypeError, match="required_optimizer_inputs"):
+        _NoNames()
+
+
+def test_an_optimizer_instance_is_callable_and_delegates_to_its_update() -> None:
+    optimizer = _ScaledStep()
+    calls: list[dict[str, object]] = []
+
+    class _Recording(_ScaledStep):
+        def update(self, **inputs):
+            calls.append(inputs)
+            return "updated"
+
+    assert callable(optimizer)
+    assert _Recording()(parameter="p", gradient="g", step_size="s") == "updated"
+    assert calls == [{"parameter": "p", "gradient": "g", "step_size": "s"}]
+
+
+def test_an_optimizer_validates_its_own_configuration() -> None:
+    with pytest.raises(ValueError, match="corrected"):
+        _CorrectedStep(corrected="yes")
+
+    assert _CorrectedStep(corrected=False).required_optimizer_inputs == ("step_size",)
+    assert _CorrectedStep(corrected=True).required_optimizer_inputs == (
+        "step_size",
+        "correction",
+    )
+
+
+# --------------------------------------------------------------------------
+# stochastic gradient descent, the first concrete implementation
+# --------------------------------------------------------------------------
+
+
+def test_sgd_is_a_concrete_optimizer_declaring_one_required_input() -> None:
+    optimizer = SGD()
+
+    assert isinstance(optimizer, Optimizer)
+    assert tuple(optimizer.required_optimizer_inputs) == ("learning_rate",)
+
+
+def test_sgd_traces_the_same_graph_as_the_reference_expression() -> None:
+    traced_optimizer = trace_parameter_update(
+        SGD(),
+        parameter=PARAMETER_SPEC,
+        gradient=GRADIENT_SPEC,
+        optimizer_inputs={"learning_rate": RATE_SPEC},
+    )
+    traced_reference = trace_parameter_update(
+        sgd_update,
+        parameter=PARAMETER_SPEC,
+        gradient=GRADIENT_SPEC,
+        optimizer_inputs={"learning_rate": RATE_SPEC},
+    )
+
+    assert isinstance(traced_optimizer, TracedUpdate)
+    assert [type(node.operator) for node in traced_optimizer.graph.nodes] == [
+        MulOperator,
+        SubOperator,
+    ]
+    assert _graph_shape(traced_optimizer) == _graph_shape(traced_reference)
+
+
+def test_sgd_execution_matches_the_analytical_update() -> None:
+    traced_optimizer = trace_parameter_update(
+        SGD(),
+        parameter=PARAMETER_SPEC,
+        gradient=GRADIENT_SPEC,
+        optimizer_inputs={"learning_rate": RATE_SPEC},
+    )
+    traced_reference = trace_parameter_update(
+        sgd_update,
+        parameter=PARAMETER_SPEC,
+        gradient=GRADIENT_SPEC,
+        optimizer_inputs={"learning_rate": RATE_SPEC},
+    )
+
+    bindings = {
+        "parameter": PARAMETER_VALUE,
+        "gradient": GRADIENT_VALUE,
+        "learning_rate": RATE_VALUE,
+    }
+    expected = PARAMETER_VALUE - RATE_VALUE * GRADIENT_VALUE
+    # Not tautological: `expected` is computed in NumPy from the same inputs,
+    # independently of anything the traced graph did.
+    assert not np.allclose(np.asarray(expected), PARAMETER_VALUE)
+
+    np.testing.assert_allclose(np.asarray(_execute(traced_optimizer, bindings)), expected)
+    np.testing.assert_allclose(
+        np.asarray(_execute(traced_optimizer, bindings)),
+        np.asarray(_execute(traced_reference, bindings)),
+    )
+
+
+# --------------------------------------------------------------------------
+# a consumer optimizer traces through the same public path
+# --------------------------------------------------------------------------
+
+
+def test_a_consumer_written_optimizer_traces_through_the_same_helper() -> None:
+    traced = tc.autodiff.trace_parameter_update(
+        _ScaledStep(),
+        parameter=PARAMETER_SPEC,
+        gradient=GRADIENT_SPEC,
+        optimizer_inputs={"step_size": RATE_SPEC},
+    )
+
+    assert set(traced.input_value_ids) == {"parameter", "gradient", "step_size"}
+    assert [type(node.operator) for node in traced.graph.nodes] == [
+        MulOperator,
+        SubOperator,
+    ]
+
+    updated = _execute(
+        traced,
+        {
+            "parameter": PARAMETER_VALUE,
+            "gradient": GRADIENT_VALUE,
+            "step_size": RATE_VALUE,
+        },
+    )
+    np.testing.assert_allclose(
+        np.asarray(updated), PARAMETER_VALUE - RATE_VALUE * GRADIENT_VALUE
+    )
+
+
+def test_a_configured_consumer_optimizer_traces_the_inputs_its_configuration_declares() -> None:
+    correction_value = np.full((2, 3), 0.25, dtype=np.float32)
+    traced = trace_parameter_update(
+        _CorrectedStep(corrected=True),
+        parameter=PARAMETER_SPEC,
+        gradient=GRADIENT_SPEC,
+        optimizer_inputs={"step_size": RATE_SPEC, "correction": GRADIENT_SPEC},
+    )
+
+    assert set(traced.input_value_ids) == {
+        "parameter",
+        "gradient",
+        "step_size",
+        "correction",
+    }
+
+    updated = _execute(
+        traced,
+        {
+            "parameter": PARAMETER_VALUE,
+            "gradient": GRADIENT_VALUE,
+            "step_size": RATE_VALUE,
+            "correction": correction_value,
+        },
+    )
+    np.testing.assert_allclose(
+        np.asarray(updated),
+        PARAMETER_VALUE - RATE_VALUE * GRADIENT_VALUE - correction_value,
+    )
+
+
+# --------------------------------------------------------------------------
+# the declared names are what restores a real check on the optimizer path
+# --------------------------------------------------------------------------
+
+
+def test_signature_binding_alone_would_accept_a_declaration_the_optimizer_rejects() -> None:
+    """The vacuity this contract is designed for, demonstrated then closed.
+
+    An optimizer is invoked through a call path that accepts arbitrary
+    keywords, so binding its signature accepts *any* declared input set. The
+    first half of this test shows the check that would have been applied
+    accepting a declaration that is plainly wrong; the second half shows the
+    declared-name check rejecting it.
+    """
+    optimizer = SGD()
+
+    # Vacuous: this is exactly the check `trace_parameter_update` applies to a
+    # plain callable, and it raises nothing at all here.
+    inspect.signature(optimizer).bind(parameter=None, gradient=None, momentum=None)
+
+    with pytest.raises(AutodiffError) as error:
+        trace_parameter_update(
+            optimizer,
+            parameter=PARAMETER_SPEC,
+            gradient=GRADIENT_SPEC,
+            optimizer_inputs={"momentum": RATE_SPEC},
+        )
+    assert error.value.category == "invalid_update_signature"
+    assert "learning_rate" in error.value.message
+    assert "momentum" in error.value.message
+
+
+def test_a_declaration_missing_a_required_optimizer_input_is_rejected() -> None:
+    with pytest.raises(AutodiffError) as error:
+        trace_parameter_update(
+            SGD(),
+            parameter=PARAMETER_SPEC,
+            gradient=GRADIENT_SPEC,
+        )
+    assert error.value.category == "invalid_update_signature"
+    assert "learning_rate" in error.value.message
+    assert get_active_builder() is None
+
+
+def test_a_declaration_with_an_extra_optimizer_input_is_rejected() -> None:
+    with pytest.raises(AutodiffError) as error:
+        trace_parameter_update(
+            SGD(),
+            parameter=PARAMETER_SPEC,
+            gradient=GRADIENT_SPEC,
+            optimizer_inputs={"learning_rate": RATE_SPEC, "momentum": RATE_SPEC},
+        )
+    assert error.value.category == "invalid_update_signature"
+    assert "momentum" in error.value.message
+    assert get_active_builder() is None
+
+
+def test_a_mismatched_declaration_fails_before_the_update_expression_runs() -> None:
+    calls: list[object] = []
+
+    class _Recording(_ScaledStep):
+        def update(self, **inputs):
+            calls.append(inputs)
+            raise AssertionError("the update expression must not have run")
+
+    with pytest.raises(AutodiffError) as error:
+        trace_parameter_update(
+            _Recording(),
+            parameter=PARAMETER_SPEC,
+            gradient=GRADIENT_SPEC,
+            optimizer_inputs={"learning_rate": RATE_SPEC},
+        )
+    assert error.value.category == "invalid_update_signature"
+    assert calls == []
+    assert get_active_builder() is None
+
+
+def test_a_mismatched_declaration_is_rejected_before_a_malformed_spec_is_read() -> None:
+    """Ordering is unchanged: the declared-input check still precedes spec reading."""
+    with pytest.raises(AutodiffError) as error:
+        trace_parameter_update(
+            SGD(),
+            parameter=None,
+            gradient=GRADIENT_SPEC,
+            optimizer_inputs={"momentum": RATE_SPEC},
+        )
+    assert error.value.category == "invalid_update_signature"
+
+
+def test_a_reserved_optimizer_input_name_is_still_rejected_for_an_optimizer() -> None:
+    with pytest.raises(AutodiffError) as error:
+        trace_parameter_update(
+            SGD(),
+            parameter=PARAMETER_SPEC,
+            gradient=GRADIENT_SPEC,
+            optimizer_inputs={"parameter": PARAMETER_SPEC},
+        )
+    assert error.value.category == "invalid_update_signature"
+    assert get_active_builder() is None
+
+
+def test_the_optimizer_path_needs_no_new_error_category() -> None:
+    # A declared-input mismatch is an update-signature failure by any other
+    # name, so the public category surface is unchanged by this contract.
+    assert "invalid_update_signature" in AUTODIFF_ERROR_CATEGORIES
+    assert len(AUTODIFF_ERROR_CATEGORIES) == 26
+
+
+# --------------------------------------------------------------------------
+# the plain-callable path is unchanged
+# --------------------------------------------------------------------------
+
+
+def test_a_plain_callable_is_still_validated_by_its_signature() -> None:
+    def missing_gradient(*, parameter, learning_rate):
+        return parameter
+
+    with pytest.raises(AutodiffError) as error:
+        trace_parameter_update(
+            missing_gradient,
+            parameter=PARAMETER_SPEC,
+            gradient=GRADIENT_SPEC,
+            optimizer_inputs={"learning_rate": RATE_SPEC},
+        )
+    assert error.value.category == "invalid_update_signature"
+    assert get_active_builder() is None
+
+
+def test_a_keyword_absorbing_callable_still_binds_any_declaration() -> None:
+    """Pins the callable path as it is: this is the hole the names close.
+
+    A plain callable taking `**kwargs` binds any declared input set, so it
+    reaches tracing and its body decides. That is existing behaviour and this
+    change does not alter it -- it is precisely why an optimizer, which is
+    always keyword-absorbing at its call path, needs a different check.
+    """
+
+    def absorbing(**inputs):
+        return inputs["parameter"] - inputs["momentum"] * inputs["gradient"]
+
+    traced = trace_parameter_update(
+        absorbing,
+        parameter=PARAMETER_SPEC,
+        gradient=GRADIENT_SPEC,
+        optimizer_inputs={"momentum": RATE_SPEC},
+    )
+    assert set(traced.input_value_ids) == {"parameter", "gradient", "momentum"}
+
+
+def test_a_non_callable_non_optimizer_update_is_still_rejected() -> None:
+    with pytest.raises(AutodiffError) as error:
+        trace_parameter_update(
+            object(),
+            parameter=PARAMETER_SPEC,
+            gradient=GRADIENT_SPEC,
+            optimizer_inputs={"learning_rate": RATE_SPEC},
+        )
+    assert error.value.category == "invalid_update_signature"
+
+
+def test_tracing_an_optimizer_still_requires_an_inactive_trace() -> None:
+    with TensorGraphBuilder():
+        with pytest.raises(RuntimeError, match="Nested"):
+            trace_parameter_update(
+                SGD(),
+                parameter=PARAMETER_SPEC,
+                gradient=GRADIENT_SPEC,
+                optimizer_inputs={"learning_rate": RATE_SPEC},
+            )
+    assert get_active_builder() is None
+
+
+def test_an_optimizer_returning_a_non_tensor_is_still_rejected() -> None:
+    class _BadOutput(_ScaledStep):
+        def update(self, *, parameter, gradient, step_size):
+            return 5.0
+
+    with pytest.raises(AutodiffError) as error:
+        trace_parameter_update(
+            _BadOutput(),
+            parameter=PARAMETER_SPEC,
+            gradient=GRADIENT_SPEC,
+            optimizer_inputs={"step_size": RATE_SPEC},
+        )
+    assert error.value.category == "invalid_update_output"
+    assert get_active_builder() is None
+
+
+# --------------------------------------------------------------------------
+# the existing reference function is a compatibility path
+# --------------------------------------------------------------------------
+
+
+def test_the_reference_update_function_is_still_importable_and_unchanged() -> None:
+    from tinychain.autodiff import sgd_update as exported_sgd_update
+
+    assert exported_sgd_update is sgd_update
+    assert exported_sgd_update is training.sgd_update
+
+    signature = inspect.signature(sgd_update)
+    assert set(signature.parameters) == {"parameter", "gradient", "learning_rate"}
+    assert all(
+        parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        for parameter in signature.parameters.values()
+    )
+
+
+def test_the_reference_update_function_delegates_to_the_concrete_optimizer() -> None:
+    traced_reference = trace_parameter_update(
+        sgd_update,
+        parameter=PARAMETER_SPEC,
+        gradient=GRADIENT_SPEC,
+        optimizer_inputs={"learning_rate": RATE_SPEC},
+    )
+    traced_optimizer = trace_parameter_update(
+        SGD(),
+        parameter=PARAMETER_SPEC,
+        gradient=GRADIENT_SPEC,
+        optimizer_inputs={"learning_rate": RATE_SPEC},
+    )
+    assert _graph_shape(traced_reference) == _graph_shape(traced_optimizer)
+
+    bindings = {
+        "parameter": PARAMETER_VALUE,
+        "gradient": GRADIENT_VALUE,
+        "learning_rate": RATE_VALUE,
+    }
+    np.testing.assert_allclose(
+        np.asarray(_execute(traced_reference, bindings)),
+        PARAMETER_VALUE - RATE_VALUE * GRADIENT_VALUE,
+    )
+
+
+# --------------------------------------------------------------------------
+# no optimizer implementation constructs a graph, a record, or an operator
+# --------------------------------------------------------------------------
+
+
+def test_no_optimizer_implementation_constructs_a_graph_record_or_operator() -> None:
+    forbidden_constructors = (
+        "TensorNodeRecord(",
+        "TensorGraph(",
+        "TensorGraphBuilder(",
+        "AddOperator(",
+        "SubOperator(",
+        "MulOperator(",
+        "DivOperator(",
+        "MatmulOperator(",
+        "MeanOperator(",
+        "SumOperator(",
+        "ReshapeOperator(",
+        "TransposeOperator(",
+        "MaxOperator(",
+        "MinOperator(",
+        "ProductOperator(",
+        "BroadcastOperator(",
+        "BroadcastReduceOperator(",
+    )
+    for implementation in (Optimizer, SGD):
+        source = inspect.getsource(implementation)
+        for token in forbidden_constructors:
+            assert token not in source, (
+                f"{implementation.__name__} constructs {token!r} directly"
+            )
+
+    # An import alias bound in the class namespace would evade the token scan
+    # above, so the class namespaces are scanned for the types themselves too.
+    for implementation in (Optimizer, SGD):
+        for name, value in vars(implementation).items():
+            if name.startswith("__"):
+                continue
+            assert value is not TensorNodeRecord, (
+                f"{implementation.__name__} binds TensorNodeRecord as {name!r}"
+            )
+            assert not (isinstance(value, type) and issubclass(value, TensorOperator)), (
+                f"{implementation.__name__} binds a TensorOperator subclass as {name!r}"
+            )
+
+
+# --------------------------------------------------------------------------
+# public export surface
+# --------------------------------------------------------------------------
+
+
+def test_the_optimizer_contract_is_exported_from_the_autodiff_package() -> None:
+    import tinychain.autodiff as autodiff
+
+    assert {"Optimizer", "SGD"}.issubset(set(autodiff.__all__))
+    assert autodiff.Optimizer is training.Optimizer
+    assert autodiff.SGD is training.SGD
+
+    assert not hasattr(tc, "Optimizer")
+    assert not hasattr(tc, "SGD")
