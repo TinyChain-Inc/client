@@ -931,9 +931,75 @@ carrying the finalized `graph`, the `updated_parameter_id`, and
 `input_value_ids` (declared input name to its stable value id in `graph`),
 so a caller binds runtime values by name rather than scanning `graph.inputs`.
 
-`sgd_update(*, parameter, gradient, learning_rate)` is the one reference
-update this module ships: `parameter - learning_rate * gradient`, written
-entirely with the Tensor `-`/`*` operators. Neither it nor
+#### The optimizer contract
+
+`update` may be a plain callable, as above, or an `Optimizer`. `Optimizer` is
+an abstract class that binds two facts a caller would otherwise keep in
+agreement by hand: the update expression, and the names of the optimizer
+inputs that expression reads. An implementation provides exactly two members:
+
+- `required_optimizer_inputs` — the names of the optimizer inputs `update`
+  reads. `parameter` and `gradient` are declared by every traced update and
+  are never named here. An implementation may answer per instance, so
+  configuration is free to decide which inputs the expression reads.
+- `update(*, parameter, gradient, **optimizer_inputs)` — the expression,
+  authored in ordinary Tensor operations, returning the single updated
+  parameter Tensor.
+
+An implementation that has configuration validates it in its own constructor.
+There is deliberately no member for that: the contract *admits* configuration
+without *mandating* it, so an implementation with none carries no empty hook.
+
+**What an optimizer does not own.** Graph construction, dependency analysis,
+lowering, provider execution, encrypted state lifecycle, and the training loop
+are all outside it. It holds no state and no persistence, and it knows nothing
+about dtype or shape — a caller still declares those, because they are
+properties of the values being trained rather than of the algorithm. This is a
+contract for one update expression, not an optimizer catalog and not a
+training framework.
+
+`SGD()` is the first and, today, the only implementation:
+`parameter - learning_rate * gradient`, declaring the single required
+optimizer input `learning_rate`. A consumer writes its own the same way:
+
+```python
+from tinychain.autodiff import Optimizer, trace_parameter_update
+
+class ScaledStep(Optimizer):
+    required_optimizer_inputs = ("step_size",)
+
+    def update(self, *, parameter, gradient, step_size):
+        return parameter - step_size * gradient
+
+traced = trace_parameter_update(
+    ScaledStep(),
+    parameter={"dtype": "f32", "shape": (2, 3)},
+    gradient={"dtype": "f32", "shape": (2, 3)},
+    optimizer_inputs={"step_size": {"dtype": "f32", "shape": ()}},
+)
+```
+
+**Given an optimizer, the declared inputs are checked by name, not by
+signature.** An optimizer is invoked through a call path that accepts
+arbitrary keywords, so `inspect.signature(optimizer).bind(...)` succeeds for
+*any* declared input set — applying the plain-callable signature check to an
+optimizer would report success on a declaration naming nothing the expression
+reads. `trace_parameter_update` therefore compares the declared
+`optimizer_inputs` keys against `required_optimizer_inputs` instead, and a
+mismatch in either direction raises
+`AutodiffError("invalid_update_signature", ...)` naming what is missing and
+what was unexpected. This runs in the same place as the signature check it
+replaces — before the builder is entered and before any spec is read — so a
+rejected declaration never reaches the expression. A plain callable is traced
+exactly as before, including a `**kwargs` callable, which still binds any
+declaration and lets its own body decide.
+
+`sgd_update(*, parameter, gradient, learning_rate)` is the compatibility path
+for callers that already import the reference update as a function. It
+authors nothing of its own — the expression lives in `SGD`, and the function
+delegates to a shared instance of it, so the two cannot drift apart. New
+callers should pass `SGD()` instead, which additionally gets the declared-input
+check above. Neither it, nor `SGD`, nor
 `trace_parameter_update` constructs a graph-record or operator type directly;
 doing so is a spec invariant, not just a style preference, and is checked by
 a dedicated regression test that additionally scans the module's own
@@ -944,7 +1010,9 @@ coupling" below for the exact boundary of that check.
 Update-callable well-formedness is checked once, before any input is
 declared or the builder is entered, so an invalid callable's body never runs;
 a signature that does not accept exactly the declared inputs by keyword
-raises `AutodiffError("invalid_update_signature", ...)`. A callable that does
+raises `AutodiffError("invalid_update_signature", ...)`; for an `Optimizer`
+the same category reports a declared-input mismatch, so the contract adds no
+new error category. A callable that does
 not return a `Tensor` raises `AutodiffError("invalid_update_output", ...)`
 after it runs. Typed-input completeness and traced-expression shape/dtype
 compatibility are not re-validated here — they are the same checks typed
@@ -965,10 +1033,11 @@ analysis results, not part of any wire format today. Existing
 `TensorGraphBuilder`, VJP generation, derivative program compilation, and
 `ExecutionScheduler` behavior are unchanged — dependency analysis and lowering
 read a graph or program after it exists; they do not participate in tracing,
-VJP generation, or execution scheduling. All new names are reached the same
-lazily-loaded way as the artifact and route-derivative surfaces already
-documented above: `import tinychain.autodiff as autodiff` and access the name
-directly, or import it from the specific submodule.
+VJP generation, or execution scheduling. All new names -- `Optimizer` and `SGD`
+included -- are reached the same lazily-loaded way as the artifact and
+route-derivative surfaces already documented above: `import tinychain.autodiff
+as autodiff` and access the name directly, or import it from the specific
+submodule.
 
 #### Extension example
 
