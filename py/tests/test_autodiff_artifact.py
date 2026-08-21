@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import dataclasses
 import json
 
 import pytest
@@ -651,3 +653,93 @@ def test_build_derivative_artifact_library_rejects_invalid_public_identity() -> 
 
     assert raised.value.category == "invalid_manifest"
     assert "resource_name must match" in raised.value.message
+
+
+# --------------------------------------------------------------------------
+# `ArtifactError` must survive an ordinary consumer context manager.
+#
+# It is a structural twin of `AutodiffError`: a frozen dataclass subclassing
+# `Exception`, with a category, a message, a class-level allowlist, and the
+# same `__post_init__`. It is publicly exported, so the same defect reaches a
+# consumer the same way -- Python's exception machinery assigns
+# `__traceback__` on the propagating instance, a frozen `__setattr__` refuses
+# it, and the category is replaced by a `FrozenInstanceError`.
+# --------------------------------------------------------------------------
+
+
+def test_artifact_error_keeps_its_category_through_a_generator_context_manager():
+    @contextlib.contextmanager
+    def consumer_scope():
+        yield
+
+    with pytest.raises(ArtifactError) as raised:
+        with consumer_scope():
+            raise ArtifactError("invalid_manifest", "manifest is not a mapping")
+
+    assert raised.value.category == "invalid_manifest"
+    assert raised.value.message == "manifest is not a mapping"
+    assert str(raised.value) == "invalid_manifest: manifest is not a mapping"
+
+
+def test_artifact_error_keeps_its_category_through_a_class_based_context_manager():
+    class ConsumerScope:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+    with pytest.raises(ArtifactError) as raised:
+        with ConsumerScope():
+            raise ArtifactError("invalid_manifest", "manifest is not a mapping")
+
+    assert raised.value.category == "invalid_manifest"
+
+
+def test_artifact_error_accepts_the_attributes_python_exception_machinery_sets():
+    error = ArtifactError("artifact_conflict", "already installed")
+    cause = ValueError("root cause")
+
+    error.__traceback__ = None
+    error.__cause__ = cause
+    error.__context__ = cause
+    error.__suppress_context__ = True
+    error.add_note("a second artifact claims this name")
+
+    assert error.__cause__ is cause
+    assert error.__context__ is cause
+    assert error.__suppress_context__ is True
+    assert "a second artifact claims this name" in error.__notes__
+
+
+def test_artifact_error_ordinary_fields_stay_immutable():
+    error = ArtifactError("artifact_conflict", "already installed")
+
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        error.category = "invalid_manifest"
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        error.message = "something else"
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        error.unrelated_attribute = "anything"
+
+    assert error.category == "artifact_conflict"
+    assert error.message == "already installed"
+
+
+def test_artifact_error_keeps_equality_hashing_and_repr():
+    error = ArtifactError("artifact_conflict", "already installed")
+    same = ArtifactError("artifact_conflict", "already installed")
+    other = ArtifactError("artifact_conflict", "a different message")
+
+    assert error == same
+    assert error != other
+    assert hash(error) == hash(same)
+    assert len({error, same, other}) == 2
+    assert repr(error) == (
+        "ArtifactError(category='artifact_conflict', message='already installed')"
+    )
+
+
+def test_artifact_error_still_rejects_an_unknown_category():
+    with pytest.raises(ValueError, match="unknown artifact error category"):
+        ArtifactError("not_real", "bad")

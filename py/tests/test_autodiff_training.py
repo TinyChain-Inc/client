@@ -10,7 +10,9 @@ allowed in production or example code (spec invariant 6).
 
 from __future__ import annotations
 
+import enum
 import inspect
+from collections.abc import Sequence
 from types import SimpleNamespace
 
 import numpy as np
@@ -561,3 +563,187 @@ def test_optimizer_inputs_defaulting_to_none_still_declares_no_optimizer_inputs(
     )
 
     assert set(traced.input_value_ids) == {"parameter", "gradient"}
+
+
+# --------------------------------------------------------------------------
+# The declared optimizer input NAMES are part of the declared input set.
+#
+# `TensorGraphBuilder.input` rejects a name that duplicates an already
+# declared input, or that is not a valid non-keyword identifier, with a raw
+# `ValueError`/`TypeError`. Whether that leak is visible depends entirely on
+# the update callable: one declaring exact parameters cannot bind the bad
+# name, so the signature check masks it, but a callable taking `**kwargs`
+# binds anything and the raw error escapes. A `**kwargs` update is an
+# ordinary consumer shape, so the name set must be validated in its own right.
+# --------------------------------------------------------------------------
+
+
+_OPTIMIZER_NAME_CASES = [
+    ("collides_with_parameter", "parameter"),
+    ("collides_with_gradient", "gradient"),
+    ("not_an_identifier", "a b"),
+    ("python_keyword", "class"),
+    ("empty_name", ""),
+]
+
+
+def _kwargs_update(*, parameter, gradient, **optimizer_inputs):
+    """An update binding any optimizer input by name -- masks no bad name."""
+    return parameter - gradient
+
+
+def _exact_params_update(*, parameter, gradient, learning_rate):
+    """An update declaring exact parameters -- its signature masks a bad name."""
+    return parameter - learning_rate * gradient
+
+
+@pytest.mark.parametrize(
+    "name",
+    [case[1] for case in _OPTIMIZER_NAME_CASES],
+    ids=[case[0] for case in _OPTIMIZER_NAME_CASES],
+)
+def test_a_malformed_optimizer_input_name_is_categorized_for_a_kwargs_update(name) -> None:
+    """The shape where nothing masks the leak."""
+    with pytest.raises(AutodiffError) as error:
+        trace_parameter_update(
+            _kwargs_update,
+            parameter=PARAMETER_SPEC,
+            gradient=GRADIENT_SPEC,
+            optimizer_inputs={name: LEARNING_RATE_SPEC},
+        )
+
+    assert error.value.category == "invalid_update_signature"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [case[1] for case in _OPTIMIZER_NAME_CASES],
+    ids=[case[0] for case in _OPTIMIZER_NAME_CASES],
+)
+def test_a_malformed_optimizer_input_name_is_categorized_for_an_exact_update(name) -> None:
+    """The shape where the signature check masks it: it must stay categorized."""
+    with pytest.raises(AutodiffError) as error:
+        trace_parameter_update(
+            _exact_params_update,
+            parameter=PARAMETER_SPEC,
+            gradient=GRADIENT_SPEC,
+            optimizer_inputs={name: LEARNING_RATE_SPEC},
+        )
+
+    assert error.value.category == "invalid_update_signature"
+
+
+@pytest.mark.parametrize("colliding_name", ["parameter", "gradient"])
+@pytest.mark.parametrize(
+    "update",
+    [_kwargs_update, _exact_params_update],
+    ids=["kwargs_update", "exact_params_update"],
+)
+def test_a_colliding_optimizer_input_name_is_blamed_by_name(update, colliding_name) -> None:
+    """The message must name the collision, not blame the callable.
+
+    With an exact-parameter update this case is already categorized, but for
+    the wrong reason and with a misleading message: deduplicating the declared
+    names leaves the callable short of an argument, so the caller is told
+    their *function* is missing `learning_rate` when what is actually wrong is
+    that they declared an optimizer input called `parameter`.
+    """
+    with pytest.raises(AutodiffError) as error:
+        trace_parameter_update(
+            update,
+            parameter=PARAMETER_SPEC,
+            gradient=GRADIENT_SPEC,
+            optimizer_inputs={colliding_name: LEARNING_RATE_SPEC},
+        )
+
+    assert error.value.category == "invalid_update_signature"
+    assert "optimizer_inputs" in error.value.message
+    assert colliding_name in error.value.message
+    assert "learning_rate" not in error.value.message, (
+        "the message must not blame the callable for the collision"
+    )
+
+
+# --------------------------------------------------------------------------
+# The spec read must not let a raw container exception escape, exactly as the
+# analysis helper it mirrors does not.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raised",
+    [TypeError, ValueError],
+    ids=["type_error", "value_error"],
+)
+def test_a_shape_that_raises_while_being_read_is_categorized(raised) -> None:
+    """A `Sequence` shape whose iteration raises must not escape raw.
+
+    `dependencies._complete_typespec` wraps its shape read in
+    `except (IndexError, TypeError, ValueError)` for exactly this reason, and
+    the tracer's helper claims to mirror it.
+    """
+
+    class RaisingShape(Sequence):
+        def __getitem__(self, index):
+            raise raised("boom while reading the shape")
+
+        def __len__(self) -> int:
+            return 2
+
+    with pytest.raises(AutodiffError) as error:
+        trace_parameter_update(
+            sgd_update,
+            parameter={"dtype": "f32", "shape": RaisingShape()},
+            gradient=GRADIENT_SPEC,
+            optimizer_inputs={"learning_rate": LEARNING_RATE_SPEC},
+        )
+
+    assert error.value.category == "missing_shape_metadata"
+    assert "parameter" in error.value.message
+
+
+# --------------------------------------------------------------------------
+# The pre-check must accept exactly what the builder accepts.
+# --------------------------------------------------------------------------
+
+
+def test_an_int_subclass_shape_dimension_still_traces() -> None:
+    """Guards against narrowing what a shape dimension may be.
+
+    `TensorGraphBuilder.input` accepts any `int` instance that is not a
+    `bool`, so an `IntEnum` dimension traced before the spec pre-check
+    existed. A pre-check stricter than the builder would silently withdraw
+    that, which is a behaviour change this fix is not allowed to make.
+    """
+
+    class Dimension(enum.IntEnum):
+        ROWS = 2
+        COLUMNS = 3
+
+    traced = trace_parameter_update(
+        sgd_update,
+        parameter={"dtype": "f32", "shape": (Dimension.ROWS, Dimension.COLUMNS)},
+        gradient={"dtype": "f32", "shape": (Dimension.ROWS, Dimension.COLUMNS)},
+        optimizer_inputs={"learning_rate": LEARNING_RATE_SPEC},
+    )
+
+    declared = dict(traced.graph.inputs)[traced.input_value_ids["parameter"]]
+    assert tuple(declared["shape"]) == (2, 3)
+
+
+@pytest.mark.parametrize("boolean_dimension", [True, False], ids=["true", "false"])
+def test_a_bool_shape_dimension_is_still_rejected(boolean_dimension) -> None:
+    """The non-vacuity guard on the case above: `bool` is an `int` subclass.
+
+    Widening the pre-check to every `int` instance must not quietly admit
+    `bool`, which the builder rejects explicitly.
+    """
+    with pytest.raises(AutodiffError) as error:
+        trace_parameter_update(
+            sgd_update,
+            parameter={"dtype": "f32", "shape": (boolean_dimension, 3)},
+            gradient=GRADIENT_SPEC,
+            optimizer_inputs={"learning_rate": LEARNING_RATE_SPEC},
+        )
+
+    assert error.value.category == "missing_shape_metadata"
