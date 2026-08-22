@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 from ..serialize import serialize
+from ._exception_state import allow_exception_state
 
 
 AUTODIFF_ERROR_CATEGORIES: tuple[str, ...] = (
@@ -57,7 +58,8 @@ AUTODIFF_ERROR_CATEGORIES: tuple[str, ...] = (
 )
 
 
-@dataclass
+@allow_exception_state
+@dataclass(frozen=True)
 class AutodiffError(Exception):
     category: str
     message: str
@@ -75,50 +77,6 @@ class AutodiffError(Exception):
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> AutodiffError:
         return cls(category=str(data["category"]), message=str(data["message"]))
-
-
-# The exception machinery's own attributes -- not a hand-picked list of the
-# ones we happened to see fail. The identical block on `artifact.ArtifactError`
-# fixes the only other frozen-dataclass exception in this package; the two are
-# repeated rather than shared, so that module needs no dependency on this one
-# for its exception mechanics. Python's exception protocol assigns these on
-# the instance being raised, propagated, or annotated, and some of those
-# assignments are made from Python rather than from C: a generator-based
-# `@contextlib.contextmanager` re-raises by assigning `__traceback__`, and
-# `BaseException.add_note` assigns `__notes__`. A frozen `__setattr__` refuses
-# them, so an `AutodiffError` crossing an ordinary consumer context manager was
-# replaced by a `FrozenInstanceError` and its category -- the whole public
-# error contract -- was erased at the boundary.
-#
-# Everything outside this boundary stays frozen: both declared fields, and any
-# attribute a caller invents.
-_EXCEPTION_MACHINERY_ATTRIBUTES = frozenset(
-    {
-        "__traceback__",
-        "__cause__",
-        "__context__",
-        "__suppress_context__",
-        "__notes__",
-    }
-)
-
-_frozen_setattr = AutodiffError.__setattr__
-
-
-def _set_autodiff_error_attribute(
-    error: AutodiffError, name: str, value: object
-) -> None:
-    if name in _EXCEPTION_MACHINERY_ATTRIBUTES:
-        object.__setattr__(error, name, value)
-        return
-    _frozen_setattr(error, name, value)
-
-
-# Installed after the class body, not in it: `@dataclass(frozen=True)`
-# generates its own `__setattr__` and raises `TypeError: Cannot overwrite
-# attribute __setattr__ in class AutodiffError` at class-definition time if the
-# body defines one. Moving this into the class will not work.
-AutodiffError.__setattr__ = _set_autodiff_error_attribute
 
 
 def _string_or_strings(value: object) -> str | list[str]:
