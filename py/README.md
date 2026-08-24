@@ -685,6 +685,448 @@ autodiff, a backend artifact registry or backend artifact schema,
 hidden/internal route compiler behavior, Rust contracts, or production
 `tc-server` derivative execution.
 
+### Structured dependency analysis, extensible program lowering, and traced optimizer updates (experimental)
+
+This surface extends public typed Tensor tracing with three additive pieces
+under `tinychain.autodiff`: a structured analysis of what a selected forward
+or derivative output depends on, a framework-owned traversal that hands
+individual operations to consumer-supplied lowering handlers, and a small
+composition helper for tracing an optimizer update as ordinary Tensor code.
+All three are **experimental**, live only under `tinychain.autodiff`, and
+carry no post-0.x stability guarantee, matching the rest of this section.
+
+The framework owns graph meaning, reachability, topological order, and
+selected-output handling. A consumer owns its own target representation,
+its supported-operator mapping, its fusion policy, and its runtime. The
+framework never imports, inspects, compares, hashes, or iterates a
+consumer's target value — it only carries it from the handler that produced
+it to the handlers (or the final output selection) that consume it.
+
+#### Structured dependency analysis
+
+`analyze_graph_dependencies(graph, *, outputs=None)` and
+`analyze_derivative_dependencies(program, *, forward_graph, seed_value_ids,
+outputs=None)` both return a `DependencyAnalysis`: every value the selected
+outputs depend on, together with a provenance category and normalized
+`dtype`/`shape` metadata. Each dependency is exactly one of:
+
+- `DEPENDENCY_PROVENANCE_DECLARED_INPUT` — a value the forward trace declared
+  as a named graph input (a parameter, training data, a label). The caller
+  supplies it.
+- `DEPENDENCY_PROVENANCE_SEED_INPUT` — an upstream cotangent the derivative
+  transform introduced. The caller supplies it, typically as ones shaped like
+  the differentiated output. Only present for a derivative-program analysis.
+- `DEPENDENCY_PROVENANCE_FORWARD_CAPTURE` — an intermediate the forward graph
+  produced and the derivative program consumes again. The caller must run the
+  forward graph and retain this value before running the derivative program.
+  Only present for a derivative-program analysis.
+- `DEPENDENCY_PROVENANCE_LOCAL_VALUE` — a value produced inside the analyzed
+  selection itself. Nothing to bind.
+
+`DependencyAnalysis.declared_inputs`, `.seed_inputs`, `.forward_captures`,
+`.local_values`, and `.required_inputs` (every non-local dependency) filter by
+category. Ordering is deterministic and documented: dependencies are grouped
+in `DEPENDENCY_PROVENANCE_ORDER`, declared inputs follow forward-graph
+declaration order, seeds follow caller declaration order, forward captures
+follow forward-graph topological order, and local values follow the
+analyzed selection's schedule — topologically valid, with each operation
+emitted as late as its consumers allow, so a producer stays next to the
+operation that reads it *whenever nothing forces them apart*, and a
+consumer's bounded fusion window can usually see the two together — so
+repeated analyses of equivalent traces compare equal.
+
+Size a fusion look-ahead from the qualifier, not from the adjacency. "As late
+as its consumers allow" leaves a producer adjacent to its consumer only when
+that consumer has one operand left to wait for. A wider fan-in necessarily
+separates them: the consumer must wait for all of its operands, and only the
+last operand emitted can end up beside it. An operation reading four produced
+values emits `['t3', 't2', 't1', 't0', 'out']` — only `t0` is adjacent to
+`out`, and `t3` is four positions away from the operation that reads it. Put
+intermediate consumers in between and the same effect appears one level down:
+`['t3', 't2', 'c1', 't1', 't0', 'c0', 'out']`, where `t3` is separated from
+its consumer `c1` by `t2`.
+
+A hook with `lookahead = 2` offered `t3` sees `['t3', 't2']` in either case,
+and never the consumer it wants to fuse into. So a consumer whose pattern
+spans a producer and a multi-operand consumer must size its window for the
+fan-in it expects to meet — and must still tolerate never being offered the
+pair, since `FusionHook.fuse` returning `None` is always a legal outcome and
+the operation then lowers through its own handler.
+
+A consumer never needs a private node map,
+an ID-prefix convention, or a producer scan to work out what to bind; the
+analysis is structural, never derived from how a value id happens to be
+spelled.
+
+Malformed selections fail closed with a categorized `AutodiffError` before any
+target program is produced: `missing_dependency` (a reachable value has no
+producer and no provenance), `ambiguous_producer` (one value would carry two
+provenances, or two nodes produce the same value), `invalid_selected_output`
+(the selection is empty or names an unknown value), `malformed_derivative_ir`
+(a cycle), and `missing_dtype_metadata` / `missing_shape_metadata` (incomplete
+type metadata on a value that requires it). Analysis for a forward graph
+requires complete metadata everywhere, matching typed-graph finalization;
+analysis for a derivative program is best-effort where the program itself is
+best-effort, resolving metadata from the program's recorded value typespecs
+first, then its nodes, then the forward graph, and reporting
+`dtype=None`/`shape=None` only where no metadata exists anywhere for that
+value — metadata that is present anywhere must still be complete.
+
+##### When a forward-graph cycle is and is not reported
+
+Cycle detection is reachability-scoped for a forward graph analyzed on its
+own, and for the derivative program itself within a derivative-program
+analysis: `malformed_derivative_ir` fires exactly when the reachable region
+contains one. For the *forward graph* half of a derivative-program analysis,
+it is not reachability-scoped — it is gated on whether the selection captures
+anything from the forward graph at all. Capturing no forward value skips
+walking the forward graph entirely, so a cycle anywhere in it, related to the
+selection or not, is not reported. Capturing any forward value walks the
+whole forward graph, so a cycle anywhere in it is reported, even one with no
+relationship to what was captured. This is a deliberate, coarser boundary,
+not a precise "was this particular cycle on the path to a captured value"
+check.
+
+#### Extensible program lowering
+
+`lower_graph(graph, *, handlers, outputs=None, fusion=None, bind_input=None)`
+and `lower_derivative_program(program, *, forward_graph, seed_value_ids,
+handlers, outputs=None, fusion=None, bind_input=None)` walk the same analyzed
+region and return a `LoweredProgram`: `operations` in traversal order,
+`values` mapping every bound value id to the consumer's opaque target value
+for it, and `dependencies` (the `DependencyAnalysis` the traversal was
+derived from). `LoweredProgram.output_values` returns the target values of
+the selected outputs in selection order.
+
+A consumer supplies:
+
+- An `OperationHandlerRegistry` with one `OperationHandler` per concrete
+  `TensorOperator` type it supports. `handler.operator_type` declares the
+  type; `handler.lower(context)` receives an `OperationContext` — the
+  operator instance, its normalized `op_params`, its already-lowered `inputs`
+  in operand order, each input's dependency provenance, and the output value
+  id/typespec — and returns the consumer's opaque target value for that
+  operation. Dispatch is by exact concrete operator type, never by route name
+  or any other string; two operators that happen to share a route name are
+  still two distinct dispatch targets.
+- Optionally, a `FusionHook` (`lookahead: int`, `fuse(context) ->
+  FusionResult | None`) that may recognize a local pattern over a bounded
+  look-ahead window (`FusionContext.candidates`, capped at `lookahead`, always
+  starting with the operation being offered) and replace it with one
+  instruction. A `FusionResult` names the consumed operation ids (a subset of
+  the offered candidates, including the offered operation, with no repeats)
+  and the one opaque target value the fused region still owes the rest of the
+  program. `FusionContext.value_of(value_id)` resolves an already-bound
+  operand for the hook.
+- Optionally, `bind_input`, converting each analyzed free dependency
+  (`ValueDependency`) into the consumer's target value for it. The default
+  binds the `ValueDependency` itself, which already carries the value id,
+  provenance, and type metadata a consumer typically needs to construct its
+  own runtime binding.
+
+Every reachable operation is lowered by exactly one handler, replaced by
+exactly one fusion, or the whole call fails before any target program is
+returned — an injected handler may lower an operation or report it
+unsupported, but it may never silently fall back to executing ordinary Python
+arithmetic in its place. A fusion may only claim operands that are already
+bound or produced by another operation in the same claimed set, and it may
+leave at most one value still needed outside the fused region; a region that
+would silently discard a second such value is rejected instead. Failures
+raise a categorized `AutodiffError`: `unsupported_operator` (no handler
+claims an operation, or the reachable region has an operation nothing
+claimed), and `handler_contract_violation` for any other way a handler,
+registration, or fusion hook breaks the seam's contract — including a
+consumer's own exception type, which the framework cannot enumerate ahead of
+time and therefore normalizes rather than lets escape uncategorized.
+`KeyboardInterrupt` and `SystemExit` are interpreter control flow, not a
+handler reporting failure, and are deliberately left to propagate rather than
+being folded into `handler_contract_violation`.
+
+### Every reachable operation needs a registered handler, fusion or not
+
+**Precondition.** Support is checked for every reachable operation *before*
+any lowering or fusion runs. An operation with no registered handler raises
+`unsupported_operator` even when a fusion hook would have consumed it and the
+handler would never have been called. The hook is not offered anything: the
+call has already failed.
+
+This bites precisely where a consumer least expects it. A target with no
+standalone transpose instruction, which only ever wants a transpose folded
+into the matmul that reads it, is exactly the shape fusion exists for — and
+registering a hook for `(transpose, matmul)` while registering no transpose
+handler fails with `unsupported_operator` naming the transpose.
+
+**Why it is this way.** Fusion collapses operations that are *already*
+supported into a cheaper form; it does not confer support. Making support
+conditional on a hook would mean the same program lowers or fails depending
+on which pattern a hook happened to recognize at run time, and an operation
+the hook declined would surface as a failure deep inside traversal instead of
+before it. The precondition keeps "can this program be lowered at all?" a
+question answered once, up front, from the registry alone.
+
+**What to register.** Declare the operator supported with a stub handler
+whose `lower` raises:
+
+```python
+from dataclasses import dataclass
+
+from tinychain.autodiff import AutodiffError, TransposeOperator
+
+
+@dataclass(frozen=True)
+class FusedOnlyTranspose:
+    """Declares transpose supported; it is only ever reachable via fusion."""
+
+    operator_type: type = TransposeOperator
+
+    def lower(self, context):
+        raise AutodiffError(
+            "unsupported_operator",
+            f"transpose {context.output_value_id!r} reached the standalone "
+            "lowering path; this target only supports a transpose fused into "
+            "the matmul that reads it",
+        )
+
+
+registry.register(FusedOnlyTranspose())
+```
+
+**The stub must raise — that is the point of it.** A stub that returns some
+plausible target value instead would let an unfused transpose lower silently
+and produce a wrong program, and nothing downstream would flag it: lowering
+would report success. Raising makes the same situation a categorized failure
+that names the operation, so a fusion window that turned out too narrow, or a
+pattern the hook declined, is reported rather than absorbed. Raise
+`AutodiffError` with a category of your own choosing — `unsupported_operator`
+reads best here — and it propagates with that category intact; any other
+exception type is normalized to `handler_contract_violation`.
+
+Lowering runs dependency analysis first, so a lowering call can also fail
+with any category that analysis raises: `missing_dependency`,
+`ambiguous_producer`, `invalid_selected_output`, `malformed_derivative_ir`,
+and the metadata categories `missing_dtype_metadata` and
+`missing_shape_metadata`. For a derivative program, `malformed_derivative_ir`
+is not a guarantee that every cycle is caught before lowering runs, and this
+holds on both halves of the analysis: a cycle inside the derivative program
+itself is reachability-scoped, so one the selected output cannot reach is not
+reported either, exactly like a forward graph analyzed on its own; a cycle in
+the forward graph is reported only when the selection captures some forward
+value, and then the whole forward graph is checked, not just the captured
+path — see "When a forward-graph cycle is and is not reported" above.
+Lowering a program built from a graph with an unreported cycle can still fail
+later, from whatever the fused or per-operation handlers do with the
+resulting values.
+
+#### Traced optimizer updates
+
+`trace_parameter_update(update, *, parameter, gradient,
+optimizer_inputs=None)` traces an ordinary Tensor callable — an optimizer
+step — the same way an application loss is traced. `parameter`, `gradient`,
+and each `optimizer_inputs` value are typed input specs
+(`{"dtype": ..., "shape": ...}`) forwarded to the same typed-tracing builder
+described above; `update` is called once, by keyword, with a `Tensor` for
+each declared input, and must return the single updated-parameter `Tensor`
+expressed with ordinary Tensor operations. The result is a `TracedUpdate`
+carrying the finalized `graph`, the `updated_parameter_id`, and
+`input_value_ids` (declared input name to its stable value id in `graph`),
+so a caller binds runtime values by name rather than scanning `graph.inputs`.
+
+#### The optimizer contract
+
+`update` may be a plain callable, as above, or an `Optimizer`. `Optimizer` is
+an abstract class that binds two facts a caller would otherwise keep in
+agreement by hand: the update expression, and the names of the optimizer
+inputs that expression reads. An implementation provides exactly two members:
+
+- `required_optimizer_inputs` — the names of the optimizer inputs `update`
+  reads. `parameter` and `gradient` are declared by every traced update and
+  are never named here. An implementation may answer per instance, so
+  configuration is free to decide which inputs the expression reads.
+- `update(*, parameter, gradient, **optimizer_inputs)` — the expression,
+  authored in ordinary Tensor operations, returning the single updated
+  parameter Tensor.
+
+An implementation that has configuration validates it in its own constructor.
+There is deliberately no member for that: the contract *admits* configuration
+without *mandating* it, so an implementation with none carries no empty hook.
+
+**What an optimizer does not own.** Graph construction, dependency analysis,
+lowering, provider execution, encrypted state lifecycle, and the training loop
+are all outside it. It holds no state and no persistence, and it knows nothing
+about dtype or shape — a caller still declares those, because they are
+properties of the values being trained rather than of the algorithm. This is a
+contract for one update expression, not an optimizer catalog and not a
+training framework.
+
+`SGD()` is the first and, today, the only implementation:
+`parameter - learning_rate * gradient`, declaring the single required
+optimizer input `learning_rate`. A consumer writes its own the same way:
+
+```python
+from tinychain.autodiff import Optimizer, trace_parameter_update
+
+class ScaledStep(Optimizer):
+    required_optimizer_inputs = ("step_size",)
+
+    def update(self, *, parameter, gradient, step_size):
+        return parameter - step_size * gradient
+
+traced = trace_parameter_update(
+    ScaledStep(),
+    parameter={"dtype": "f32", "shape": (2, 3)},
+    gradient={"dtype": "f32", "shape": (2, 3)},
+    optimizer_inputs={"step_size": {"dtype": "f32", "shape": ()}},
+)
+```
+
+**Given an optimizer, the declared inputs are checked twice — by signature
+and by name.** Two different mistakes are possible, and each check catches
+one:
+
+- The **signature** check binds the `update` *method* against the declared
+  inputs, catching an implementation whose parameters do not match what it
+  declares. It is applied to `update` rather than to the instance because an
+  optimizer is invoked through a call path that accepts arbitrary keywords:
+  `inspect.signature(optimizer).bind(...)` succeeds for *any* declared input
+  set, while `inspect.signature(optimizer.update).bind(...)` does not.
+- The **name** check compares the declared `optimizer_inputs` keys against
+  `required_optimizer_inputs`, catching a declaration that names inputs the
+  expression never reads — which binding cannot catch when `update` absorbs
+  keywords.
+
+Both raise `AutodiffError("invalid_update_signature", ...)`, and a
+malformed `required_optimizer_inputs` — one that is not a collection of
+names, or a bare string, which would otherwise declare one input per
+character — raises the same category rather than escaping as a raw
+`TypeError`. All of it runs before the builder is entered and before any spec
+is read, so a rejected declaration never reaches the expression. The result is
+that an optimizer is checked at least as strictly as the equivalent plain
+callable: the same mistake yields the same category on both paths. A plain
+callable is traced exactly as before, including a `**kwargs` callable, which
+still binds any declaration and lets its own body decide.
+
+`sgd_update(*, parameter, gradient, learning_rate)` is the compatibility path
+for callers that already import the reference update as a function. It
+authors nothing of its own — the expression lives in `SGD`, and the function
+delegates to a shared instance of it, so the two cannot drift apart. New
+callers should pass `SGD()` instead, which additionally gets the name check
+above. Neither it, nor `SGD`, nor
+`trace_parameter_update` constructs a graph-record or operator type directly;
+doing so is a spec invariant, not just a style preference, and is checked by
+a dedicated regression test that additionally scans the module's own
+namespace so an import alias cannot quietly reintroduce direct construction
+either. See "What this surface does and does not guard against ILC-style
+coupling" below for the exact boundary of that check.
+
+Update-callable well-formedness is checked once, before any input is
+declared or the builder is entered, so an invalid callable's body never runs;
+a signature that does not accept exactly the declared inputs by keyword
+raises `AutodiffError("invalid_update_signature", ...)`; for an `Optimizer`
+the same category reports a declared-input mismatch and a malformed
+declaration of the required names, so the contract adds no new error
+category. A callable that does
+not return a `Tensor` raises `AutodiffError("invalid_update_output", ...)`
+after it runs. Typed-input completeness and traced-expression shape/dtype
+compatibility are not re-validated here — they are the same checks typed
+tracing already performs on every other traced expression. This module
+defines no optimizer catalog and no optimizer state lifecycle; it is a
+composition helper, not a training loop.
+
+#### Compatibility
+
+These three pieces are additive to every existing serialized payload, but not
+to the public error-category surface: `AUTODIFF_ERROR_CATEGORIES` grew from 20
+to 26 entries to name the dependency-analysis, lowering, and traced-update
+failure modes above, which is an observable change for a consumer matching
+exhaustively on that frozenset. They add no new field to
+`DerivativeProgram.to_dict()` or any other existing serialized payload;
+`DependencyAnalysis`, `ValueDependency`, and `LoweredProgram` are in-memory
+analysis results, not part of any wire format today. Existing
+`TensorGraphBuilder`, VJP generation, derivative program compilation, and
+`ExecutionScheduler` behavior are unchanged — dependency analysis and lowering
+read a graph or program after it exists; they do not participate in tracing,
+VJP generation, or execution scheduling. All new names -- `Optimizer` and `SGD`
+included -- are reached the same lazily-loaded way as the artifact and
+route-derivative surfaces already documented above: `import tinychain.autodiff
+as autodiff` and access the name directly, or import it from the specific
+submodule.
+
+#### Extension example
+
+A consumer registers a handler per concrete operator type it supports and
+lowers a selection in one call. `my_target_ir` below stands in for whatever
+representation the consumer owns — the framework never sees it:
+
+```python
+import tinychain as tc
+from tinychain.autodiff import OperationHandlerRegistry, lower_graph
+
+class AddToTargetIR:
+    operator_type = tc.autodiff.AddOperator
+
+    def lower(self, context):
+        left, right = context.inputs
+        return my_target_ir.add(left, right)  # opaque to the framework
+
+registry = OperationHandlerRegistry()
+registry.register(AddToTargetIR())
+# ... register one handler per supported concrete operator type ...
+
+lowered = lower_graph(graph, handlers=registry, outputs=[output_value_id])
+program = lowered.output_values  # the consumer's own opaque target values
+```
+
+A consumer that wants a local fusion supplies a `fusion=` hook alongside
+`handlers=`; declining a fusion (`fuse(...)` returning `None`) always falls
+back to the per-operator handler path for that operation.
+
+#### What this surface does and does not guard against ILC-style coupling
+
+Two separate artifacts each prove a narrow, specific claim. Neither is a
+general regression guard against the framework becoming coupled to a
+specific consumer over time, and the boundary of each is worth stating
+explicitly rather than leaving a reader to discover it later.
+
+A dedicated regression test walks every module under `tinychain/autodiff/`
+and fails if any of them **imports** a module whose dotted path names an ILC
+consumer. This is a static AST scan over `import`/`from ... import`
+statements — it catches `import ilc_api` and `from ilc_api.target import
+Foo` written directly in an autodiff module's source. It does **not** catch
+a dynamic import that only names the module at runtime, for example
+`importlib.import_module("ilc_api.target")` — the module name never appears
+as a literal import statement, so the AST walk has nothing to match. It also
+does not attempt to detect every way framework code could informally assume
+something about one consumer's target representation or physical layout
+without ever importing that consumer's package by name; that remains a
+review concern, not an automated one.
+
+A separate test proves the extension seam is *usable* generically: a
+throwaway, non-ILC consumer that defines its own target expression type,
+registers handlers for two concrete operators, supplies one supported fusion
+hook, and lowers a real traced graph through this seam using only the public
+`tinychain.autodiff` names above, with no framework-private access and no
+target-specific concept. That is a capability demonstration, not a
+regression guard — it proves the seam *can* be used generically today, not
+that it *stays* generic. A framework change that added consumer-specific
+behavior to the lowering path while leaving the public names and their
+signatures alone would leave this consumer passing unchanged, because its
+own inputs and expectations never changed.
+
+The related regression test guarding traced optimizer updates against
+manual graph-record construction (see above) has a matching limit: it
+catches a literal unaliased construction call in `training.py`'s own source,
+and it additionally catches an import alias or any other name in
+`training.py`'s own namespace that resolves to a graph-record type. It does
+**not** catch construction that lives in another module and is only reached
+at call time — a helper module built for this purpose and imported by
+`training.py` binds a module object or a function in `training.py`'s
+namespace, not the record type itself, so the namespace scan cannot see
+through it. Nor does it catch a function-local aliased import nested inside
+one of `training.py`'s own functions, since that alias is bound in the
+function's local scope rather than the module's namespace. These checks are
+aimed at the realistic accident, not at deliberate circumvention by someone
+with commit access to this package.
+
 ### Executor auth and routing contract
 
 `tc.backend(...)` uses one remote auth rule:

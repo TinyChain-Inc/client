@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 from ..serialize import serialize
+from ._exception_state import allow_exception_state
 
 
 AUTODIFF_ERROR_CATEGORIES: tuple[str, ...] = (
@@ -27,10 +28,38 @@ AUTODIFF_ERROR_CATEGORIES: tuple[str, ...] = (
     "side_effecting_route_unsupported",
     "autodiff_not_implemented",
     "dtype_mismatch",
+    # Structured dependency analysis of a selected forward or derivative output.
+    # `details` for each is carried in the message as the offending value ids.
+    #   missing_dependency:       a reachable value has no producer and no provenance
+    #   ambiguous_producer:       one value has two producers, or a declared seed
+    #                             collides with a forward graph value
+    #   invalid_selected_output:  the selection is empty or names an unknown value
+    "missing_dependency",
+    "ambiguous_producer",
+    "invalid_selected_output",
+    # Framework-owned program lowering. `details` are carried in the message as
+    # the offending node ids, value ids, or operator route names.
+    #   handler_contract_violation: a consumer handler, handler registration, or
+    #                               fusion hook broke the lowering seam contract
+    #                               (no target value emitted, an uncategorized
+    #                               failure, two handlers for one operator type,
+    #                               or a fusion claiming operations it was not
+    #                               offered, claiming none of them, claiming one
+    #                               twice, or discarding a value still needed)
+    "handler_contract_violation",
+    # Traced optimizer/parameter updates authored as ordinary Tensor
+    # callables. `details` are carried in the message as the offending
+    # callable's signature mismatch or the value the callable returned.
+    #   invalid_update_signature: the update callable's signature does not
+    #                             accept exactly the declared typed inputs
+    #   invalid_update_output:    the update callable did not return a Tensor
+    "invalid_update_signature",
+    "invalid_update_output",
 )
 
 
-@dataclass
+@allow_exception_state
+@dataclass(frozen=True)
 class AutodiffError(Exception):
     category: str
     message: str
@@ -48,6 +77,7 @@ class AutodiffError(Exception):
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> AutodiffError:
         return cls(category=str(data["category"]), message=str(data["message"]))
+
 
 def _string_or_strings(value: object) -> str | list[str]:
     if isinstance(value, list):

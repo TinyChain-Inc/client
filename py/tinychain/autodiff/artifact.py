@@ -9,6 +9,7 @@ from typing import ClassVar
 from ..library import Library, Route, get
 from ..serialize import serialize
 from ..uri import URI, _python_name_to_resource
+from ._exception_state import allow_exception_state
 from .compile import compile_derivative_program
 from .protocol import DerivativeMetadata
 
@@ -25,6 +26,7 @@ SUPPORTED_ARTIFACT_VISIBILITIES: tuple[str, ...] = ("public", "private", "intern
 SUPPORTED_ARTIFACT_DIGEST_ALGORITHMS: tuple[str, ...] = ("sha256",)
 
 
+@allow_exception_state
 @dataclass(frozen=True)
 class ArtifactError(Exception):
     category: str
