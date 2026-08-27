@@ -145,10 +145,15 @@ def _traced_mean_program(
 
 
 def _graph_with_no_mean(*, shape: tuple[int, int] = (2, 2)) -> TensorGraph:
-    """Trace an artifact with no rewritable region at all."""
+    """Trace an artifact with no `MeanOperator` node, hence no rewritable region.
+
+    The forward pass fails closed on an unsupported mean rather than leaving
+    it alone (unlike the gradient-path pass), so "nothing to rewrite" for this
+    pass means no candidate node at all, not a candidate that fails a clause.
+    """
     with TensorGraphBuilder() as trace:
         value = trace.input("value", dtype="f64", shape=shape)
-        output = value.mean([0], keepdims=True)  # partial axis: not rewritable
+        output = value + value
     return trace.build(outputs=output)
 
 
@@ -349,6 +354,9 @@ def test_gradient_path_region_is_recorded_rank_preserving(keepdims: bool) -> Non
 
 def test_gradient_region_source_emitted_and_terminal_ids_match_the_artifact() -> None:
     program = _traced_mean_program(keepdims=True)
+    broadcast_node = next(
+        node for node in program.nodes if type(node.operator).__name__ == "BroadcastOperator"
+    )
     div_node = next(
         node for node in program.nodes if type(node.operator).__name__ == "DivOperator"
     )
@@ -356,7 +364,11 @@ def test_gradient_region_source_emitted_and_terminal_ids_match_the_artifact() ->
     detailed = _expand_program_detailed(program)
     region = detailed.regions[0]
 
-    assert region.source_node_ids == (div_node.node_id,)
+    # The matched chain that gets replaced is both nodes: the broadcast, which
+    # is removed outright, and the division, whose position the region
+    # occupies -- named here in the order they must appear in the artifact for
+    # the broadcast's output to be a valid input to the division.
+    assert region.source_node_ids == (broadcast_node.node_id, div_node.node_id)
     assert region.terminal_value_id == div_node.output_value_id
 
     rewritten_program = detailed.program
