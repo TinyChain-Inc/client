@@ -421,6 +421,63 @@ def _is_reserved_identifier(identifier: object) -> bool:
 
 
 # --------------------------------------------------------------------------
+# Sidecar provenance (§9.4)
+#
+# Expansion bookkeeping is never placed in `op_params` -- a handler receives
+# `op_params` as operator configuration and cannot be expected to distinguish
+# configuration from bookkeeping (Inv-10). Provenance instead travels beside
+# the rewritten artifact, in a `MeanExpansionRegion` per rewritten region.
+#
+# The two detailed passes below are the *only* place either rewrite is
+# implemented. `expand_mean_graph` and `expand_mean_derivative_program` are
+# defined, further down this module, as the corresponding detailed pass
+# followed by selecting its artifact field -- never as a second, independent
+# walk -- so the composable and detailed forms cannot disagree.
+#
+# Why a gradient-path region is always `"rank_preserving"`: §9.4 admits only
+# `"rank_preserving"` and `"rank_reducing"` as tier strings, and the §8.4
+# region -- two matmuls and one scale -- performs no rank change regardless of
+# the forward mean's own `keepdims`, which only ever affects the *forward*
+# region's tier. A broadcast-and-scale region is therefore recorded
+# `"rank_preserving"` unconditionally; this is a property of the region's
+# shape arithmetic, not an oversight of the field's two-value domain.
+# --------------------------------------------------------------------------
+
+# §9.1 -- the exact `pass_name` a forward-expansion region reports.
+MEAN_EXPANSION_FORWARD = "mean_expansion_forward"
+
+# §9.1 -- the exact `pass_name` a gradient-path region reports.
+BROADCAST_SCALE_EXPANSION = "broadcast_scale_expansion"
+
+
+@dataclass(frozen=True)
+class MeanExpansionRegion:
+    """Provenance for one region a pass rewrote, exactly the §9.4 fields."""
+
+    pass_name: str
+    source_node_ids: tuple[str, ...]
+    emitted_node_ids: tuple[str, ...]
+    terminal_value_id: str
+    tier: str
+
+
+@dataclass(frozen=True)
+class MeanGraphExpansionResult:
+    """The forward pass's rewritten graph, plus one region per rewrite."""
+
+    graph: TensorGraph
+    regions: tuple[MeanExpansionRegion, ...]
+
+
+@dataclass(frozen=True)
+class MeanDerivativeExpansionResult:
+    """The gradient-path pass's rewritten program, plus one region per rewrite."""
+
+    program: DerivativeProgram
+    regions: tuple[MeanExpansionRegion, ...]
+
+
+# --------------------------------------------------------------------------
 # Artifact identifier indexing
 # --------------------------------------------------------------------------
 
@@ -872,20 +929,24 @@ def _emit_mean_region(
 # --------------------------------------------------------------------------
 
 
-def expand_mean_graph(graph: TensorGraph) -> TensorGraph:
-    """Return *graph* with every supported all-axis rank-2 mean expanded.
+def expand_mean_graph_detailed(graph: TensorGraph) -> MeanGraphExpansionResult:
+    """Return *graph* with every supported all-axis rank-2 mean expanded,
+    together with one `MeanExpansionRegion` per rewritten region (§9.4).
 
     Each supported `MeanOperator` (FR-128-006) is replaced in place by the
     matmul-based region of §8.3 -- five nodes when the mean declared
     ``keepdims=True``, six when it declared ``keepdims=False``, the sixth a real
     `ReshapeOperator` performing the rank change. Every other node, and
     ``inputs`` and ``outputs``, are carried through unchanged; the input graph is
-    never mutated, and equal graphs expand to equal graphs.
+    never mutated, and equal graphs expand to equal results including every
+    region record.
 
     Every candidate mean is validated before a single node is emitted, so an
     unsupported mean raises its categorized failure (§13.1) naming the node and
     the clause of FR-128-006 it failed, and never yields a partially rewritten
-    graph.
+    graph. `expand_mean_graph` is defined below as this pass followed by
+    selecting the `graph` field -- there is no second implementation of the
+    rewrite for the two forms to disagree about.
     """
     nodes = graph.nodes
     existing_node_ids = _indexed_node_ids(nodes)
@@ -903,18 +964,45 @@ def expand_mean_graph(graph: TensorGraph) -> TensorGraph:
         existing_node_ids=existing_node_ids, existing_value_ids=existing_value_ids
     )
     expanded_nodes: list[TensorNodeRecord] = []
+    regions: list[MeanExpansionRegion] = []
     for node in nodes:
         supported = supported_means.get(node.node_id)
         if supported is None:
             expanded_nodes.append(node)
             continue
-        expanded_nodes.extend(_emit_mean_region(supported, minter))
+        emitted_region = _emit_mean_region(supported, minter)
+        expanded_nodes.extend(emitted_region)
+        regions.append(
+            MeanExpansionRegion(
+                pass_name=MEAN_EXPANSION_FORWARD,
+                source_node_ids=(node.node_id,),
+                emitted_node_ids=tuple(
+                    emitted_node.node_id for emitted_node in emitted_region
+                ),
+                terminal_value_id=emitted_region[-1].output_value_id,
+                tier="rank_preserving" if supported.keepdims else "rank_reducing",
+            )
+        )
 
-    return TensorGraph(
-        nodes=expanded_nodes,
-        inputs=list(graph.inputs),
-        outputs=list(graph.outputs),
+    return MeanGraphExpansionResult(
+        graph=TensorGraph(
+            nodes=expanded_nodes,
+            inputs=list(graph.inputs),
+            outputs=list(graph.outputs),
+        ),
+        regions=tuple(regions),
     )
+
+
+def expand_mean_graph(graph: TensorGraph) -> TensorGraph:
+    """Return *graph* with every supported all-axis rank-2 mean expanded.
+
+    Defined as `expand_mean_graph_detailed` followed by selecting its `graph`
+    field, so this composable form and the detailed form share one rewrite and
+    cannot disagree. The single positional parameter is unchanged: it is what
+    lets this pass be used directly as an expansion hook (§9.2).
+    """
+    return expand_mean_graph_detailed(graph).graph
 
 
 # --------------------------------------------------------------------------
@@ -1156,8 +1244,12 @@ def _existing_value_ids(program: DerivativeProgram) -> frozenset[str]:
     return frozenset(value_ids)
 
 
-def expand_mean_derivative_program(program: DerivativeProgram) -> DerivativeProgram:
-    """Return *program* with every rewritable broadcast-and-scale region expanded.
+def expand_mean_derivative_program_detailed(
+    program: DerivativeProgram,
+) -> MeanDerivativeExpansionResult:
+    """Return *program* with every rewritable broadcast-and-scale region
+    expanded, together with one `MeanExpansionRegion` per rewritten region
+    (§9.4).
 
     A region is rewritten exactly when it satisfies all seven clauses of the
     predicate documented at the top of this module, which is decided from the
@@ -1165,16 +1257,23 @@ def expand_mean_derivative_program(program: DerivativeProgram) -> DerivativeProg
     rewritten region becomes the five nodes documented there, occupying the
     position of the division it replaces; the broadcast intermediate is the only
     value the pass removes, and clause 7 is what proves removing it is safe.
+    `source_node_ids` names both nodes the matched chain replaces -- the
+    broadcast, which is removed outright, and the division, whose position the
+    emitted region occupies -- in the artifact order they must appear in for
+    the broadcast's output to be a valid input to the division.
 
     A chain failing any clause -- and any `ReshapeOperator` preceding a matched
     one -- is carried through unchanged and raises nothing (FR-128-011,
     FR-128-012). ``gradients``, ``output_gradients``, ``metadata``, and
     ``value_typespecs`` are carried through unchanged; the input program is
-    never mutated, and equal programs expand to equal programs including
-    identifiers and order.
+    never mutated, and equal programs expand to equal results including every
+    region record.
 
     Every candidate is proven before a single node is emitted, so the walk is
     linear in node count with one consumer index and no per-region rescan.
+    `expand_mean_derivative_program` is defined below as this pass followed by
+    selecting the `program` field -- there is no second implementation of the
+    rewrite for the two forms to disagree about.
     """
     nodes = program.nodes
     existing_node_ids = _indexed_node_ids(nodes)
@@ -1185,36 +1284,72 @@ def expand_mean_derivative_program(program: DerivativeProgram) -> DerivativeProg
     declared_gradients = _declared_gradient_value_ids(program)
 
     # Proof first, over every candidate, before any emission (§13.2).
-    regions: dict[str, _BroadcastScaleRegion] = {}
+    matched_regions: dict[str, _BroadcastScaleRegion] = {}
     for node in nodes:
-        region = _broadcast_scale_region(
+        matched_region = _broadcast_scale_region(
             node,
             producers=producers,
             typespecs=typespecs,
             consumer_counts=consumer_counts,
             declared_gradients=declared_gradients,
         )
-        if region is not None:
-            regions[node.node_id] = region
-    absorbed_node_ids = {region.broadcast_node_id for region in regions.values()}
+        if matched_region is not None:
+            matched_regions[node.node_id] = matched_region
+    absorbed_node_ids = {
+        matched_region.broadcast_node_id for matched_region in matched_regions.values()
+    }
 
     minter = _IdentifierMinter(
         existing_node_ids=existing_node_ids, existing_value_ids=existing_value_ids
     )
     expanded_nodes: list[TensorNodeRecord] = []
+    provenance_regions: list[MeanExpansionRegion] = []
     for node in nodes:
         if node.node_id in absorbed_node_ids:
             continue
-        region = regions.get(node.node_id)
-        if region is None:
+        matched_region = matched_regions.get(node.node_id)
+        if matched_region is None:
             expanded_nodes.append(node)
             continue
-        expanded_nodes.extend(_emit_broadcast_scale_region(region, minter))
+        emitted_region = _emit_broadcast_scale_region(matched_region, minter)
+        expanded_nodes.extend(emitted_region)
+        provenance_regions.append(
+            MeanExpansionRegion(
+                pass_name=BROADCAST_SCALE_EXPANSION,
+                source_node_ids=(
+                    matched_region.broadcast_node_id,
+                    matched_region.div_node_id,
+                ),
+                emitted_node_ids=tuple(
+                    emitted_node.node_id for emitted_node in emitted_region
+                ),
+                terminal_value_id=emitted_region[-1].output_value_id,
+                # The §8.4 region performs no rank change regardless of the
+                # forward mean's own tier -- see the module-level rationale
+                # above the sidecar dataclasses.
+                tier="rank_preserving",
+            )
+        )
 
-    return DerivativeProgram(
-        nodes=expanded_nodes,
-        gradients=dict(program.gradients),
-        output_gradients=list(program.output_gradients),
-        metadata=program.metadata,
-        value_typespecs=dict(program.value_typespecs),
+    return MeanDerivativeExpansionResult(
+        program=DerivativeProgram(
+            nodes=expanded_nodes,
+            gradients=dict(program.gradients),
+            output_gradients=list(program.output_gradients),
+            metadata=program.metadata,
+            value_typespecs=dict(program.value_typespecs),
+        ),
+        regions=tuple(provenance_regions),
     )
+
+
+def expand_mean_derivative_program(program: DerivativeProgram) -> DerivativeProgram:
+    """Return *program* with every rewritable broadcast-and-scale region expanded.
+
+    Defined as `expand_mean_derivative_program_detailed` followed by selecting
+    its `program` field, so this composable form and the detailed form share
+    one rewrite and cannot disagree. The single positional parameter is
+    unchanged: it is what lets this pass be used directly as an expansion hook
+    (§9.2).
+    """
+    return expand_mean_derivative_program_detailed(program).program
