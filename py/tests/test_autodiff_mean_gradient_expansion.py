@@ -187,7 +187,14 @@ def _operator_types(nodes: list[TensorNodeRecord]) -> list[type]:
 
 
 def _value_ids(program: DerivativeProgram) -> set[str]:
-    ids: set[str] = set(program.value_typespecs)
+    """Return every value id the program's nodes produce or read.
+
+    Deliberately *not* seeded from `value_typespecs`. That mapping is an
+    inherited index the pass carries through unchanged -- it is not the set of
+    values the program computes, and an entry surviving in it says nothing about
+    whether the node graph still produces that value.
+    """
+    ids: set[str] = set()
     for node in program.nodes:
         ids.add(node.output_value_id)
         ids.update(node.input_value_ids)
