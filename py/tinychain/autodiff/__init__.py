@@ -115,6 +115,14 @@ _DEPENDENCY_EXPORTS = frozenset(
     }
 )
 
+_EXPANSION_EXPORTS = frozenset(
+    {
+        "FillDescriptor",
+        "FillOperator",
+        "fill_descriptor",
+    }
+)
+
 _LOWERING_EXPORTS = frozenset(
     {
         "LOWERING_CLAIM_HANDLER",
@@ -167,6 +175,11 @@ def __getattr__(name: str) -> object:
     if name in _DEPENDENCY_EXPORTS:
         dependencies_module = import_module(".dependencies", __name__)
         value = getattr(dependencies_module, name)
+        globals()[name] = value
+        return value
+    if name in _EXPANSION_EXPORTS:
+        expansion_module = import_module(".expansion", __name__)
+        value = getattr(expansion_module, name)
         globals()[name] = value
         return value
     if name in _LOWERING_EXPORTS:
@@ -277,6 +290,9 @@ __all__ = [
     "ValueDependency",
     "analyze_derivative_dependencies",
     "analyze_graph_dependencies",
+    "FillDescriptor",
+    "FillOperator",
+    "fill_descriptor",
     "LOWERING_CLAIM_HANDLER",
     "LOWERING_CLAIM_FUSION",
     "FusionContext",
