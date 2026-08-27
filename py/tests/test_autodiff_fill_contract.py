@@ -282,7 +282,11 @@ def test_fill_descriptor_never_leaks_a_bare_builtin_exception(
 ) -> None:
     from tinychain.autodiff import fill_descriptor
 
-    node = _fill_node(node_id="fill_bad", op_params=op_params)
+    node = _fill_node(
+        node_id="fill_bad",
+        op_params=op_params,
+        output_typespec={"dtype": "f32", "shape": [2, 3]},
+    )
 
     try:
         fill_descriptor(node)
