@@ -119,6 +119,7 @@ _EXPANSION_EXPORTS = frozenset(
     {
         "FillDescriptor",
         "FillOperator",
+        "expand_mean_derivative_program",
         "expand_mean_graph",
         "fill_descriptor",
     }
@@ -293,6 +294,7 @@ __all__ = [
     "analyze_graph_dependencies",
     "FillDescriptor",
     "FillOperator",
+    "expand_mean_derivative_program",
     "expand_mean_graph",
     "fill_descriptor",
     "LOWERING_CLAIM_HANDLER",

@@ -96,6 +96,79 @@ never comes back partially rewritten, and every failure names the offending node
 and the clause of FR-128-006 it failed. Operators other than ``MeanOperator``
 are never rewritten and are carried through identical.
 
+The gradient-path broadcast-and-scale expansion
+----------------------------------------------
+:func:`expand_mean_derivative_program` rewrites every region of a
+:class:`~tinychain.autodiff.reverse.DerivativeProgram` that broadcasts a
+``[1, 1]`` value to ``[r, c]`` and then divides it by a literal ``d`` into the
+same matmul-based shape -- so a backend needs neither a broadcast nor a division
+operation to run the gradient path. For a source value ``g`` of dtype ``D`` and
+shape ``[1, 1]``::
+
+    e1  FillOperator   --              -> D, [r, 1]     ones
+    e2  MatmulOperator [e1, g]         -> D, [r, 1]     g repeated down a column
+    e3  FillOperator   --              -> D, [1, c]     ones
+    e4  MatmulOperator [e2, e3]        -> D, [r, c]     g repeated across
+    e5  MulOperator    [e4]            -> D, [r, c]     scaled by 1/d
+
+``e5`` carries the division node's own ``output_value_id``, and the broadcast
+intermediate -- which the predicate below requires to have exactly one consumer
+and to be no declared gradient output -- is the only value the pass removes.
+
+Why this is sound for any value, and what it is *not* claiming
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The rewrite rests on an algebraic identity, not on a claim about which rule
+emitted the region. No artifact carries an origin marker -- a
+`DerivativeProgram` records a transform version and a free-text seed contract,
+and no node records the rule that produced it -- so such a claim would be
+unprovable. What *is* provable from the artifact alone is that for any ``g`` of
+shape ``[1, 1]``, ``broadcast(g, [r, c])[i, j] == g[0, 0]``, and equally
+``((ones[r,1] @ g) @ ones[1,c])[i, j] == g[0, 0]``. The two matmuls therefore
+compute the broadcast exactly, whatever produced ``g``.
+
+The predicate
+~~~~~~~~~~~~~
+A `DivOperator` node ``q`` is rewritten exactly when all seven of the following
+hold; each is decidable from the artifact alone:
+
+1. ``q`` has exactly one operand, and its ``op_params`` is exactly
+   ``{"right_literal": d}`` with ``d`` a real non-boolean number.
+2. ``q``'s operand is produced by a `BroadcastOperator` node ``b`` in the same
+   artifact.
+3. ``b`` has exactly one operand; ``b.op_params["shape"]`` is a rank-2 shape
+   ``[r, c]`` of positive integers; and ``b.output_typespec`` is complete and
+   equals ``D, [r, c]``.
+4. ``b``'s operand ``g`` has a complete *recorded* typespec of ``D, [1, 1]`` --
+   the same dtype, rank 2, both dimensions exactly 1.
+5. ``d`` equals the integer ``r * c`` exactly.
+6. ``q.output_typespec`` is complete and equals ``D, [r, c]``.
+7. ``b.output_value_id`` has exactly one consumer in the artifact -- ``q`` --
+   and is named in neither ``output_gradients`` nor ``gradients``.
+
+**Clause 5 is a scope guard, not a correctness guard.** The rewrite preserves
+the computed value for *any* divisor, so nothing about the identity above needs
+``d`` to be the element count, and this module does not pretend otherwise. The
+clause earns its place for two other reasons: it confines the pass to the
+reduction case it exists for, keeping the rewrite reviewable; and it confines
+the one inexact step -- substituting ``* (1/d)`` for ``/ d``, which IEEE-754
+does not require to agree bit for bit -- to a divisor that is an exact integer
+element count rather than to an arbitrary application-chosen divisor whose
+numerics a caller may depend on.
+
+A near miss is left alone and raises nothing
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+A region failing any clause is carried through unchanged, and no error is
+raised. `BroadcastOperator`, `DivOperator`, and `ReshapeOperator` are general
+operators with many legitimate uses, so declining is the correct response to a
+near miss; a backend that then cannot lower one fails closed at lowering with
+the existing ``unsupported_operator``. This is deliberately the opposite of the
+forward pass's behaviour on an unsupported `MeanOperator`: a mean is
+unambiguously inside the declared domain of a pass named for mean expansion, a
+broadcast is not. In particular a `ReshapeOperator` preceding a matched region
+-- which is what performs the genuine rank change when the reduction declared
+``keepdims=False`` -- is already truthful, is exactly the rank change clause 4
+requires to have happened, and is never merged into the emitted region.
+
 The reserved identifier namespace
 ---------------------------------
 Nodes and values a pass creates are named ``exn0, exn1, …`` and
@@ -117,6 +190,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from .graph import (
+    BroadcastOperator,
+    DivOperator,
     MatmulOperator,
     MeanOperator,
     MulOperator,
@@ -127,6 +202,7 @@ from .graph import (
 )
 from .lowering import OperationContext
 from .protocol import AutodiffError
+from .reverse import DerivativeProgram
 from .shape import (
     Shape,
     _normalize_mean_axes,
@@ -838,4 +914,307 @@ def expand_mean_graph(graph: TensorGraph) -> TensorGraph:
         nodes=expanded_nodes,
         inputs=list(graph.inputs),
         outputs=list(graph.outputs),
+    )
+
+
+# --------------------------------------------------------------------------
+# The §8.4 broadcast-and-scale predicate (FR-128-009 .. FR-128-012)
+# --------------------------------------------------------------------------
+
+# The rank the rewrite is defined for. A pair of matmuls expands exactly two
+# axes, so a broadcast to any other rank is outside the pass's domain.
+_BROADCAST_SCALE_RANK = 2
+
+# The shape the broadcast source must have. The identity the rewrite rests on
+# holds only when every element of the broadcast result is the same element of
+# the source, which is what `[1, 1]` guarantees.
+_BROADCAST_SCALE_SOURCE_SHAPE = (1, 1)
+
+# The complete `op_params` key set of a rewritable division. Exact, not minimal:
+# a division carrying any further key is describing an operation this pass has
+# not proven anything about, so it is declined rather than interpreted.
+_SCALE_PARAM_KEYS = frozenset({"right_literal"})
+
+
+@dataclass(frozen=True)
+class _BroadcastScaleRegion:
+    """One broadcast-and-scale region proven rewritable by the seven clauses."""
+
+    broadcast_node_id: str
+    div_node_id: str
+    source_value_id: str
+    source_typespec: dict[str, object]
+    dtype: str
+    rows: int
+    columns: int
+    divisor: int
+    output_value_id: str
+
+
+def _concrete_typespec(typespec: object) -> tuple[str, tuple[int, ...]] | None:
+    """Return *typespec* as ``(dtype, shape)``, or ``None`` if it is not complete.
+
+    "Complete" is the whole content of clauses 3, 4, and 6: a non-empty dtype
+    and a ranked shape of concrete integers. This returns ``None`` rather than
+    raising, because an incomplete typespec on a general operator is a chain the
+    pass declines, not a defect it reports.
+    """
+    if not isinstance(typespec, Mapping):
+        return None
+    dtype = typespec.get("dtype")
+    if not isinstance(dtype, str) or not dtype:
+        return None
+    try:
+        shape = typespec_ranked_shape(dict(typespec))
+    except AutodiffError:
+        return None
+    dimensions: list[int] = []
+    for dimension in shape:
+        # A symbolic dimension is a string here; `bool` is not a dimension.
+        if isinstance(dimension, bool) or not isinstance(dimension, int):
+            return None
+        dimensions.append(dimension)
+    return dtype, tuple(dimensions)
+
+
+def _rank_two_target_shape(op_params: Mapping[str, object]) -> tuple[int, int] | None:
+    """Read a broadcast target as a rank-2 shape of positive integers."""
+    shape = op_params.get("shape")
+    if isinstance(shape, (str, bytes)) or not isinstance(shape, Sequence):
+        return None
+    if len(shape) != _BROADCAST_SCALE_RANK:
+        return None
+    dimensions: list[int] = []
+    for dimension in shape:
+        if isinstance(dimension, bool) or not isinstance(dimension, int):
+            return None
+        if dimension <= 0:
+            return None
+        dimensions.append(dimension)
+    rows, columns = dimensions
+    return rows, columns
+
+
+def _value_consumer_counts(nodes: Sequence[TensorNodeRecord]) -> dict[str, int]:
+    """Count how many operand slots read each value id.
+
+    Built once per invocation and shared by every candidate, so clause 7 costs a
+    dictionary lookup rather than a rescan of the artifact (NFR-128-001). A node
+    naming the same value twice counts twice, because it reads it twice.
+    """
+    counts: dict[str, int] = {}
+    for node in nodes:
+        for value_id in node.input_value_ids:
+            counts[value_id] = counts.get(value_id, 0) + 1
+    return counts
+
+
+def _declared_gradient_value_ids(program: DerivativeProgram) -> frozenset[str]:
+    """Return every value id the program declares as a gradient result.
+
+    Clause 7 forbids removing one of these: a value a caller is promised is not
+    an intermediate the pass may absorb, however it is computed.
+    """
+    declared = {value_id for value_id in program.output_gradients if value_id is not None}
+    declared.update(program.gradients.values())
+    return frozenset(declared)
+
+
+def _broadcast_scale_region(
+    node: TensorNodeRecord,
+    *,
+    producers: Mapping[str, TensorNodeRecord],
+    typespecs: Mapping[str, object],
+    consumer_counts: Mapping[str, int],
+    declared_gradients: frozenset[str],
+) -> _BroadcastScaleRegion | None:
+    """Prove *node* rewritable, or return ``None`` for any chain that is not.
+
+    The seven clauses are evaluated in their stated order. Every failure returns
+    ``None``: a chain outside the predicate is left alone and raises nothing
+    (FR-128-011).
+    """
+    # Clause 1 -- a one-operand division by a real, non-boolean literal.
+    if not isinstance(node.operator, DivOperator):
+        return None
+    if len(node.input_value_ids) != 1:
+        return None
+    if set(node.op_params) != _SCALE_PARAM_KEYS:
+        return None
+    divisor = node.op_params["right_literal"]
+    if isinstance(divisor, bool) or not isinstance(divisor, (int, float)):
+        return None
+
+    # Clause 2 -- its operand is produced by a broadcast in the same artifact.
+    broadcast = producers.get(node.input_value_ids[0])
+    if broadcast is None or not isinstance(broadcast.operator, BroadcastOperator):
+        return None
+
+    # Clause 3 -- a one-operand broadcast to a rank-2 target it declares truthfully.
+    if len(broadcast.input_value_ids) != 1:
+        return None
+    target_shape = _rank_two_target_shape(broadcast.op_params)
+    if target_shape is None:
+        return None
+    rows, columns = target_shape
+    broadcast_typespec = _concrete_typespec(broadcast.output_typespec)
+    if broadcast_typespec is None:
+        return None
+    dtype, broadcast_shape = broadcast_typespec
+    if broadcast_shape != (rows, columns):
+        return None
+
+    # Clause 4 -- the broadcast source is a recorded `[1, 1]` value of the same dtype.
+    source_value_id = broadcast.input_value_ids[0]
+    source_typespec = _concrete_typespec(typespecs.get(source_value_id))
+    if source_typespec is None:
+        return None
+    source_dtype, source_shape = source_typespec
+    if source_dtype != dtype or source_shape != _BROADCAST_SCALE_SOURCE_SHAPE:
+        return None
+
+    # Clause 5 -- the scope guard: the divisor is exactly the element count.
+    element_count = rows * columns
+    if divisor != element_count:
+        return None
+
+    # Clause 6 -- the division declares the broadcast's own dtype and shape.
+    output_typespec = _concrete_typespec(node.output_typespec)
+    if output_typespec != (dtype, (rows, columns)):
+        return None
+
+    # Clause 7 -- the broadcast result is this division's private intermediate.
+    broadcast_value_id = broadcast.output_value_id
+    if consumer_counts.get(broadcast_value_id, 0) != 1:
+        return None
+    if broadcast_value_id in declared_gradients:
+        return None
+
+    return _BroadcastScaleRegion(
+        broadcast_node_id=broadcast.node_id,
+        div_node_id=node.node_id,
+        source_value_id=source_value_id,
+        source_typespec=_boundary_typespec(dtype, source_shape),
+        dtype=dtype,
+        rows=rows,
+        columns=columns,
+        divisor=element_count,
+        output_value_id=node.output_value_id,
+    )
+
+
+# --------------------------------------------------------------------------
+# The §8.4 region emitter
+# --------------------------------------------------------------------------
+
+
+def _emit_broadcast_scale_region(
+    region: _BroadcastScaleRegion, minter: _IdentifierMinter
+) -> list[TensorNodeRecord]:
+    """Emit the five nodes replacing one proven-rewritable region.
+
+    Every declared type below is derived from the operands the node actually
+    reads -- the shape helpers compute it -- rather than copied from the region
+    being replaced, so no node can declare a shape its operation cannot produce.
+    The terminal scale's declared type therefore agrees with the replaced
+    division's by derivation rather than by assignment, which clause 6 is what
+    guarantees.
+    """
+    column_ones = _emit_fill(minter, dtype=region.dtype, shape=(region.rows, 1))
+    down_column = _emit_matmul(
+        minter,
+        left=column_ones,
+        right=(region.source_value_id, region.source_typespec),
+    )
+    row_ones = _emit_fill(minter, dtype=region.dtype, shape=(1, region.columns))
+    across_row = _emit_matmul(minter, left=down_column, right=row_ones)
+    scale = _emit_scale(
+        minter,
+        operand=across_row,
+        right_literal=1.0 / float(region.divisor),
+        output_value_id=region.output_value_id,
+    )
+    return [column_ones, down_column, row_ones, across_row, scale]
+
+
+# --------------------------------------------------------------------------
+# The public gradient-path pass
+# --------------------------------------------------------------------------
+
+
+def _existing_value_ids(program: DerivativeProgram) -> frozenset[str]:
+    """Return every value id the program names anywhere.
+
+    Wider than the set of produced values on purpose: a minted identifier must
+    not collide with a value the program merely reads or merely records a
+    typespec for either (Inv-5).
+    """
+    value_ids = set(_indexed_value_ids(program.nodes, []))
+    value_ids.update(program.value_typespecs)
+    for node in program.nodes:
+        value_ids.update(node.input_value_ids)
+    return frozenset(value_ids)
+
+
+def expand_mean_derivative_program(program: DerivativeProgram) -> DerivativeProgram:
+    """Return *program* with every rewritable broadcast-and-scale region expanded.
+
+    A region is rewritten exactly when it satisfies all seven clauses of the
+    predicate documented at the top of this module, which is decided from the
+    artifact alone and makes no claim about what produced any node. Each
+    rewritten region becomes the five nodes documented there, occupying the
+    position of the division it replaces; the broadcast intermediate is the only
+    value the pass removes, and clause 7 is what proves removing it is safe.
+
+    A chain failing any clause -- and any `ReshapeOperator` preceding a matched
+    one -- is carried through unchanged and raises nothing (FR-128-011,
+    FR-128-012). ``gradients``, ``output_gradients``, ``metadata``, and
+    ``value_typespecs`` are carried through unchanged; the input program is
+    never mutated, and equal programs expand to equal programs including
+    identifiers and order.
+
+    Every candidate is proven before a single node is emitted, so the walk is
+    linear in node count with one consumer index and no per-region rescan.
+    """
+    nodes = program.nodes
+    existing_node_ids = _indexed_node_ids(nodes)
+    existing_value_ids = _existing_value_ids(program)
+    typespecs = _declared_typespecs(nodes, list(program.value_typespecs.items()))
+    producers = {node.output_value_id: node for node in nodes}
+    consumer_counts = _value_consumer_counts(nodes)
+    declared_gradients = _declared_gradient_value_ids(program)
+
+    # Proof first, over every candidate, before any emission (§13.2).
+    regions: dict[str, _BroadcastScaleRegion] = {}
+    for node in nodes:
+        region = _broadcast_scale_region(
+            node,
+            producers=producers,
+            typespecs=typespecs,
+            consumer_counts=consumer_counts,
+            declared_gradients=declared_gradients,
+        )
+        if region is not None:
+            regions[node.node_id] = region
+    absorbed_node_ids = {region.broadcast_node_id for region in regions.values()}
+
+    minter = _IdentifierMinter(
+        existing_node_ids=existing_node_ids, existing_value_ids=existing_value_ids
+    )
+    expanded_nodes: list[TensorNodeRecord] = []
+    for node in nodes:
+        if node.node_id in absorbed_node_ids:
+            continue
+        region = regions.get(node.node_id)
+        if region is None:
+            expanded_nodes.append(node)
+            continue
+        expanded_nodes.extend(_emit_broadcast_scale_region(region, minter))
+
+    return DerivativeProgram(
+        nodes=expanded_nodes,
+        gradients=dict(program.gradients),
+        output_gradients=list(program.output_gradients),
+        metadata=program.metadata,
+        value_typespecs=dict(program.value_typespecs),
     )
