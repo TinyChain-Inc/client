@@ -571,9 +571,21 @@ def _require_every_operation_supported(
     replace a run of supported operations with one instruction, but it is never
     the only way an operation can be expressed, so support does not depend on
     which patterns a hook happens to recognize.
+
+    The registry can only name the operator type it was asked for, because that
+    is all a lookup knows. Here the offending node is known, so the same failure
+    is re-raised with its node id appended -- the pre-flight is the only place
+    that context exists. The category is carried through unchanged and
+    :meth:`OperationHandlerRegistry.lookup`'s own message is left untouched, so
+    every other caller of it observes exactly what it observed before.
     """
     for node in ordered_nodes:
-        handlers.lookup(node.operator)
+        try:
+            handlers.lookup(node.operator)
+        except AutodiffError as exc:
+            raise AutodiffError(
+                exc.category, f"{exc.message} (node {node.node_id!r})"
+            ) from exc
 
 
 def _require_selected_outputs_bound(
