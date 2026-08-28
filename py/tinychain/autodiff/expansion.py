@@ -283,6 +283,20 @@ every minted identifier is checked against those already in the artifact,
 raising ``malformed_derivative_ir`` naming the identifier rather than silently
 shadowing an existing value. An artifact that already contains a duplicate node
 or value id is rejected the same way, before anything is minted.
+
+These identifiers name positions inside one artifact. They are not addresses: a
+declared input's address is the ``IdRef`` its name produces, and its value id is
+minted separately, so a parameter named ``weights`` is value ``v0`` and nothing a
+pass mints can shadow that name. The one value id a caller supplies directly is
+the seed, which is why the collision check covers every identifier an artifact
+mentions -- produced, read, declared as an input, and declared as an output or a
+gradient -- rather than only the ones it produces.
+
+A generated constant never becomes addressable. Expansion leaves
+``analyze_graph_dependencies`` and ``analyze_derivative_dependencies`` reporting
+the same ``required_inputs`` and the same provenance vocabulary as before, so a
+consumer binds exactly what it bound already. A fill node is materialized by its
+handler from its own descriptor and is never bound through ``bind_input``.
 """
 
 from __future__ import annotations
@@ -524,6 +538,12 @@ def _check_declaration_agrees(
 # every call, so equal artifacts expand to equal artifacts); and every minted
 # identifier is checked against the identifiers already in the artifact, which
 # fails closed rather than silently shadowing an existing value.
+#
+# These name positions in an artifact, not addresses: a declared input's address
+# is the `IdRef` its name produces, while its value id is minted separately. The
+# seed is the one value id a caller supplies, so the collision check spans every
+# identifier an artifact mentions rather than only those it produces. Constants a
+# pass emits never enter the binding surface at all -- see the module docstring.
 EXPANSION_NODE_ID_PREFIX = "exn"
 EXPANSION_VALUE_ID_PREFIX = "exv"
 
