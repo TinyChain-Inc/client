@@ -259,6 +259,50 @@ def test_rank_reducing_expanded_graph_without_a_reshape_handler_fails_closed_nam
     assert unaware.invocations == []
 
 
+def test_rank_reducing_expanded_derivative_program_without_a_reshape_handler_fails_closed():
+    """The documented most-likely omission, on the artifact it is easiest to miss.
+
+    Section 9.3 says the rank-reducing tier needs a trivial-reshape handler in
+    *both* artifacts. On the gradient path the reshape is not emitted by the
+    expansion at all -- it is the seed reshape the VJP already produced, which
+    the broadcast-and-scale rewrite leaves in place -- so a backend that added a
+    fill handler and stopped is rejected by that surviving node.
+    """
+    graph, program = _traced_mean(keepdims=False)
+    expanded = expand_mean_derivative_program(program)
+    reshape_node_ids = [
+        node.node_id for node in expanded.nodes if isinstance(node.operator, ReshapeOperator)
+    ]
+    assert reshape_node_ids, "the rank-reducing gradient path must retain a reshape node"
+    unaware = recording_registry(_limited(reshape=False))
+    assert unaware.registry.has_handler(FillOperator())
+    assert unaware.registry.has_handler(MatmulOperator())
+    values = {"seed": _seed(keepdims=False, dtype="f64"), "v0": _operand((3, 5), "f64")}
+
+    with pytest.raises(AutodiffError) as excinfo:
+        _lower_gradient(
+            expanded, forward_graph=graph, registry=unaware.registry, values=values
+        )
+
+    assert excinfo.value.category == "unsupported_operator"
+    assert "ReshapeOperator" in excinfo.value.message
+    assert reshape_node_ids[0] in excinfo.value.message
+    assert unaware.invocations == []
+
+
+def test_rank_reducing_expanded_derivative_program_lowers_once_a_reshape_handler_exists():
+    """The positive control: the same artifact and registry, reshape handler added."""
+    graph, program = _traced_mean(keepdims=False)
+    expanded = expand_mean_derivative_program(program)
+    values = {"seed": _seed(keepdims=False, dtype="f64"), "v0": _operand((3, 5), "f64")}
+
+    gradient = _lower_gradient(
+        expanded, forward_graph=graph, registry=_limited(reshape=True), values=values
+    )
+
+    np.testing.assert_allclose(gradient, np.full((3, 5), 2.5 / 15.0), rtol=1e-12)
+
+
 def test_registry_lookup_message_names_only_the_operator_type():
     """`lookup`'s own message stays byte-identical; only the pre-flight enriches it."""
     with pytest.raises(AutodiffError) as excinfo:

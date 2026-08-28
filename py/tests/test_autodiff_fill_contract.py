@@ -143,14 +143,118 @@ def test_fill_descriptor_accepts_a_zero_dimensional_shape() -> None:
 
 
 def test_fill_node_output_typespec_equals_its_descriptor_dtype_and_shape() -> None:
+    """A fill node's declaration and its parameters agree, and the reader enforces it.
+
+    The two sides are written out independently here rather than derived from
+    one dict, and the negative half asserts that a declaration disagreeing with
+    the parameters is rejected -- so this test fails if the reader stops
+    cross-checking the declaration it is the single authority for (risk R-3).
+    """
     from tinychain.autodiff import fill_descriptor
 
-    node = _fill_node()
+    node = _fill_node(
+        op_params={"fill": 0.25, "dtype": "f32", "shape": [2, 3]},
+        output_typespec={"dtype": "f32", "shape": [2, 3]},
+    )
     descriptor = fill_descriptor(node)
 
     assert node.output_typespec is not None
     assert node.output_typespec["dtype"] == descriptor.dtype
     assert tuple(node.output_typespec["shape"]) == descriptor.shape
+
+    disagreeing = _fill_node(
+        op_params={"fill": 0.25, "dtype": "f32", "shape": [2, 3]},
+        output_typespec={"dtype": "f64", "shape": [9, 9]},
+    )
+    with pytest.raises(AutodiffError):
+        fill_descriptor(disagreeing)
+
+
+def test_fill_descriptor_rejects_a_node_declaring_a_disagreeing_dtype() -> None:
+    from tinychain.autodiff import fill_descriptor
+
+    node = _fill_node(
+        node_id="fill_dtype_disagrees",
+        op_params={"fill": 1.0, "dtype": "f64", "shape": [2, 2]},
+        output_typespec={"dtype": "f32", "shape": [2, 2]},
+    )
+
+    with pytest.raises(AutodiffError) as raised:
+        fill_descriptor(node)
+
+    assert raised.value.category == "malformed_derivative_ir"
+    assert "fill_dtype_disagrees" in raised.value.message
+    assert "f32" in raised.value.message
+    assert "f64" in raised.value.message
+
+
+def test_fill_descriptor_rejects_a_node_declaring_a_disagreeing_shape() -> None:
+    from tinychain.autodiff import fill_descriptor
+
+    node = _fill_node(
+        node_id="fill_shape_disagrees",
+        op_params={"fill": 1.0, "dtype": "f64", "shape": [2, 2]},
+        output_typespec={"dtype": "f64", "shape": [9, 9]},
+    )
+
+    with pytest.raises(AutodiffError) as raised:
+        fill_descriptor(node)
+
+    assert raised.value.category == "malformed_derivative_ir"
+    assert "fill_shape_disagrees" in raised.value.message
+    assert "[9, 9]" in raised.value.message or "(9, 9)" in raised.value.message
+
+
+def test_fill_descriptor_rejects_an_operation_context_declaring_a_disagreeing_type() -> None:
+    """The reader is the same authority over the context a handler receives."""
+    from tinychain.autodiff import fill_descriptor
+
+    node = _fill_node(
+        node_id="fill_context_disagrees",
+        op_params={"fill": 1.0, "dtype": "f64", "shape": [2, 2]},
+        output_typespec={"dtype": "f32", "shape": [9, 9]},
+    )
+
+    with pytest.raises(AutodiffError) as raised:
+        fill_descriptor(_operation_context(node))
+
+    assert raised.value.category == "malformed_derivative_ir"
+    assert "fill_context_disagrees" in raised.value.message
+
+
+def test_fill_descriptor_reads_a_fill_node_that_declares_no_typespec() -> None:
+    """An absent declaration stays acceptable: the reader validates parameters,
+    and cross-checks a declaration only when one is present."""
+    from tinychain.autodiff import fill_descriptor
+
+    from tinychain.autodiff import FillOperator
+
+    node = TensorNodeRecord(
+        node_id="fill_undeclared",
+        output_value_id="fill_undeclared_out",
+        operator=FillOperator(),
+        op_params=_well_formed_params(),
+        input_value_ids=[],
+    )
+    assert node.output_typespec is None
+
+    descriptor = fill_descriptor(node)
+
+    assert descriptor.dtype == "f32"
+    assert descriptor.shape == (2, 3)
+    assert fill_descriptor(_operation_context(node)) == descriptor
+
+
+def test_fill_descriptor_accepts_a_declaration_spelled_with_a_tuple_shape() -> None:
+    """Agreement is about the dimensions, not the container the shape uses."""
+    from tinychain.autodiff import fill_descriptor
+
+    node = _fill_node(
+        op_params={"fill": 1.0, "dtype": "f64", "shape": [2, 3]},
+        output_typespec={"dtype": "f64", "shape": (2, 3)},
+    )
+
+    assert fill_descriptor(node).shape == (2, 3)
 
 
 # --------------------------------------------------------------------------

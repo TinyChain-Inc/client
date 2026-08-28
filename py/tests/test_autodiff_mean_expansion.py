@@ -16,8 +16,12 @@ These tests pin three things the rewrite turns on:
 * each supported-mean validation failure raises its own category with a message
   naming the offending node and explaining the failed condition.
 
-Nothing here asserts anything about the gradient-path rewrite, provenance
-records, or the detailed passes; those are separate work.
+Nothing here asserts anything about the gradient-path *rewrite*, provenance
+records, or the detailed passes; those are separate work. The one exception is
+the identifier-collision section at the end: one helper indexes the value ids an
+artifact mentions for both passes, so the cases proving a minted identifier can
+never alias an existing value are written against both passes together, where
+the shared contract can be seen as one thing.
 """
 
 from __future__ import annotations
@@ -790,3 +794,209 @@ def test_expand_mean_graph_is_exported_from_the_autodiff_package() -> None:
     assert "expand_mean_graph" in autodiff.__all__
     assert callable(autodiff.expand_mean_graph)
     assert not hasattr(tc, "expand_mean_graph")
+
+
+# --------------------------------------------------------------------------
+# an operand whose declared element count cannot be represented
+#
+# The reciprocal `1 / (rows * columns)` is the one inexact substitution the
+# region makes. A declared shape can name an element count no float can hold,
+# and such a mean passes every clause of the predicate -- so without a guard
+# the conversion escapes as a bare `OverflowError`, which NFR-128-004 forbids.
+# --------------------------------------------------------------------------
+
+
+def test_a_mean_whose_element_count_cannot_be_converted_is_rejected() -> None:
+    rows = columns = 10**200
+    graph = _mean_graph(node_id="huge", operand_shape=(rows, columns))
+
+    with pytest.raises(AutodiffError) as raised:
+        _expand(graph)
+
+    assert raised.value.category == "unsupported_reduction"
+    assert "huge" in raised.value.message
+    assert str(rows * columns) in raised.value.message
+
+
+def test_a_mean_whose_element_count_cannot_be_converted_raises_no_bare_builtin() -> None:
+    graph = _mean_graph(node_id="huge", operand_shape=(10**200, 10**200))
+
+    try:
+        _expand(graph)
+    except AutodiffError:
+        pass
+    except (OverflowError, KeyError, IndexError, TypeError, ValueError) as exc:
+        pytest.fail(f"bare {type(exc).__name__} escaped expand_mean_graph: {exc}")
+
+
+def test_a_large_but_convertible_element_count_still_expands() -> None:
+    """The guard rejects only what cannot be converted; a merely huge count expands."""
+    rows = columns = 10**150
+    graph = _mean_graph(operand_shape=(rows, columns))
+
+    expanded = _expand(graph)
+
+    scale = expanded.nodes[4]
+    assert isinstance(scale.operator, MulOperator)
+    assert scale.op_params["right_literal"] == 1.0 / float(rows * columns)
+
+
+# --------------------------------------------------------------------------
+# a minted identifier can never alias a value the artifact merely mentions
+#
+# Both passes mint into the reserved namespace and both must fail closed on a
+# collision (Inv-5). Indexing only *produced* values is not enough: a minted id
+# equal to one a node merely reads, or one named only among the artifact's
+# declared outputs, would silently rewire that consumer to the emitted node --
+# a wrong result with no error at all.
+# --------------------------------------------------------------------------
+
+
+def _graph_with_a_mean_and(
+    *, extra_nodes: list[TensorNodeRecord] | None = None, extra_outputs: list[str] | None = None
+) -> TensorGraph:
+    """A traced supported mean, plus whatever extra nodes or outputs a case needs."""
+    graph = _traced_mean_graph(keepdims=True)
+    return TensorGraph(
+        nodes=[*graph.nodes, *(extra_nodes or [])],
+        inputs=list(graph.inputs),
+        outputs=[*graph.outputs, *(extra_outputs or [])],
+    )
+
+
+def _reading_node(value_id: str) -> TensorNodeRecord:
+    """A node that reads *value_id* and nothing else produces it."""
+    return TensorNodeRecord(
+        node_id="n9",
+        output_value_id="v9",
+        operator=SumOperator(),
+        op_params={"axes": [0], "keepdims": True},
+        input_value_ids=[value_id],
+        output_typespec=_typespec("f64", (1, 1)),
+    )
+
+
+def _broadcast_scale_program(*, extra_output_gradient: str | None = None):
+    """One rewritable broadcast-and-scale chain, minimal and hand-built.
+
+    Built here rather than imported so this module keeps its own inputs; the
+    chain is the smallest one satisfying the gradient-path predicate, because
+    the pass must match a region before it mints anything at all.
+    """
+    from tinychain.autodiff import (
+        BroadcastOperator,
+        DerivativeMetadata,
+        DerivativeProgram,
+        DivOperator,
+    )
+
+    rows, columns = 3, 5
+    source = _typespec("f64", (1, 1))
+    broadcast_typespec = _typespec("f64", (rows, columns))
+    broadcast = TensorNodeRecord(
+        node_id="dn0",
+        output_value_id="d0",
+        operator=BroadcastOperator(),
+        op_params={"shape": [rows, columns]},
+        input_value_ids=["seed"],
+        output_typespec=broadcast_typespec,
+    )
+    division = TensorNodeRecord(
+        node_id="dn1",
+        output_value_id="d1",
+        operator=DivOperator(),
+        op_params={"right_literal": float(rows * columns)},
+        input_value_ids=["d0"],
+        output_typespec=broadcast_typespec,
+    )
+    output_gradients: list[str | None] = ["d1"]
+    if extra_output_gradient is not None:
+        output_gradients.append(extra_output_gradient)
+    return DerivativeProgram(
+        nodes=[broadcast, division],
+        gradients={"v0": "d1"},
+        output_gradients=output_gradients,
+        metadata=DerivativeMetadata(
+            source_graph_id="graph",
+            transform_version="0.1.0",
+            tensor_op_contract_version="0.1.0",
+            wrt_signature=("v0",),
+            seed_contract="seed matches output",
+        ),
+        value_typespecs={"seed": source, "d0": broadcast_typespec, "d1": broadcast_typespec},
+    )
+
+
+def _expand_program(program):
+    from tinychain.autodiff import expand_mean_derivative_program
+
+    return expand_mean_derivative_program(program)
+
+
+def test_the_forward_pass_rejects_a_minted_value_id_a_node_merely_reads() -> None:
+    """The consumer must not be silently rewired to the emitted constant."""
+    reserved = _reserved_value_id()
+    seeded = _graph_with_a_mean_and(
+        extra_nodes=[_reading_node(reserved)], extra_outputs=["v9"]
+    )
+
+    with pytest.raises(AutodiffError) as raised:
+        _expand(seeded)
+
+    assert raised.value.category == "malformed_derivative_ir"
+    assert reserved in raised.value.message
+
+
+def test_the_forward_pass_rejects_a_minted_value_id_named_only_in_the_outputs() -> None:
+    reserved = _reserved_value_id()
+    seeded = _graph_with_a_mean_and(extra_outputs=[reserved])
+
+    with pytest.raises(AutodiffError) as raised:
+        _expand(seeded)
+
+    assert raised.value.category == "malformed_derivative_ir"
+    assert reserved in raised.value.message
+
+
+def test_the_forward_pass_never_rewires_a_consumer_to_an_emitted_node() -> None:
+    """The fail-closed half stated as the property it protects: whatever value a
+    pre-existing node read before the pass, it still reads afterwards."""
+    graph = _traced_mean_graph(keepdims=True)
+    reads_before = {node.node_id: list(node.input_value_ids) for node in graph.nodes}
+
+    expanded = _expand(graph)
+
+    for node in expanded.nodes:
+        if node.node_id in reads_before:
+            assert list(node.input_value_ids) == reads_before[node.node_id]
+
+
+def test_the_gradient_pass_rejects_a_minted_value_id_a_node_merely_reads() -> None:
+    reserved = _reserved_value_id()
+    program = _broadcast_scale_program()
+    program.nodes[0] = TensorNodeRecord(
+        node_id="dn0",
+        output_value_id="d0",
+        operator=program.nodes[0].operator,
+        op_params=dict(program.nodes[0].op_params),
+        input_value_ids=[reserved],
+        output_typespec=program.nodes[0].output_typespec,
+    )
+    program.value_typespecs.pop("seed")
+
+    with pytest.raises(AutodiffError) as raised:
+        _expand_program(program)
+
+    assert raised.value.category == "malformed_derivative_ir"
+    assert reserved in raised.value.message
+
+
+def test_the_gradient_pass_rejects_a_minted_value_id_named_only_in_the_output_gradients() -> None:
+    reserved = _reserved_value_id()
+    program = _broadcast_scale_program(extra_output_gradient=reserved)
+
+    with pytest.raises(AutodiffError) as raised:
+        _expand_program(program)
+
+    assert raised.value.category == "malformed_derivative_ir"
+    assert reserved in raised.value.message
