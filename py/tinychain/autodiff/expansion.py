@@ -99,7 +99,7 @@ An unsupported mean stops the pass rather than being left in place -- a mean is
 unambiguously inside the declared domain of a pass named for mean expansion.
 Every candidate is validated before any node is emitted, so a rejected graph
 never comes back partially rewritten, and every failure names the offending node
-and the clause of FR-128-006 it failed. Operators other than ``MeanOperator``
+and explains the failed condition. Operators other than ``MeanOperator``
 are never rewritten and are carried through identical.
 
 The gradient-path broadcast-and-scale expansion
@@ -121,23 +121,19 @@ shape ``[1, 1]``::
 intermediate -- which the predicate below requires to have exactly one consumer
 and to be no declared gradient output -- is the only value the pass removes.
 
-A note on "verbatim"
-~~~~~~~~~~~~~~~~~~~~~
-The specification's §8.3 and §8.4 tables, and FR-128-005, describe the terminal
-node of each region -- ``f5``/``f6`` here, ``e5`` above -- as carrying the
-replaced node's declared ``output_typespec`` *verbatim*. Neither emitter in this
-module does that: :func:`_emit_scale` and :func:`_emit_reshape` instead
-*derive* an equal value from the operands they actually read, and never look at
-the replaced node's declared type while doing it. The two readings agree for
-every artifact this framework produces -- clause 7 of the forward predicate and
-clause 6 of the gradient-path predicate each enforce that agreement before a
-region is proven expandable -- but deriving, not copying, is the correct
-reading of Inv-2: it is what makes truthfulness structural rather than
-incidental, because a node that derives its own declared type cannot state one
-its operation did not produce. This is a documentation divergence from the
-specification's wording, not a behavioral gap, and it is recorded here so a
-later reader does not "fix" an emitter back into copying a type -- which would
-quietly reopen the exact defect this design exists to close.
+Terminal typespec derivation
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The terminal node of each region -- ``f5``/``f6`` here, ``e5`` above --
+derives its ``output_typespec`` from the operands it actually reads.
+:func:`_emit_scale` and :func:`_emit_reshape` never copy the replaced node's
+declared type while emitting a region. Before emission, both predicates require
+the replaced node's declared type to agree with the type derived from those
+operands.
+
+Derivation makes truthful types structural rather than incidental: an emitted
+node cannot declare a type its operation did not produce. Replacing this with a
+copy from the removed node would hide a bad declaration instead of detecting
+it, so the emitters must continue deriving their terminal types.
 
 Why this is sound for any value, and what it is *not* claiming
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -169,10 +165,10 @@ hold; each is decidable from the artifact alone:
 7. ``b.output_value_id`` has exactly one consumer in the artifact -- ``q`` --
    and is named in neither ``output_gradients`` nor ``gradients``.
 
-**Clause 5 is a scope guard, not a correctness guard.** The rewrite preserves
-the computed value for *any* divisor, so nothing about the identity above needs
-``d`` to be the element count, and this module does not pretend otherwise. The
-clause earns its place for two other reasons: it confines the pass to the
+**The exact-divisor check is a scope guard, not a correctness guard.** The
+rewrite preserves the computed value for *any* divisor, so the identity above
+does not need ``d`` to be the element count. The
+condition earns its place for two other reasons: it confines the pass to the
 reduction case it exists for, keeping the rewrite reviewable; and it confines
 the one inexact step -- substituting ``* (1/d)`` for ``/ d``, which IEEE-754
 does not require to agree bit for bit -- to a divisor that is an exact integer
@@ -186,13 +182,13 @@ non-expanded lowering is asserted on three axes, and only one is inexact:
 dtype and shape are asserted *exactly* equal, rank included -- a ``[1, 1]``
 result never satisfies a scalar expectation or vice versa -- while values are
 asserted within a relative tolerance of ``1e-6`` for ``f32`` and ``1e-12`` for
-``f64`` (§13.4). Bit-for-bit equality is never claimed on the value axis,
+``f64``. Bit-for-bit equality is never claimed on the value axis,
 because ``x * (1 / d)`` and ``x / d`` are not required to agree exactly in
 IEEE-754 arithmetic, even though ``d`` is always exact.
 
 A near miss is left alone and raises nothing
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-A region failing any clause is carried through unchanged, and no error is
+A region failing any condition is carried through unchanged, and no error is
 raised. `BroadcastOperator`, `DivOperator`, and `ReshapeOperator` are general
 operators with many legitimate uses, so declining is the correct response to a
 near miss; a backend that then cannot lower one fails closed at lowering with
@@ -201,11 +197,11 @@ forward pass's behaviour on an unsupported `MeanOperator`: a mean is
 unambiguously inside the declared domain of a pass named for mean expansion, a
 broadcast is not. In particular a `ReshapeOperator` preceding a matched region
 -- which is what performs the genuine rank change when the reduction declared
-``keepdims=False`` -- is already truthful, is exactly the rank change clause 4
-requires to have happened, and is never merged into the emitted region.
+``keepdims=False`` -- is already truthful, satisfies the required rank change,
+and is never merged into the emitted region.
 
-Required handlers, stated honestly (§9.3)
-------------------------------------------
+Required handlers
+-----------------
 Neither expanded artifact needs a reduction, broadcast, or division handler --
 that is the whole point of expanding into matmuls -- but an expanded artifact
 is not free to lower, and this module states the true cost rather than
@@ -224,16 +220,15 @@ requirements are ``FillOperator`` (both tiers) and a trivial ``ReshapeOperator``
 (rank-reducing tier). A backend lacking either fails closed at lowering, before
 any handler runs, with ``unsupported_operator`` naming the node.
 
-**The correction the specification's own §9.3 table does not spell out:** the
-rank-reducing tier's ``ReshapeOperator`` requirement applies to *both* the
+The rank-reducing tier's ``ReshapeOperator`` requirement applies to *both* the
 forward artifact and the derivative program -- not only the forward one where
 :func:`_emit_reshape` appears. When the source mean declared
 ``keepdims=False``, the traced gradient chain already begins with a
 ``ReshapeOperator`` from the seed's rank-0 shape to ``[1, 1]``, and
 :func:`expand_mean_derivative_program` leaves that node untouched, because it
-is already the genuine rank change the §8.4 predicate's clause 4 requires to
-have happened, and it is never merged into the emitted region (see "A near
-miss is left alone", above). A backend that registers ``ReshapeOperator`` for
+is already the genuine rank change required by the predicate, and it is never
+merged into the emitted region (see "A near miss is left alone", above). A
+backend that registers ``ReshapeOperator`` for
 the forward artifact but skips it for the derivative program will lower the
 forward pass and then fail closed on the gradient path, naming that surviving
 reshape node. This is the single most likely omission for a backend author
@@ -245,8 +240,8 @@ A consumer that wants only the smaller rank-preserving handler set writes
 change with no framework cost -- and this is the recommended lower-cost form
 whenever both tiers are not otherwise needed.
 
-The source-first differentiation contract (Inv-9)
-----------------------------------------------------
+The source-first differentiation contract
+-----------------------------------------
 Neither pass makes any promise about the differentiability of what it
 returns. This module adds no ``FillOperator`` VJP rule, and an expanded
 artifact is not designed to be a good differentiation input.
@@ -257,9 +252,8 @@ inputs contain no requested differentiation target before it ever looks up a
 VJP rule for that node's operator, so the absence of a ``FillOperator`` rule
 does not, by itself, force an error; whether it does depends on how the
 requested target relates to the graph, exactly as it would for any other
-operator with no rule. An earlier version of this feature claimed
-differentiation must fail here; that claim is withdrawn (NG-10) because it is
-not something the framework's traversal order actually guarantees.
+operator with no rule. The traversal order therefore cannot guarantee that
+differentiating an expanded graph will fail.
 
 The practical contract is simpler than either extreme: **the source graph is
 the canonical differentiation input.** A consumer that needs both a
@@ -320,7 +314,7 @@ from .shape import (
 # every other operator.
 FILL_ROUTE_NAME = "fill"
 
-# The complete `op_params` key set of a fill node (§8.2). Exact, not minimal: a
+# The complete `op_params` key set of a fill node. Exact, not minimal: a
 # key outside this set is a structural defect, because a pass that wrote one
 # would be smuggling configuration through an operator's parameters.
 _FILL_PARAM_KEYS = frozenset({"fill", "dtype", "shape"})
@@ -393,7 +387,7 @@ def _check_no_operands(node_id: str, input_value_ids: Sequence[str]) -> None:
 
 
 def _check_param_keys(node_id: str, op_params: Mapping[str, object]) -> None:
-    """Reject any ``op_params`` key outside the fill schema (§8.2)."""
+    """Reject any ``op_params`` key outside the fill schema."""
     unknown_keys = sorted(str(key) for key in op_params if key not in _FILL_PARAM_KEYS)
     if unknown_keys:
         raise AutodiffError(
@@ -458,7 +452,7 @@ def _read_shape(node_id: str, op_params: Mapping[str, object]) -> tuple[int, ...
 
 
 # --------------------------------------------------------------------------
-# The reserved identifier namespace (§9.2)
+# The reserved identifier namespace
 # --------------------------------------------------------------------------
 
 # Every node and value an expansion pass creates is named from this reserved
@@ -522,11 +516,11 @@ def _is_reserved_identifier(identifier: object) -> bool:
 
 
 # --------------------------------------------------------------------------
-# Sidecar provenance (§9.4)
+# Sidecar provenance
 #
 # Expansion bookkeeping is never placed in `op_params` -- a handler receives
 # `op_params` as operator configuration and cannot be expected to distinguish
-# configuration from bookkeeping (Inv-10). Provenance instead travels beside
+# configuration from bookkeeping. Provenance instead travels beside
 # the rewritten artifact, in a `MeanExpansionRegion` per rewritten region.
 #
 # The two detailed passes below are the *only* place either rewrite is
@@ -535,8 +529,8 @@ def _is_reserved_identifier(identifier: object) -> bool:
 # followed by selecting its artifact field -- never as a second, independent
 # walk -- so the composable and detailed forms cannot disagree.
 #
-# Why a gradient-path region is always `"rank_preserving"`: §9.4 admits only
-# `"rank_preserving"` and `"rank_reducing"` as tier strings, and the §8.4
+# Why a gradient-path region is always `"rank_preserving"`: the sidecar admits
+# `"rank_preserving"` and `"rank_reducing"` as tier strings, and this
 # region -- two matmuls and one scale -- performs no rank change regardless of
 # the forward mean's own `keepdims`, which only ever affects the *forward*
 # region's tier. A broadcast-and-scale region is therefore recorded
@@ -544,16 +538,16 @@ def _is_reserved_identifier(identifier: object) -> bool:
 # shape arithmetic, not an oversight of the field's two-value domain.
 # --------------------------------------------------------------------------
 
-# §9.1 -- the exact `pass_name` a forward-expansion region reports.
+# The exact `pass_name` a forward-expansion region reports.
 MEAN_EXPANSION_FORWARD = "mean_expansion_forward"
 
-# §9.1 -- the exact `pass_name` a gradient-path region reports.
+# The exact `pass_name` a gradient-path region reports.
 BROADCAST_SCALE_EXPANSION = "broadcast_scale_expansion"
 
 
 @dataclass(frozen=True)
 class MeanExpansionRegion:
-    """Provenance for one region a pass rewrote, exactly the §9.4 fields."""
+    """Provenance for one region a pass rewrote."""
 
     pass_name: str
     source_node_ids: tuple[str, ...]
@@ -629,7 +623,7 @@ def _declared_typespecs(
 
 
 # --------------------------------------------------------------------------
-# The supported-mean predicate (FR-128-006)
+# The supported-mean predicate
 # --------------------------------------------------------------------------
 
 # The rank the forward expansion is defined for. A matmul pair reduces exactly
@@ -653,42 +647,37 @@ class _SupportedMean:
     output_typespec: dict[str, object]
 
 
-def _mean_failure(node_id: str, clause: int, category: str, detail: str) -> AutodiffError:
-    """Build the categorized failure for one clause of FR-128-006.
-
-    Every message names both the offending node and the clause that failed, so
-    a caller reading only the message can find the node and the rule.
-    """
+def _mean_failure(node_id: str, category: str, detail: str) -> AutodiffError:
+    """Build a categorized failure naming the offending node and reason."""
     return AutodiffError(
         category,
-        f"mean node {node_id!r} fails clause {clause} of FR-128-006: {detail}",
+        f"mean node {node_id!r} is not supported: {detail}",
     )
 
 
 def _recategorized(
-    node_id: str, clause: int, detail: str, exc: AutodiffError
+    node_id: str, detail: str, exc: AutodiffError
 ) -> AutodiffError:
-    """Re-raise a helper's own categorized failure with node and clause context."""
-    return _mean_failure(node_id, clause, exc.category, f"{detail}: {exc.message}")
+    """Re-raise a helper's categorized failure with node context."""
+    return _mean_failure(node_id, exc.category, f"{detail}: {exc.message}")
 
 
 def _mean_operand_shape_and_dtype(
     node: TensorNodeRecord, typespecs: Mapping[str, object]
 ) -> tuple[Shape, str]:
-    """Clause 2 -- the operand carries a complete typespec of rank two."""
+    """Require the operand to carry a complete rank-two typespec."""
     operand_typespec = typespecs.get(node.input_value_ids[0])
     try:
         shape = typespec_ranked_shape(operand_typespec)
     except AutodiffError as exc:
         raise _recategorized(
-            node.node_id, 2, "operand declares no ranked shape", exc
+            node.node_id, "operand declares no ranked shape", exc
         ) from exc
 
     dtype = None if operand_typespec is None else operand_typespec.get("dtype")
     if not isinstance(dtype, str) or not dtype:
         raise _mean_failure(
             node.node_id,
-            2,
             "missing_dtype_metadata",
             f"operand declares no dtype: {dtype!r}",
         )
@@ -696,7 +685,6 @@ def _mean_operand_shape_and_dtype(
     if shape_rank(shape) != _SUPPORTED_MEAN_RANK:
         raise _mean_failure(
             node.node_id,
-            2,
             "unsupported_reduction",
             f"operand shape {list(shape)!r} has rank {shape_rank(shape)}, and this pass "
             f"expands a mean over a rank-{_SUPPORTED_MEAN_RANK} operand only",
@@ -705,19 +693,17 @@ def _mean_operand_shape_and_dtype(
 
 
 def _mean_operand_dimensions(node_id: str, shape: Shape) -> tuple[int, int]:
-    """Clause 3 -- both operand dimensions are positive integers."""
+    """Require both operand dimensions to be positive integers."""
     for axis, dimension in enumerate(shape):
         if isinstance(dimension, str):
             raise _mean_failure(
                 node_id,
-                3,
                 "unresolved_symbolic_shape",
                 f"reduced dimension {dimension!r} at axis {axis} is symbolic, not an integer",
             )
         if dimension <= 0:
             raise _mean_failure(
                 node_id,
-                3,
                 "unsupported_reduction",
                 f"reduced dimension {dimension!r} at axis {axis} is not positive",
             )
@@ -726,16 +712,15 @@ def _mean_operand_dimensions(node_id: str, shape: Shape) -> tuple[int, int]:
 
 
 def _mean_axes(node: TensorNodeRecord) -> tuple[int, ...]:
-    """Clause 4 -- the declared axes normalize to every axis of the operand."""
+    """Require the declared axes to normalize to every operand axis."""
     axes = node.op_params.get("axes")
     try:
         normalized = _normalize_mean_axes(axes, _SUPPORTED_MEAN_RANK)
     except AutodiffError as exc:
-        raise _recategorized(node.node_id, 4, "declared axes are malformed", exc) from exc
+        raise _recategorized(node.node_id, "declared axes are malformed", exc) from exc
     if set(normalized) != set(range(_SUPPORTED_MEAN_RANK)):
         raise _mean_failure(
             node.node_id,
-            4,
             "unsupported_reduction",
             f"declared axes {list(normalized)!r} are a partial reduction, and this pass "
             "expands an all-axis mean only",
@@ -744,12 +729,11 @@ def _mean_axes(node: TensorNodeRecord) -> tuple[int, ...]:
 
 
 def _mean_keepdims(node: TensorNodeRecord) -> bool:
-    """Clause 5 -- ``keepdims`` is a real boolean; both values select a tier."""
+    """Require ``keepdims`` to be a boolean; both values select a tier."""
     keepdims = node.op_params.get("keepdims")
     if not isinstance(keepdims, bool):
         raise _mean_failure(
             node.node_id,
-            5,
             "unsupported_reduction",
             f"declared 'keepdims' is not a bool: {keepdims!r}",
         )
@@ -757,11 +741,11 @@ def _mean_keepdims(node: TensorNodeRecord) -> bool:
 
 
 def _mean_dtype(node_id: str, dtype: str) -> str:
-    """Clause 6 -- the operand dtype is differentiable."""
+    """Require the operand dtype to be differentiable."""
     try:
         return check_differentiable_dtype(dtype)
     except AutodiffError as exc:
-        raise _recategorized(node_id, 6, "operand dtype is not differentiable", exc) from exc
+        raise _recategorized(node_id, "operand dtype is not differentiable", exc) from exc
 
 
 def _mean_output_typespec(
@@ -771,20 +755,19 @@ def _mean_output_typespec(
     axes: tuple[int, ...],
     keepdims: bool,
 ) -> dict[str, object]:
-    """Clause 7 -- the declared output typespec is complete and is the true one."""
+    """Require a complete output typespec matching the computed result."""
     declared = node.output_typespec
     try:
         declared_shape = typespec_ranked_shape(declared)
     except AutodiffError as exc:
         raise _recategorized(
-            node.node_id, 7, "output declares no ranked shape", exc
+            node.node_id, "output declares no ranked shape", exc
         ) from exc
 
     declared_dtype = None if declared is None else declared.get("dtype")
     if not isinstance(declared_dtype, str) or not declared_dtype:
         raise _mean_failure(
             node.node_id,
-            7,
             "missing_dtype_metadata",
             f"output declares no dtype: {declared_dtype!r}",
         )
@@ -793,7 +776,6 @@ def _mean_output_typespec(
     if tuple(declared_shape) != tuple(expected_shape):
         raise _mean_failure(
             node.node_id,
-            7,
             "reduction_shape_mismatch",
             f"output declares shape {list(declared_shape)!r}, but reducing "
             f"{list(operand_shape)!r} over {list(axes)!r} with keepdims={keepdims} "
@@ -802,7 +784,6 @@ def _mean_output_typespec(
     if declared_dtype != operand_dtype:
         raise _mean_failure(
             node.node_id,
-            7,
             "reduction_shape_mismatch",
             f"output declares dtype {declared_dtype!r}, but the operand dtype is "
             f"{operand_dtype!r} and a mean performs no promotion",
@@ -811,7 +792,7 @@ def _mean_output_typespec(
 
 
 def _check_mean_carries_no_reserved_construct(node: TensorNodeRecord) -> None:
-    """Clause 8 -- the node carries no reserved identifier and no fill descriptor key."""
+    """Reject reserved identifiers and fill descriptor keys on a mean node."""
     for label, identifier in (
         ("node id", node.node_id),
         ("output value id", node.output_value_id),
@@ -819,7 +800,6 @@ def _check_mean_carries_no_reserved_construct(node: TensorNodeRecord) -> None:
         if _is_reserved_identifier(identifier):
             raise _mean_failure(
                 node.node_id,
-                8,
                 "unsupported_reduction",
                 f"{label} {identifier!r} is spelled inside the reserved expansion namespace "
                 f"({EXPANSION_NODE_ID_PREFIX!r}/{EXPANSION_VALUE_ID_PREFIX!r})",
@@ -828,7 +808,6 @@ def _check_mean_carries_no_reserved_construct(node: TensorNodeRecord) -> None:
     if descriptor_keys:
         raise _mean_failure(
             node.node_id,
-            8,
             "unsupported_reduction",
             f"op_params carries fill descriptor key(s) {descriptor_keys!r}",
         )
@@ -839,13 +818,12 @@ def _supported_mean(
 ) -> _SupportedMean:
     """Prove one `MeanOperator` node expandable, or raise its categorized failure.
 
-    The eight clauses of FR-128-006 are checked in their stated order, so the
-    reported clause is always the first one the node fails.
+    Validation steps run in dependency order so the reported reason is always
+    the earliest condition the node fails.
     """
     if len(node.input_value_ids) != 1:
         raise _mean_failure(
             node.node_id,
-            1,
             "unsupported_reduction",
             f"a mean takes exactly one operand, got {list(node.input_value_ids)!r}",
         )
@@ -874,7 +852,7 @@ def _supported_mean(
 
 
 # --------------------------------------------------------------------------
-# The §8.3 region emitter
+# The forward mean region emitter
 # --------------------------------------------------------------------------
 
 # The value every generated ones-tensor holds. A row of ones is what turns a
@@ -983,7 +961,7 @@ def _operand(
 def _emit_mean_region(
     supported: _SupportedMean, minter: _IdentifierMinter
 ) -> list[TensorNodeRecord]:
-    """Emit the region of §8.3 replacing one proven-supported mean.
+    """Emit the region replacing one proven-supported mean.
 
     Every declared shape below is computed from the operands the node actually
     reads -- the shape helpers derive it -- rather than copied from the mean the
@@ -1032,10 +1010,10 @@ def _emit_mean_region(
 
 def expand_mean_graph_detailed(graph: TensorGraph) -> MeanGraphExpansionResult:
     """Return *graph* with every supported all-axis rank-2 mean expanded,
-    together with one `MeanExpansionRegion` per rewritten region (§9.4).
+    together with one `MeanExpansionRegion` per rewritten region.
 
-    Each supported `MeanOperator` (FR-128-006) is replaced in place by the
-    matmul-based region of §8.3 -- five nodes when the mean declared
+    Each supported `MeanOperator` is replaced in place by a matmul-based
+    region of five nodes when the mean declared
     ``keepdims=True``, six when it declared ``keepdims=False``, the sixth a real
     `ReshapeOperator` performing the rank change. Every other node, and
     ``inputs`` and ``outputs``, are carried through unchanged; the input graph is
@@ -1043,8 +1021,8 @@ def expand_mean_graph_detailed(graph: TensorGraph) -> MeanGraphExpansionResult:
     region record.
 
     Every candidate mean is validated before a single node is emitted, so an
-    unsupported mean raises its categorized failure (§13.1) naming the node and
-    the clause of FR-128-006 it failed, and never yields a partially rewritten
+    unsupported mean raises a categorized failure naming the node and explaining
+    the failed condition, and never yields a partially rewritten
     graph. `expand_mean_graph` is defined below as this pass followed by
     selecting the `graph` field -- there is no second implementation of the
     rewrite for the two forms to disagree about.
@@ -1054,7 +1032,7 @@ def expand_mean_graph_detailed(graph: TensorGraph) -> MeanGraphExpansionResult:
     existing_value_ids = _indexed_value_ids(nodes, graph.inputs)
     typespecs = _declared_typespecs(nodes, graph.inputs)
 
-    # Validation first, over every candidate, before any emission (§13.2).
+    # Validate every candidate before emitting any replacement nodes.
     supported_means = {
         node.node_id: _supported_mean(node, typespecs)
         for node in nodes
@@ -1101,13 +1079,13 @@ def expand_mean_graph(graph: TensorGraph) -> TensorGraph:
     Defined as `expand_mean_graph_detailed` followed by selecting its `graph`
     field, so this composable form and the detailed form share one rewrite and
     cannot disagree. The single positional parameter is unchanged: it is what
-    lets this pass be used directly as an expansion hook (§9.2).
+    lets this pass be used directly as an expansion hook.
     """
     return expand_mean_graph_detailed(graph).graph
 
 
 # --------------------------------------------------------------------------
-# The §8.4 broadcast-and-scale predicate (FR-128-009 .. FR-128-012)
+# The broadcast-and-scale predicate
 # --------------------------------------------------------------------------
 
 # The rank the rewrite is defined for. A pair of matmuls expands exactly two
@@ -1127,7 +1105,7 @@ _SCALE_PARAM_KEYS = frozenset({"right_literal"})
 
 @dataclass(frozen=True)
 class _BroadcastScaleRegion:
-    """One broadcast-and-scale region proven rewritable by the seven clauses."""
+    """One broadcast-and-scale region proven rewritable by the predicate."""
 
     broadcast_node_id: str
     div_node_id: str
@@ -1143,10 +1121,9 @@ class _BroadcastScaleRegion:
 def _concrete_typespec(typespec: object) -> tuple[str, tuple[int, ...]] | None:
     """Return *typespec* as ``(dtype, shape)``, or ``None`` if it is not complete.
 
-    "Complete" is the whole content of clauses 3, 4, and 6: a non-empty dtype
-    and a ranked shape of concrete integers. This returns ``None`` rather than
-    raising, because an incomplete typespec on a general operator is a chain the
-    pass declines, not a defect it reports.
+    "Complete" means a non-empty dtype and a ranked shape of concrete integers.
+    This returns ``None`` rather than raising because an incomplete typespec on
+    a general operator is a chain the pass declines, not a defect it reports.
     """
     if not isinstance(typespec, Mapping):
         return None
@@ -1187,8 +1164,8 @@ def _rank_two_target_shape(op_params: Mapping[str, object]) -> tuple[int, int] |
 def _value_consumer_counts(nodes: Sequence[TensorNodeRecord]) -> dict[str, int]:
     """Count how many operand slots read each value id.
 
-    Built once per invocation and shared by every candidate, so clause 7 costs a
-    dictionary lookup rather than a rescan of the artifact (NFR-128-001). A node
+    Built once per invocation and shared by every candidate, so the private-
+    intermediate check uses a dictionary lookup rather than rescanning. A node
     naming the same value twice counts twice, because it reads it twice.
     """
     counts: dict[str, int] = {}
@@ -1201,7 +1178,7 @@ def _value_consumer_counts(nodes: Sequence[TensorNodeRecord]) -> dict[str, int]:
 def _declared_gradient_value_ids(program: DerivativeProgram) -> frozenset[str]:
     """Return every value id the program declares as a gradient result.
 
-    Clause 7 forbids removing one of these: a value a caller is promised is not
+    The pass cannot remove one of these: a value promised to a caller is not
     an intermediate the pass may absorb, however it is computed.
     """
     declared = {value_id for value_id in program.output_gradients if value_id is not None}
@@ -1219,11 +1196,10 @@ def _broadcast_scale_region(
 ) -> _BroadcastScaleRegion | None:
     """Prove *node* rewritable, or return ``None`` for any chain that is not.
 
-    The seven clauses are evaluated in their stated order. Every failure returns
-    ``None``: a chain outside the predicate is left alone and raises nothing
-    (FR-128-011).
+    Checks run in dependency order. Every failure returns ``None``: a chain
+    outside the predicate is left alone and raises nothing.
     """
-    # Clause 1 -- a one-operand division by a real, non-boolean literal.
+    # Require a one-operand division by a real, non-boolean literal.
     if not isinstance(node.operator, DivOperator):
         return None
     if len(node.input_value_ids) != 1:
@@ -1234,12 +1210,12 @@ def _broadcast_scale_region(
     if isinstance(divisor, bool) or not isinstance(divisor, (int, float)):
         return None
 
-    # Clause 2 -- its operand is produced by a broadcast in the same artifact.
+    # Require the operand to come from a broadcast in the same artifact.
     broadcast = producers.get(node.input_value_ids[0])
     if broadcast is None or not isinstance(broadcast.operator, BroadcastOperator):
         return None
 
-    # Clause 3 -- a one-operand broadcast to a rank-2 target it declares truthfully.
+    # Require a one-operand broadcast to a truthfully declared rank-2 target.
     if len(broadcast.input_value_ids) != 1:
         return None
     target_shape = _rank_two_target_shape(broadcast.op_params)
@@ -1253,7 +1229,7 @@ def _broadcast_scale_region(
     if broadcast_shape != (rows, columns):
         return None
 
-    # Clause 4 -- the broadcast source is a recorded `[1, 1]` value of the same dtype.
+    # Require a recorded `[1, 1]` broadcast source of the same dtype.
     source_value_id = broadcast.input_value_ids[0]
     source_typespec = _concrete_typespec(typespecs.get(source_value_id))
     if source_typespec is None:
@@ -1262,17 +1238,17 @@ def _broadcast_scale_region(
     if source_dtype != dtype or source_shape != _BROADCAST_SCALE_SOURCE_SHAPE:
         return None
 
-    # Clause 5 -- the scope guard: the divisor is exactly the element count.
+    # Scope the rewrite to a divisor equal to the element count.
     element_count = rows * columns
     if divisor != element_count:
         return None
 
-    # Clause 6 -- the division declares the broadcast's own dtype and shape.
+    # Require the division to declare the broadcast's dtype and shape.
     output_typespec = _concrete_typespec(node.output_typespec)
     if output_typespec != (dtype, (rows, columns)):
         return None
 
-    # Clause 7 -- the broadcast result is this division's private intermediate.
+    # Require the broadcast result to be this division's private intermediate.
     broadcast_value_id = broadcast.output_value_id
     if consumer_counts.get(broadcast_value_id, 0) != 1:
         return None
@@ -1293,7 +1269,7 @@ def _broadcast_scale_region(
 
 
 # --------------------------------------------------------------------------
-# The §8.4 region emitter
+# The broadcast-and-scale region emitter
 # --------------------------------------------------------------------------
 
 
@@ -1306,8 +1282,8 @@ def _emit_broadcast_scale_region(
     reads -- the shape helpers compute it -- rather than copied from the region
     being replaced, so no node can declare a shape its operation cannot produce.
     The terminal scale's declared type therefore agrees with the replaced
-    division's by derivation rather than by assignment, which clause 6 is what
-    guarantees.
+    division's by derivation rather than by assignment; the output agreement
+    check guarantees this.
     """
     column_ones = _emit_fill(minter, dtype=region.dtype, shape=(region.rows, 1))
     down_column = _emit_matmul(
@@ -1336,7 +1312,7 @@ def _existing_value_ids(program: DerivativeProgram) -> frozenset[str]:
 
     Wider than the set of produced values on purpose: a minted identifier must
     not collide with a value the program merely reads or merely records a
-    typespec for either (Inv-5).
+    typespec for either.
     """
     value_ids = set(_indexed_value_ids(program.nodes, []))
     value_ids.update(program.value_typespecs)
@@ -1350,22 +1326,22 @@ def expand_mean_derivative_program_detailed(
 ) -> MeanDerivativeExpansionResult:
     """Return *program* with every rewritable broadcast-and-scale region
     expanded, together with one `MeanExpansionRegion` per rewritten region
-    (§9.4).
+    beside the rewritten artifact.
 
-    A region is rewritten exactly when it satisfies all seven clauses of the
+    A region is rewritten exactly when it satisfies every condition of the
     predicate documented at the top of this module, which is decided from the
     artifact alone and makes no claim about what produced any node. Each
     rewritten region becomes the five nodes documented there, occupying the
     position of the division it replaces; the broadcast intermediate is the only
-    value the pass removes, and clause 7 is what proves removing it is safe.
+    value the pass removes; the private-intermediate check proves removal is safe.
     `source_node_ids` names both nodes the matched chain replaces -- the
     broadcast, which is removed outright, and the division, whose position the
     emitted region occupies -- in the artifact order they must appear in for
     the broadcast's output to be a valid input to the division.
 
-    A chain failing any clause -- and any `ReshapeOperator` preceding a matched
-    one -- is carried through unchanged and raises nothing (FR-128-011,
-    FR-128-012). ``gradients``, ``output_gradients``, ``metadata``, and
+    A chain failing any condition -- and any `ReshapeOperator` preceding a matched
+    one -- is carried through unchanged and raises nothing. ``gradients``,
+    ``output_gradients``, ``metadata``, and
     ``value_typespecs`` are carried through unchanged; the input program is
     never mutated, and equal programs expand to equal results including every
     region record.
@@ -1384,7 +1360,7 @@ def expand_mean_derivative_program_detailed(
     consumer_counts = _value_consumer_counts(nodes)
     declared_gradients = _declared_gradient_value_ids(program)
 
-    # Proof first, over every candidate, before any emission (§13.2).
+    # Prove every candidate rewritable before emitting any replacement nodes.
     matched_regions: dict[str, _BroadcastScaleRegion] = {}
     for node in nodes:
         matched_region = _broadcast_scale_region(
@@ -1425,7 +1401,7 @@ def expand_mean_derivative_program_detailed(
                     emitted_node.node_id for emitted_node in emitted_region
                 ),
                 terminal_value_id=emitted_region[-1].output_value_id,
-                # The §8.4 region performs no rank change regardless of the
+                # The gradient-path region performs no rank change regardless of the
                 # forward mean's own tier -- see the module-level rationale
                 # above the sidecar dataclasses.
                 tier="rank_preserving",
@@ -1450,7 +1426,6 @@ def expand_mean_derivative_program(program: DerivativeProgram) -> DerivativeProg
     Defined as `expand_mean_derivative_program_detailed` followed by selecting
     its `program` field, so this composable form and the detailed form share
     one rewrite and cannot disagree. The single positional parameter is
-    unchanged: it is what lets this pass be used directly as an expansion hook
-    (§9.2).
+    unchanged, allowing callers to use this pass directly as an expansion hook.
     """
     return expand_mean_derivative_program_detailed(program).program

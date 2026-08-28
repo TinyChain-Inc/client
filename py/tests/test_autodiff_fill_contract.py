@@ -77,7 +77,7 @@ def _operation_context(node: TensorNodeRecord) -> OperationContext:
 
 
 # --------------------------------------------------------------------------
-# AC-1 — the operator type
+# The operator type
 # --------------------------------------------------------------------------
 
 
@@ -103,7 +103,7 @@ def test_fill_operator_instances_compare_equal() -> None:
 
 
 # --------------------------------------------------------------------------
-# AC-2 / AC-3 — the reader on well-formed input
+# The reader on well-formed input
 # --------------------------------------------------------------------------
 
 
@@ -154,7 +154,7 @@ def test_fill_node_output_typespec_equals_its_descriptor_dtype_and_shape() -> No
 
 
 # --------------------------------------------------------------------------
-# AC-4 / AC-5 — the categorized failure table (§13.1)
+# Categorized descriptor failures
 # --------------------------------------------------------------------------
 
 
@@ -297,7 +297,7 @@ def test_fill_descriptor_never_leaks_a_bare_builtin_exception(
 
 
 # --------------------------------------------------------------------------
-# AC-6 / AC-7 — export surface and untouched neighbours
+# Export surface and untouched neighbours
 # --------------------------------------------------------------------------
 
 

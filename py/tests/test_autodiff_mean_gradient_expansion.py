@@ -1,7 +1,7 @@
 """Unit tests for the gradient-path broadcast-and-scale expansion pass.
 
 `expand_mean_derivative_program` rewrites every region of a `DerivativeProgram`
-that satisfies the complete seven-clause semantic predicate -- a `DivOperator`
+that satisfies the complete semantic predicate -- a `DivOperator`
 by a literal count whose operand is a `BroadcastOperator` of a `[1, 1]` value --
 into the matmul-based five-node region, so a backend needs neither a broadcast
 nor a division handler to run the gradient path.
@@ -13,7 +13,7 @@ These tests pin the three things the rewrite turns on:
   a chain, and the hand-built chains below carry no origin marker at all;
 * a **near miss is left alone and raises nothing** -- `Broadcast` and `Div` are
   general operators, and declining is the correct response to a chain that fails
-  any clause, in deliberate contrast to the forward pass's behaviour on an
+  any condition, in deliberate contrast to the forward pass's behaviour on an
   unsupported mean;
 * every emitted node declares the dtype and shape its operation *actually*
   produces, and the terminal node carries the replaced `Div` node's value id and
@@ -110,7 +110,7 @@ def _chain_program(
     broadcast_in_output_gradients: bool = False,
     broadcast_in_gradients: bool = False,
 ) -> DerivativeProgram:
-    """Build a broadcast-and-scale chain directly, with every clause overridable.
+    """Build a broadcast-and-scale chain with every relevant field overridable.
 
     Hand construction is what lets the near-miss table reach shapes, dtypes,
     divisors, and consumer counts the reverse transform would never emit, and it
@@ -211,7 +211,7 @@ def _assert_region(
     terminal_value_id: str,
     terminal_typespec: dict[str, object],
 ) -> None:
-    """Assert *nodes* is exactly the five-node region of the specification.
+    """Assert *nodes* is exactly the expected five-node region.
 
     Every expected shape is written out here from `rows` and `columns` rather
     than read back from the node under test, so a node that declares a shape its
@@ -366,7 +366,7 @@ def test_only_the_broadcast_intermediate_value_id_is_removed():
 # --------------------------------------------------------------------------
 # near misses: returned unchanged, raising nothing
 #
-# Each case fails exactly one clause of the predicate. `Broadcast` and `Div` are
+# Each case fails exactly one condition of the predicate. `Broadcast` and `Div` are
 # general operators, so the pass declines rather than rejecting.
 # --------------------------------------------------------------------------
 

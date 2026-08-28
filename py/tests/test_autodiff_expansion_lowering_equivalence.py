@@ -3,14 +3,14 @@
 These are the two properties the whole expansion exists to deliver, and both
 are only observable through a real backend registry:
 
-* **Fail closed (Inv-7, spec section 17.4).** Every construct the expansion
-  introduces is a distinct concrete operator type, so a backend without a
+* **Fail closed.** Every construct the expansion introduces is a distinct
+  concrete operator type, so a backend without a
   handler for it is rejected by the lowering pre-flight *before any handler
   runs*. The error alone does not establish that; the proof is a recording
   registry that stayed empty, and an error message that names the offending
   node rather than only the operator type.
-* **Equivalence (Inv-8, spec sections 13.4 and 17.6.1 to 17.6.3).** The
-  expanded artifact lowered by the limited-operation registry computes the same
+* **Equivalence.** The expanded artifact lowered by the limited-operation
+  registry computes the same
   dtype, the same shape *including rank*, and values within tolerance of the
   unexpanded artifact lowered by the reduction-capable control registry. The
   control that the unexpanded artifacts *fail* against the limited-operation
@@ -26,7 +26,7 @@ new ones -- so that "a registry lacking exactly one handler" is expressible.
 Nothing here asserts that differentiating an expanded graph must fail. Reverse
 traversal skips a node whose inputs contain no requested differentiation target
 before looking up a rule, so a zero-operand constant provides no such guarantee
-(Inv-9, NG-10).
+and the source graph remains the canonical differentiation input.
 """
 
 from __future__ import annotations
@@ -63,8 +63,8 @@ from tests.autodiff_reference_consumer import (
     reduction_capable_registry,
 )
 
-# Spec section 13.4: values are compared within a relative tolerance, dtype and
-# shape exactly.
+# Values are compared within a relative tolerance; dtype and shape compare
+# exactly.
 _RELATIVE_TOLERANCE = {"f32": 1e-6, "f64": 1e-12}
 _NUMPY_DTYPE = {"f32": np.float32, "f64": np.float64}
 
@@ -91,7 +91,7 @@ def _traced_mean_with_a_forward_capture(*, shape=(3, 5), dtype="f64", keepdims=T
 
     `(v + v) * (v + v)` makes the reverse transform capture the intermediate
     rather than only the declared input, so the forward-capture comparison of
-    FR-128-017 compares a non-empty set.
+    the forward-capture comparison uses a non-empty set.
     """
     with TensorGraphBuilder() as trace:
         value = trace.input("value", dtype=dtype, shape=shape)
@@ -149,7 +149,7 @@ def _control(*, reshape: bool) -> OperationHandlerRegistry:
 
 
 class _TwoOperandMatmulHandler:
-    """A matmul handler that asserts the two-operand contract of BC-5 itself."""
+    """A matmul handler that asserts the two-operand contract itself."""
 
     operator_type = MatmulOperator
 
@@ -198,14 +198,14 @@ def _lower_gradient(program, *, forward_graph, registry, values, wrt="v0"):
 
 
 def _assert_equivalent(expanded, control, *, dtype):
-    """Spec section 13.4: dtype and shape exactly, values within tolerance."""
+    """Compare dtype and shape exactly, and values within tolerance."""
     assert expanded.dtype == control.dtype
     assert expanded.shape == control.shape
     np.testing.assert_allclose(expanded, control, rtol=_RELATIVE_TOLERANCE[dtype])
 
 
 # ==========================================================================
-# section 17.4.1 and 17.4.2 -- fail closed before any handler runs (Inv-7)
+# Fail closed before any handler runs
 # ==========================================================================
 
 
@@ -271,7 +271,7 @@ def test_registry_lookup_message_names_only_the_operator_type():
 
 
 # ==========================================================================
-# section 17.4.3 -- the two-operand contract still holds (BC-5)
+# The two-operand matmul contract still holds
 # ==========================================================================
 
 
@@ -306,7 +306,7 @@ def test_a_two_operand_asserting_matmul_handler_lowers_an_expanded_derivative_pr
 
 
 # ==========================================================================
-# section 17.4.4 -- the control: the unexpanded artifacts do not lower
+# Control: the unexpanded artifacts do not lower
 # ==========================================================================
 
 
@@ -341,7 +341,7 @@ def test_unexpanded_derivative_program_is_rejected_by_the_limited_operation_regi
 
 
 # ==========================================================================
-# section 17.6.1 and 17.6.2 -- equivalence (Inv-8, section 13.4)
+# Expanded and control artifacts are numerically equivalent
 # ==========================================================================
 
 
@@ -378,7 +378,7 @@ def test_expanded_gradient_equals_the_control_gradient(keepdims, dtype, shape):
 
 
 # ==========================================================================
-# section 17.6.3 -- a scalar and a [1, 1] value are never interchangeable
+# A scalar and a [1, 1] value are never interchangeable
 # ==========================================================================
 
 
@@ -408,7 +408,7 @@ def test_the_two_tiers_produce_shapes_that_never_satisfy_each_others_assertion()
 
 
 # ==========================================================================
-# FR-128-017 -- dependency analysis accepts the expanded artifacts unchanged
+# Dependency analysis accepts the expanded artifacts unchanged
 # ==========================================================================
 
 

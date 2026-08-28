@@ -178,12 +178,12 @@ def shape_from_value(value: object) -> ConcreteShape | None:
         raise AutodiffError("symbolic_shape_mismatch", "runtime tensor shape must be concrete") from exc
 
 
-# Differentiable dtypes accepted for forward-traced operations (spec §10.1 rule 4-5).
+# Differentiable dtypes accepted for forward-traced operations.
 FLOATING_DTYPES: tuple[str, ...] = ("f32", "f64")
 
 
 def check_differentiable_dtype(dtype: str) -> str:
-    """Require a floating dtype for a traced forward operation (spec §10.1 rule 4-5)."""
+    """Require a floating dtype for a traced forward operation."""
     if dtype not in FLOATING_DTYPES:
         raise AutodiffError(
             "dtype_not_differentiable",
@@ -195,7 +195,7 @@ def check_differentiable_dtype(dtype: str) -> str:
 def check_compatible_operand_dtypes(lhs_dtype: str, rhs_dtype: str) -> str:
     """Require equal, differentiable operand dtypes and return the output dtype.
 
-    No dtype promotion is performed (spec §10.1 rules 3-5).
+    No dtype promotion is performed.
     """
     if lhs_dtype != rhs_dtype:
         raise AutodiffError(
@@ -234,7 +234,7 @@ def _broadcast_dim(lhs_dim: ShapeDim, rhs_dim: ShapeDim, bindings: dict[str, int
 def elementwise_broadcast_shape(
     lhs: Shape, rhs: Shape, *, bindings: dict[str, int] | None = None
 ) -> Shape:
-    """Compute the proven right-aligned broadcast output shape (spec §10.2).
+    """Compute the proven right-aligned broadcast output shape.
 
     Equal dimensions are kept, `1` broadcasts to the other dimension, missing
     leading dimensions act as leading `1`s, unequal concrete dimensions raise
@@ -254,7 +254,7 @@ def elementwise_broadcast_shape(
 def matmul_output_shape(
     lhs: Shape, rhs: Shape, *, bindings: dict[str, int] | None = None
 ) -> Shape:
-    """Compute the proven matmul output shape (spec §10.3).
+    """Compute the proven matmul output shape.
 
     Both operands must have rank at least two; `lhs[-1]` and `rhs[-2]` must be
     equal, bindable, or the same symbol; batch dimensions follow the
@@ -327,7 +327,7 @@ def _normalize_mean_axes(axes: object, rank: int) -> tuple[int, ...]:
 
 
 def mean_output_shape(shape: Shape, axes: object, *, keepdims: bool) -> Shape:
-    """Compute the proven mean-reduction output shape (spec §10.4).
+    """Compute the proven mean-reduction output shape.
 
     Axes may be a single integer or a non-string sequence of integers;
     negative axes normalize against rank; normalized axes must be in range and
@@ -367,7 +367,7 @@ def normalize_transpose_permutation(perm: object) -> tuple[int, ...]:
 
 
 def transpose_output_shape(shape: Shape, perm: object) -> Shape:
-    """Compute the proven transpose output shape (spec §10.5).
+    """Compute the proven transpose output shape.
 
     The permutation length must equal the input rank and each axis must
     appear exactly once (`invalid_permutation`); the output shape follows the

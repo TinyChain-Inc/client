@@ -10,7 +10,7 @@ field, so the two entry points cannot disagree.
 These tests pin four things:
 
 * the two pass-name constants and the exact fields and tier strings of the
-  three frozen sidecar dataclasses (§9.4);
+  three frozen sidecar dataclasses;
 * `expand_mean_graph_detailed`'s `graph` field, and
   `expand_mean_derivative_program_detailed`'s `program` field, equal what the
   composable pass of the same name returns for the same input -- proving the
@@ -19,7 +19,7 @@ These tests pin four things:
 * `source_node_ids`, `emitted_node_ids`, and `terminal_value_id` match the
   artifact in the order the region actually appears, and no `op_params`
   mapping either pass writes carries a bookkeeping key beyond that operator's
-  own parameters (Inv-10);
+  own parameters;
 * the passes remain deterministic and pure: an artifact with nothing to
   rewrite comes back with empty `regions` and an unchanged artifact, and equal
   inputs produce equal outputs including every region record.
@@ -149,7 +149,7 @@ def _graph_with_no_mean(*, shape: tuple[int, int] = (2, 2)) -> TensorGraph:
 
     The forward pass fails closed on an unsupported mean rather than leaving
     it alone (unlike the gradient-path pass), so "nothing to rewrite" for this
-    pass means no candidate node at all, not a candidate that fails a clause.
+    pass means no candidate node at all, not a candidate that fails a condition.
     """
     with TensorGraphBuilder() as trace:
         value = trace.input("value", dtype="f64", shape=shape)
@@ -344,7 +344,7 @@ def test_gradient_path_detailed_result_matches_the_composable_pass(keepdims: boo
 
 @pytest.mark.parametrize("keepdims", [True, False])
 def test_gradient_path_region_is_recorded_rank_preserving(keepdims: bool) -> None:
-    """The §8.4 region performs no rank change, whatever the forward tier was."""
+    """The gradient-path region performs no rank change for either forward tier."""
     program = _traced_mean_program(keepdims=keepdims)
 
     detailed = _expand_program_detailed(program)

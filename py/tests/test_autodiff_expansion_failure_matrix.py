@@ -1,20 +1,20 @@
-"""Repeat-expansion coverage for both mean-expansion passes (risk R-7).
+"""Repeat-expansion coverage for both mean-expansion passes.
 
 The other five focused modules beside this one --
 `test_autodiff_fill_contract.py`, `test_autodiff_mean_expansion.py`,
 `test_autodiff_mean_gradient_expansion.py`,
 `test_autodiff_expansion_provenance.py`, and
 `test_autodiff_expansion_lowering_equivalence.py` -- already exercise every
-clause of FR-128-006, every category of §13.1, every near-miss of §17.5
-(including the wrong-divisor cases), the positive predicate for both tiers and
+supported-mean validation branch, every error category, every gradient-path
+near miss (including wrong divisors), the positive predicate for both tiers and
 a non-square shape, and determinism of both the composable and detailed
 passes. This module does not restate any of that; it covers the one scenario
 none of them exercises directly: applying a pass to an artifact that already
 went through it.
 
-Risk R-7 (specification §16) is that minted identifiers collide when an
-artifact is expanded twice. The mitigation is Inv-5 plus the collision check
-`_IdentifierMinter` already performs, asserted elsewhere for a hand-seeded
+Minted identifiers can collide when an artifact is expanded twice. The
+`_IdentifierMinter` collision check already guards that case and is asserted
+elsewhere for a hand-seeded
 squatter node. What is missing is the literal repeat-application scenario:
 feeding a pass's own output back into itself, and feeding it an artifact that
 mixes already-expanded content with a fresh candidate the second call must

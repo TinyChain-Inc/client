@@ -1,12 +1,11 @@
 """The shared generic reference consumer for the test tree.
 
-Multiple specifications (client issue #128, #129) need a generic backend
-proving structural and numerical equivalence over the lowering seam
-(`tinychain.autodiff.lower_graph` / `OperationHandlerRegistry`). This module
-is the single shared consumer both use, so that exactly one dense-array
-execution semantics and exactly one generic reference backend exist in the
-test tree. Whichever specification's task lands first creates and owns this
-module; later tasks extend it rather than building a second one.
+This generic backend proves structural and numerical equivalence over the
+lowering seam (`tinychain.autodiff.lower_graph` /
+`OperationHandlerRegistry`). It is the single shared consumer for tests, so
+exactly one dense-array execution semantics and one generic reference backend
+exist in the test tree. New test scenarios extend this module rather than
+building a second consumer.
 
 Every handler below delegates to `tests.autodiff_execution.NumpyAutodiffDispatcher`
 for its actual dense-array result -- the single source of operator meaning the

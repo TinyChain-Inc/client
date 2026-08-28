@@ -324,7 +324,7 @@ def _trace_linear_mse(dtype: str = "f32"):
 
 
 # --------------------------------------------------------------------------
-# AC1 — the framework, not the consumer, owns reachability and traversal
+# The framework, not the consumer, owns reachability and traversal
 # --------------------------------------------------------------------------
 
 
@@ -413,7 +413,7 @@ def test_input_binding_defaults_to_the_analyzed_dependency():
 
 
 # --------------------------------------------------------------------------
-# AC2 — handlers are keyed by concrete operator identity
+# Handlers are keyed by concrete operator identity
 # --------------------------------------------------------------------------
 
 
@@ -470,7 +470,7 @@ def test_registry_reports_its_supported_concrete_operator_types():
 
 
 # --------------------------------------------------------------------------
-# AC3 — a fake consumer emits its own representation
+# A fake consumer emits its own representation
 # --------------------------------------------------------------------------
 
 
@@ -536,7 +536,7 @@ def test_operation_context_normalizes_the_operation_without_exposing_mutable_sta
 
 
 # --------------------------------------------------------------------------
-# AC4 — fusion is optional, explicit, deterministic, provenance-preserving
+# Fusion is optional, explicit, deterministic, and provenance-preserving
 # --------------------------------------------------------------------------
 
 
@@ -665,7 +665,7 @@ def test_a_declined_fusion_falls_back_to_per_operation_handlers():
 
 
 # --------------------------------------------------------------------------
-# AC5 — unsupported or malformed inputs fail with categorized errors
+# Unsupported or malformed inputs fail with categorized errors
 # --------------------------------------------------------------------------
 
 

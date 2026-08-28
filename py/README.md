@@ -475,7 +475,7 @@ documented deferred subset and are **not** source-captured in this release; thei
 intentional absence is enforced by the capture-vs-VJP registry parity test.
 `tc.autodiff.captured_route_operators()` returns the route-name → concrete
 operator allowlist, and `tc.autodiff.captured_operator_types()` returns the
-captured operator types (used by the FR-013 parity check).
+captured operator types used by the capture-vs-VJP parity check.
 
 Forward dtype and shape are inferred for every captured node:
 
@@ -517,8 +517,8 @@ on payloads, dispatch, or eager/deferred execution outside a trace context. In
 particular, `Tensor.mean(...)` still returns its usual value type when no trace
 is active.
 
-The later `ilc-api` migration to this surface (Issue 86 `T-03d`) owns replacing
-the manual fixed-helper graph construction with a typed trace.
+Downstream consumers can replace manual fixed-helper graph construction with
+this typed tracing surface when they adopt it.
 
 ### Route derivative discovery
 
@@ -998,9 +998,9 @@ Both raise `AutodiffError("invalid_update_signature", ...)`, and a
 malformed `required_optimizer_inputs` — one that is not a collection of
 names, or a bare string, which would otherwise declare one input per
 character — raises the same category rather than escaping as a raw
-`TypeError`. All of it runs before the builder is entered and before any spec
-is read, so a rejected declaration never reaches the expression. The result is
-that an optimizer is checked at least as strictly as the equivalent plain
+`TypeError`. All of it runs before the builder is entered and before any typed
+input declaration is read, so a rejection never reaches the expression. The
+result is that an optimizer is checked at least as strictly as the equivalent plain
 callable: the same mistake yields the same category on both paths. A plain
 callable is traced exactly as before, including a `**kwargs` callable, which
 still binds any declaration and lets its own body decide.
@@ -1012,7 +1012,7 @@ delegates to a shared instance of it, so the two cannot drift apart. New
 callers should pass `SGD()` instead, which additionally gets the name check
 above. Neither it, nor `SGD`, nor
 `trace_parameter_update` constructs a graph-record or operator type directly;
-doing so is a spec invariant, not just a style preference, and is checked by
+doing so is forbidden, not just a style preference, and is checked by
 a dedicated regression test that additionally scans the module's own
 namespace so an import alias cannot quietly reintroduce direct construction
 either. See "What this surface does and does not guard against ILC-style

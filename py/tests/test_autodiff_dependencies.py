@@ -102,7 +102,7 @@ def _assert_category(category: str, operation) -> None:
 
 
 # --------------------------------------------------------------------------
-# AC1 — consumers can bind every derivative input from provenance alone
+# Consumers can bind every derivative input from provenance alone
 # --------------------------------------------------------------------------
 
 
@@ -181,7 +181,7 @@ def test_forward_graph_analysis_reports_declared_inputs_and_local_values():
 
 
 # --------------------------------------------------------------------------
-# AC2 — deterministic ordering across repeated and equivalent analyses
+# Deterministic ordering across repeated and equivalent analyses
 # --------------------------------------------------------------------------
 
 
@@ -278,7 +278,7 @@ def test_analysis_does_not_mutate_the_analyzed_graph():
 
 
 # --------------------------------------------------------------------------
-# AC3 — no id-spelling, prefix convention, or private node map required
+# No identifier spelling, prefix convention, or private node map is required
 # --------------------------------------------------------------------------
 
 
@@ -327,7 +327,7 @@ def test_only_nodes_reachable_from_selected_outputs_are_analyzed():
 
 
 # --------------------------------------------------------------------------
-# AC4 — malformed cases fail with categorized AutodiffError values
+# Malformed cases fail with categorized AutodiffError values
 # --------------------------------------------------------------------------
 
 
@@ -649,7 +649,7 @@ def test_node_output_without_metadata_raises_missing_dtype_metadata():
 
 
 # --------------------------------------------------------------------------
-# AC4b — malformed seed identifier shapes fail with a categorized error, not
+# Malformed seed identifier shapes fail with a categorized error, not
 # a raw TypeError, matching the sibling selected-output guard's convention
 # --------------------------------------------------------------------------
 

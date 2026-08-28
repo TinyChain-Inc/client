@@ -5,7 +5,7 @@ particular -- is authored as plain Tensor code, traced through the same
 public builder path as an application loss, and validated/compiled through
 the existing structured dependency analysis and extensible program lowering
 seam. No manual `TensorNodeRecord`/`TensorOperator` construction is
-allowed in production or example code (spec invariant 6).
+allowed in production or example code.
 """
 
 from __future__ import annotations
@@ -225,7 +225,7 @@ def test_trace_parameter_update_rejects_non_callable_update() -> None:
 
 
 def test_trace_parameter_update_signature_failure_precedes_tracing() -> None:
-    """Invalid update callables fail before any node is recorded (AC4)."""
+    """Invalid update callables fail before any node is recorded."""
     calls: list[object] = []
 
     def bad_update(*, parameter: object, gradient: object) -> object:
@@ -260,7 +260,7 @@ def test_trace_parameter_update_rejects_nested_active_trace() -> None:
 
 
 # --------------------------------------------------------------------------
-# no manual graph-record construction (invariant 6)
+# No manual graph-record construction
 # --------------------------------------------------------------------------
 
 

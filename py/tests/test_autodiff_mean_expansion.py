@@ -1,7 +1,7 @@
 """Unit tests for the forward all-axis mean expansion pass.
 
 `expand_mean_graph` rewrites every supported all-axis rank-2 `MeanOperator` in a
-`TensorGraph` into the matmul-based region of the specification, in both tiers:
+`TensorGraph` into a matmul-based region in both tiers:
 five nodes when the mean declared `keepdims=True`, and six -- the sixth a real
 `ReshapeOperator` -- when it declared `keepdims=False`.
 
@@ -13,8 +13,8 @@ These tests pin three things the rewrite turns on:
   produce;
 * every candidate mean is validated before any node is emitted, so a rejected
   artifact never comes back partially rewritten;
-* each failing clause of the supported-mean predicate raises its own category,
-  with a message naming both the offending node and the clause.
+* each supported-mean validation failure raises its own category with a message
+  naming the offending node and explaining the failed condition.
 
 Nothing here asserts anything about the gradient-path rewrite, provenance
 records, or the detailed passes; those are separate work.
@@ -199,7 +199,7 @@ def _independently_computed_typespec(
 
 
 # --------------------------------------------------------------------------
-# AC-1 — the rank-preserving tier emits exactly the five specified nodes
+# The rank-preserving tier emits exactly five nodes
 # --------------------------------------------------------------------------
 
 
@@ -251,7 +251,7 @@ def test_rank_preserving_expansion_emits_the_five_specified_nodes(
 
 
 # --------------------------------------------------------------------------
-# AC-2 — the rank-reducing tier appends a real reshape to rank zero
+# The rank-reducing tier appends a real reshape to rank zero
 # --------------------------------------------------------------------------
 
 
@@ -282,7 +282,7 @@ def test_rank_reducing_expansion_appends_a_real_reshape_to_rank_zero(
 
 
 # --------------------------------------------------------------------------
-# AC-3 — the truthful-shape audit, over both tiers
+# Truthful-shape audit over both tiers
 # --------------------------------------------------------------------------
 
 
@@ -304,7 +304,7 @@ def test_every_emitted_node_declares_the_shape_its_operation_produces(
 
 
 # --------------------------------------------------------------------------
-# AC-4 — the permitted operator set, and the two-operand matmul contract
+# Permitted operator set and the two-operand matmul contract
 # --------------------------------------------------------------------------
 
 
@@ -327,7 +327,7 @@ def test_every_emitted_node_is_in_the_permitted_operator_set(keepdims: bool) -> 
 
 
 # --------------------------------------------------------------------------
-# AC-5 — boundaries and value ids are preserved
+# Boundaries and value identifiers are preserved
 # --------------------------------------------------------------------------
 
 
@@ -346,7 +346,7 @@ def test_expansion_preserves_inputs_outputs_and_every_pre_existing_value_id(
 
 
 # --------------------------------------------------------------------------
-# AC-6 — purity and determinism
+# Purity and determinism
 # --------------------------------------------------------------------------
 
 
@@ -371,33 +371,33 @@ def test_expansion_of_equal_graphs_returns_equal_graphs(keepdims: bool) -> None:
 
 
 # --------------------------------------------------------------------------
-# AC-7 — the eight-clause predicate and its categorized failures
+# Supported-mean validation and categorized failures
 # --------------------------------------------------------------------------
 
-_FAILURE_CASES: list[tuple[str, dict[str, object], str, int]] = [
+_FAILURE_CASES: list[tuple[str, dict[str, object], str, str]] = [
     (
         "two_operands",
         {"input_value_ids": ["v0", "v0"]},
         "unsupported_reduction",
-        1,
+        "exactly one operand",
     ),
     (
         "operand_typespec_absent",
         {"operand_typespec": None},
         "missing_shape_metadata",
-        2,
+        "operand declares no ranked shape",
     ),
     (
         "operand_typespec_without_shape",
         {"operand_typespec": {"dtype": "f64"}},
         "missing_shape_metadata",
-        2,
+        "operand declares no ranked shape",
     ),
     (
         "operand_typespec_without_dtype",
         {"operand_typespec": {"shape": [3, 5]}},
         "missing_dtype_metadata",
-        2,
+        "operand declares no dtype",
     ),
     (
         "operand_rank_one",
@@ -407,7 +407,7 @@ _FAILURE_CASES: list[tuple[str, dict[str, object], str, int]] = [
             "output_typespec": {"dtype": "f64", "shape": [1]},
         },
         "unsupported_reduction",
-        2,
+        "has rank",
     ),
     (
         "operand_rank_three",
@@ -417,19 +417,19 @@ _FAILURE_CASES: list[tuple[str, dict[str, object], str, int]] = [
             "output_typespec": {"dtype": "f64", "shape": [1, 1, 1]},
         },
         "unsupported_reduction",
-        2,
+        "has rank",
     ),
     (
         "symbolic_reduced_dimension",
         {"operand_typespec": {"dtype": "f64", "shape": ["rows", 5]}},
         "unresolved_symbolic_shape",
-        3,
+        "is symbolic",
     ),
     (
         "zero_reduced_dimension",
         {"operand_typespec": {"dtype": "f64", "shape": [0, 5]}},
         "unsupported_reduction",
-        3,
+        "is not positive",
     ),
     (
         "partial_axes",
@@ -438,43 +438,43 @@ _FAILURE_CASES: list[tuple[str, dict[str, object], str, int]] = [
             "output_typespec": {"dtype": "f64", "shape": [1, 5]},
         },
         "unsupported_reduction",
-        4,
+        "partial reduction",
     ),
     (
         "duplicated_axes",
         {"op_params": {"axes": [0, 0], "keepdims": True}},
         "reduction_shape_mismatch",
-        4,
+        "declared axes are malformed",
     ),
     (
         "out_of_range_axis",
         {"op_params": {"axes": [0, 2], "keepdims": True}},
         "reduction_shape_mismatch",
-        4,
+        "declared axes are malformed",
     ),
     (
         "malformed_axes",
         {"op_params": {"axes": "both", "keepdims": True}},
         "reduction_shape_mismatch",
-        4,
+        "declared axes are malformed",
     ),
     (
         "missing_axes",
         {"op_params": {"keepdims": True}},
         "reduction_shape_mismatch",
-        4,
+        "declared axes are malformed",
     ),
     (
         "keepdims_not_a_bool",
         {"op_params": {"axes": [0, 1], "keepdims": 1}},
         "unsupported_reduction",
-        5,
+        "'keepdims' is not a bool",
     ),
     (
         "missing_keepdims",
         {"op_params": {"axes": [0, 1]}},
         "unsupported_reduction",
-        5,
+        "'keepdims' is not a bool",
     ),
     (
         "non_floating_dtype",
@@ -484,19 +484,19 @@ _FAILURE_CASES: list[tuple[str, dict[str, object], str, int]] = [
             "output_typespec": {"dtype": "i32", "shape": [1, 1]},
         },
         "dtype_not_differentiable",
-        6,
+        "operand dtype is not differentiable",
     ),
     (
         "output_typespec_absent",
         {"output_typespec": None},
         "missing_shape_metadata",
-        7,
+        "output declares no ranked shape",
     ),
     (
         "output_typespec_without_dtype",
         {"output_typespec": {"shape": [1, 1]}},
         "missing_dtype_metadata",
-        7,
+        "output declares no dtype",
     ),
     (
         "output_shape_disagrees_with_the_reduction_rule",
@@ -505,30 +505,30 @@ _FAILURE_CASES: list[tuple[str, dict[str, object], str, int]] = [
             "output_typespec": {"dtype": "f64", "shape": [1, 1]},
         },
         "reduction_shape_mismatch",
-        7,
+        "output declares shape",
     ),
     (
         "output_dtype_disagrees_with_the_operand",
         {"output_typespec": {"dtype": "f32", "shape": [1, 1]}},
         "reduction_shape_mismatch",
-        7,
+        "output declares dtype",
     ),
     (
         "descriptor_key_in_op_params",
         {"op_params": {"axes": [0, 1], "keepdims": True, "fill": 1.0}},
         "unsupported_reduction",
-        8,
+        "fill descriptor key",
     ),
 ]
 
 
 @pytest.mark.parametrize(
-    ("overrides", "expected_category", "clause"),
+    ("overrides", "expected_category", "expected_detail"),
     [case[1:] for case in _FAILURE_CASES],
     ids=[case[0] for case in _FAILURE_CASES],
 )
-def test_an_unsupported_mean_raises_its_category_naming_the_node_and_the_clause(
-    overrides: dict[str, object], expected_category: str, clause: int
+def test_an_unsupported_mean_raises_its_category_naming_the_node_and_reason(
+    overrides: dict[str, object], expected_category: str, expected_detail: str
 ) -> None:
     graph = _mean_graph(node_id="n_offender", **overrides)  # type: ignore[arg-type]
 
@@ -537,10 +537,10 @@ def test_an_unsupported_mean_raises_its_category_naming_the_node_and_the_clause(
 
     assert raised.value.category == expected_category
     assert "n_offender" in raised.value.message
-    assert f"clause {clause}" in raised.value.message
+    assert expected_detail in raised.value.message
 
 
-def test_a_mean_whose_node_id_is_reserved_fails_the_identifier_clause() -> None:
+def test_a_mean_whose_node_id_is_reserved_names_the_namespace() -> None:
     reserved = _reserved_node_id()
     graph = _mean_graph(node_id=reserved)
 
@@ -549,10 +549,10 @@ def test_a_mean_whose_node_id_is_reserved_fails_the_identifier_clause() -> None:
 
     assert raised.value.category == "unsupported_reduction"
     assert reserved in raised.value.message
-    assert "clause 8" in raised.value.message
+    assert "reserved expansion namespace" in raised.value.message
 
 
-def test_a_mean_whose_output_value_id_is_reserved_fails_the_identifier_clause() -> None:
+def test_a_mean_whose_output_value_id_is_reserved_names_the_namespace() -> None:
     graph = _mean_graph(node_id="n_offender", output_value_id=_reserved_value_id())
 
     with pytest.raises(AutodiffError) as raised:
@@ -560,7 +560,7 @@ def test_a_mean_whose_output_value_id_is_reserved_fails_the_identifier_clause() 
 
     assert raised.value.category == "unsupported_reduction"
     assert "n_offender" in raised.value.message
-    assert "clause 8" in raised.value.message
+    assert "reserved expansion namespace" in raised.value.message
 
 
 def test_a_rejected_mean_leaves_no_partially_rewritten_graph() -> None:
@@ -597,7 +597,7 @@ def test_a_rejected_mean_leaves_no_partially_rewritten_graph() -> None:
 
 
 # --------------------------------------------------------------------------
-# AC-8 — unrelated nodes are carried through identically and in order
+# Unrelated nodes are carried through identically and in order
 # --------------------------------------------------------------------------
 
 
@@ -651,7 +651,7 @@ def test_unmatched_nodes_are_carried_through_identically_and_in_order() -> None:
 
 
 # --------------------------------------------------------------------------
-# AC-9 — reserved namespace, collisions, and duplicate identifiers
+# Reserved namespace, collisions, and duplicate identifiers
 # --------------------------------------------------------------------------
 
 

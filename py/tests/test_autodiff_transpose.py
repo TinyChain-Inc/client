@@ -1,4 +1,4 @@
-"""Tests for transpose VJP and T-04c autodiff finalization."""
+"""Tests for transpose VJP and autodiff finalization."""
 from __future__ import annotations
 
 import pytest

@@ -106,9 +106,9 @@ class TransposeOperator(TensorOperator):
         object.__setattr__(self, "route_name", "transpose")
 
 
-# ContextVar-based active builder tracking (Decision D6 from client-issue-13-phase2 spec §5).
-# Rationale: Task-scoped by stdlib design, correct for tc.grad's single call-site transform use case.
-# Alternative thread-local would be incorrect for async/threaded execution contexts.
+# ContextVar keeps the active builder task-scoped for async and threaded callers.
+# A thread-local would allow concurrent async traces in one thread to overwrite
+# each other's active builder.
 _active_builder: contextvars.ContextVar[Optional[TensorGraphBuilder]] = contextvars.ContextVar(
     "_active_builder", default=None
 )
@@ -182,10 +182,9 @@ class TensorGraphBuilder:
         self._value_map: dict[int, str] = {}
         self._outputs: list[str] = []
         self._token: Optional[contextvars.Token[Optional[TensorGraphBuilder]]] = None
-        # Builder-owned typed-tracing side tables (client ADR-004; issue 95
-        # https://github.com/TinyChain-Inc/client/issues/95). These are
-        # never exposed to public callers and are separate from `_value_map`
-        # (Invariant 10): `_value_map` only resolves `id(obj) -> value_id`,
+        # Builder-owned typed-tracing side tables are never exposed to public
+        # callers and are separate from `_value_map`: that mapping only
+        # resolves `id(obj) -> value_id`,
         # while `_retained_values` keeps the object itself alive so a GC'd
         # intermediate cannot have its `id()` reused and corrupt identity.
         self._value_metadata: dict[str, dict[str, object]] = {}
@@ -211,7 +210,7 @@ class TensorGraphBuilder:
             vid = value_id if value_id is not None else self._next_value_id()
             self._value_map[key] = vid
         resolved = self._value_map[key]
-        # Retain a strong reference so identity survives GC/`id()` reuse (Invariant 6).
+        # Retain a strong reference so identity survives GC/`id()` reuse.
         self._retained_values[resolved] = obj
         return resolved
 
@@ -284,9 +283,8 @@ class TensorGraphBuilder:
     def input(self, name: str, *, dtype: str, shape: Sequence[object]) -> "Tensor":
         """Declare a named, typed graph input and return an ordinary symbolic `Tensor`.
 
-        Requires this builder to be the active trace context (client ADR-004,
-        spec §7.3; https://github.com/TinyChain-Inc/client/issues/95). The
-        returned `Tensor` is built through the canonical state-reference
+        Requires this builder to be the active trace context. The returned
+        `Tensor` is built through the canonical state-reference
         builders; no raw type-spec dict is ever exposed.
         """
         if get_active_builder() is not self:
@@ -370,9 +368,8 @@ class TensorGraphBuilder:
         With no argument this preserves the low-level experimental behavior:
         graph inputs carry no typespec (``None``) and outputs default to the
         explicitly marked outputs, else the last recorded node. When ``outputs``
-        is supplied the typed application path is taken (client ADR-004, spec
-        §8.3; https://github.com/TinyChain-Inc/client/issues/95): each traced
-        output value is resolved to its ValueId in caller order with later
+        is supplied the typed application path: each traced output value is
+        resolved to its ValueId in caller order with later
         duplicates silently dropped (first occurrence kept), untraced outputs
         raise, graph input typespecs are populated from the builder metadata
         table, and the graph is run through typed finalization, which rejects any
@@ -438,9 +435,8 @@ class TensorGraphBuilder:
     ) -> "DerivativeProgram":
         """Generate the vector-Jacobian product for ``output`` with respect to ``wrt``.
 
-        Callable only after this builder's trace context has exited successfully
-        (client ADR-004, spec §10.6/§12/§13.1;
-        https://github.com/TinyChain-Inc/client/issues/95). It resolves the
+        Callable only after this builder's trace context has exited successfully.
+        It resolves the
         selected ``output`` and each ``wrt`` value to ValueIds (preserving
         ``wrt`` order), runs typed finalization on the selected path, infers the
         seed typespec verbatim from the selected output's dtype and ranked shape
@@ -515,11 +511,10 @@ class TensorGraphBuilder:
         if self._token is not None:
             _active_builder.reset(self._token)
             self._token = None
-        # Retention/metadata persist after exit; only discarding the builder
-        # instance releases them (spec §8.3, §12.5;
-        # https://github.com/TinyChain-Inc/client/issues/95).
+        # Retention and metadata persist after exit; only discarding the builder
+        # instance releases them.
         self._completed = True
         # Track whether the context exited without a propagating exception so
-        # `vjp(...)` can require a *successful* exit (spec §13.1).
+        # `vjp(...)` can require a successful exit.
         exc_type = args[0] if args else None
         self._exited_cleanly = exc_type is None
