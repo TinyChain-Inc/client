@@ -853,7 +853,9 @@ def test_a_large_but_convertible_element_count_still_expands() -> None:
 
 
 def _graph_with_a_mean_and(
-    *, extra_nodes: list[TensorNodeRecord] | None = None, extra_outputs: list[str] | None = None
+    *,
+    extra_nodes: list[TensorNodeRecord] | None = None,
+    extra_outputs: list[str] | None = None,
 ) -> TensorGraph:
     """A traced supported mean, plus whatever extra nodes or outputs a case needs."""
     graph = _traced_mean_graph(keepdims=True)
@@ -972,17 +974,24 @@ def test_the_forward_pass_never_rewires_a_consumer_to_an_emitted_node() -> None:
 
 
 def test_the_gradient_pass_rejects_a_minted_value_id_a_node_merely_reads() -> None:
+    """The reserved id is read by a bystander node, so the chain still matches.
+
+    Feeding it to the chain itself would only prove the predicate declines an
+    unmatched region -- the pass would mint nothing at all, and the collision
+    this case is about would never arise.
+    """
     reserved = _reserved_value_id()
     program = _broadcast_scale_program()
-    program.nodes[0] = TensorNodeRecord(
-        node_id="dn0",
-        output_value_id="d0",
-        operator=program.nodes[0].operator,
-        op_params=dict(program.nodes[0].op_params),
-        input_value_ids=[reserved],
-        output_typespec=program.nodes[0].output_typespec,
+    program.nodes.append(
+        TensorNodeRecord(
+            node_id="dn9",
+            output_value_id="d9",
+            operator=MulOperator(),
+            op_params={"right_literal": 2.0},
+            input_value_ids=[reserved],
+            output_typespec=_typespec("f64", (3, 5)),
+        )
     )
-    program.value_typespecs.pop("seed")
 
     with pytest.raises(AutodiffError) as raised:
         _expand_program(program)
@@ -991,7 +1000,7 @@ def test_the_gradient_pass_rejects_a_minted_value_id_a_node_merely_reads() -> No
     assert reserved in raised.value.message
 
 
-def test_the_gradient_pass_rejects_a_minted_value_id_named_only_in_the_output_gradients() -> None:
+def test_the_gradient_pass_rejects_a_minted_id_named_only_in_the_output_gradients() -> None:
     reserved = _reserved_value_id()
     program = _broadcast_scale_program(extra_output_gradient=reserved)
 
