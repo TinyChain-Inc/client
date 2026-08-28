@@ -148,7 +148,7 @@ def test_fill_node_output_typespec_equals_its_descriptor_dtype_and_shape() -> No
     The two sides are written out independently here rather than derived from
     one dict, and the negative half asserts that a declaration disagreeing with
     the parameters is rejected -- so this test fails if the reader stops
-    cross-checking the declaration it is the single authority for (risk R-3).
+    cross-checking the declaration it is the single authority for.
     """
     from tinychain.autodiff import fill_descriptor
 

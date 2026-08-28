@@ -801,8 +801,8 @@ def test_expand_mean_graph_is_exported_from_the_autodiff_package() -> None:
 #
 # The reciprocal `1 / (rows * columns)` is the one inexact substitution the
 # region makes. A declared shape can name an element count no float can hold,
-# and such a mean passes every clause of the predicate -- so without a guard
-# the conversion escapes as a bare `OverflowError`, which NFR-128-004 forbids.
+# while otherwise passing semantic validation. Without a guard the conversion
+# would escape as a bare `OverflowError` instead of a categorized failure.
 # --------------------------------------------------------------------------
 
 
@@ -845,7 +845,7 @@ def test_a_large_but_convertible_element_count_still_expands() -> None:
 # a minted identifier can never alias a value the artifact merely mentions
 #
 # Both passes mint into the reserved namespace and both must fail closed on a
-# collision (Inv-5). Indexing only *produced* values is not enough: a minted id
+# collision. Indexing only *produced* values is not enough: a minted id
 # equal to one a node merely reads, or one named only among the artifact's
 # declared outputs, would silently rewire that consumer to the emitted node --
 # a wrong result with no error at all.

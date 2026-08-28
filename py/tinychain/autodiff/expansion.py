@@ -63,6 +63,12 @@ the offending node id:
   node carries an operand, ``op_params`` holds a key outside the schema, or
   ``fill`` is absent or not a real number. A ``bool`` is not a real number here:
   ``True`` reaching a numeric field is a construction defect, not the value one.
+  Also raised when a node *declares* an ``output_typespec`` disagreeing with its
+  own parameters: the declaration is the single authority for what the node
+  produces, so a node promising one tensor and describing another is malformed
+  rather than merely inconsistent. A node carrying no declaration at all is not
+  a defect -- the reader validates parameters, and cross-checks a declaration
+  only when one is present.
 * ``missing_shape_metadata`` -- ``shape`` is absent, is not a sequence of
   integers, or holds a negative or symbolic dimension.
 * ``missing_dtype_metadata`` -- ``dtype`` is absent or is not a non-empty string.
@@ -281,7 +287,7 @@ or value id is rejected the same way, before anything is minted.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
 from .graph import (
@@ -344,6 +350,11 @@ def fill_descriptor(operation: TensorNodeRecord | OperationContext) -> FillDescr
     :class:`OperationContext` a lowering handler receives for the same node.
     Raises a categorized :class:`AutodiffError` naming the node for any node that
     is not a well-formed fill.
+
+    When the node carries an ``output_typespec``, the declaration is required to
+    agree with the parameters. Without that check the node would declare one
+    tensor while its descriptor produced another, and a `Fill` handler and a
+    `Matmul` handler reading the same node would disagree about the constant.
     """
     if not isinstance(operation, (TensorNodeRecord, OperationContext)):
         raise AutodiffError(
@@ -359,11 +370,13 @@ def fill_descriptor(operation: TensorNodeRecord | OperationContext) -> FillDescr
     op_params = operation.op_params
     _check_param_keys(node_id, op_params)
 
-    return FillDescriptor(
+    descriptor = FillDescriptor(
         fill=_read_fill(node_id, op_params),
         dtype=_read_dtype(node_id, op_params),
         shape=_read_shape(node_id, op_params),
     )
+    _check_declaration_agrees(node_id, operation.output_typespec, descriptor)
+    return descriptor
 
 
 def _check_operator(node_id: str, operator: TensorOperator) -> None:
@@ -449,6 +462,55 @@ def _read_shape(node_id: str, op_params: Mapping[str, object]) -> tuple[int, ...
             )
         dimensions.append(dimension)
     return tuple(dimensions)
+
+
+def _check_declaration_agrees(
+    node_id: str, output_typespec: object, descriptor: FillDescriptor
+) -> None:
+    """Require a declared `output_typespec` to agree with the parameters read.
+
+    A fill node's own complete `output_typespec` is the single authority for
+    what the node produces, so a declaration disagreeing with the parameters is
+    a structural defect rather than a preference: one handler would materialize
+    the descriptor's tensor while the graph promised the declaration's.
+
+    An **absent** declaration is not a defect. This reader validates parameters;
+    it cross-checks a declaration only when the node carries one, so a node
+    built without a typespec still reads successfully.
+    """
+    if output_typespec is None:
+        return
+    if not isinstance(output_typespec, Mapping):
+        raise AutodiffError(
+            "malformed_derivative_ir",
+            f"fill node {node_id!r} declares an output_typespec that is not a mapping: "
+            f"{output_typespec!r}",
+        )
+
+    declared_dtype = output_typespec.get("dtype")
+    if declared_dtype != descriptor.dtype:
+        raise AutodiffError(
+            "malformed_derivative_ir",
+            f"fill node {node_id!r} declares dtype {declared_dtype!r}, but its parameters "
+            f"describe {descriptor.dtype!r}; a fill node's declaration is the single "
+            "authority for what it produces and must agree with its own descriptor",
+        )
+
+    declared_shape = output_typespec.get("shape")
+    if isinstance(declared_shape, (str, bytes)) or not isinstance(declared_shape, Sequence):
+        raise AutodiffError(
+            "malformed_derivative_ir",
+            f"fill node {node_id!r} declares no ranked shape in its output_typespec: "
+            f"{declared_shape!r}",
+        )
+    if tuple(declared_shape) != descriptor.shape:
+        raise AutodiffError(
+            "malformed_derivative_ir",
+            f"fill node {node_id!r} declares shape {list(declared_shape)!r}, but its "
+            f"parameters describe {list(descriptor.shape)!r}; a fill node's declaration "
+            "is the single authority for what it produces and must agree with its own "
+            "descriptor",
+        )
 
 
 # --------------------------------------------------------------------------
@@ -612,6 +674,46 @@ def _indexed_value_ids(
     return frozenset(seen)
 
 
+def _mentioned_value_ids(
+    nodes: Sequence[TensorNodeRecord],
+    *,
+    produced_inputs: Sequence[tuple[str, object]] = (),
+    declared_value_ids: Iterable[object] = (),
+) -> frozenset[str]:
+    """Return every value id the artifact mentions, in any position.
+
+    Wider than the set of *produced* values on purpose: a minted identifier must
+    not collide with a value a node merely reads, one the artifact declares as
+    an output, or one it merely records a typespec for either.
+
+    Indexing only produced values is not a smaller guard, it is a silent one. A
+    minted id equal to one an existing node reads does not collide with anything
+    the index can see, so nothing is rejected -- and that node is quietly rewired
+    to read the emitted constant instead of the value it was written against.
+    The result would be a wrong artifact with no error, so the pass must reject
+    the collision.
+
+    Both passes share this one index. The two halves of this module previously
+    held contradictory contracts here; a correct copy in a second place would
+    have preserved the drift rather than removed it.
+
+    *produced_inputs* are `(value id, typespec)` boundary declarations whose ids
+    are produced, so they take part in duplicate detection alongside node
+    outputs. *declared_value_ids* are ids the artifact merely names -- declared
+    outputs, gradient results, inherited typespec keys -- which are indexed
+    against collision but never checked for duplication, because naming a value
+    twice in those positions is not a defect. A non-string entry (an absent
+    output gradient is spelled ``None``) names no value and is skipped.
+    """
+    value_ids = set(_indexed_value_ids(nodes, produced_inputs))
+    value_ids.update(
+        value_id for value_id in declared_value_ids if isinstance(value_id, str)
+    )
+    for node in nodes:
+        value_ids.update(node.input_value_ids)
+    return frozenset(value_ids)
+
+
 def _declared_typespecs(
     nodes: Sequence[TensorNodeRecord], inputs: Sequence[tuple[str, object]]
 ) -> dict[str, object]:
@@ -642,6 +744,7 @@ class _SupportedMean:
     dtype: str
     rows: int
     columns: int
+    reciprocal_count: float
     keepdims: bool
     output_value_id: str
     output_typespec: dict[str, object]
@@ -709,6 +812,35 @@ def _mean_operand_dimensions(node_id: str, shape: Shape) -> tuple[int, int]:
             )
     rows, columns = shape
     return int(rows), int(columns)
+
+
+def _mean_reciprocal_count(node_id: str, rows: int, columns: int) -> float:
+    """Return `1 / (rows * columns)`, rejecting a count no float can represent.
+
+    The reciprocal is the one inexact substitution the emitted region makes, and
+    it is the only place the pass converts a declared dimension to a float. A
+    shape may name an element count larger than any float while remaining
+    otherwise well formed because the dimension is still a positive integer.
+    Such a failure is a limit of what the region can express, so it is reported
+    as `unsupported_reduction` instead of escaping as a bare `OverflowError`.
+
+    The boundary is representability, not exactness. A count above `2 ** 53`
+    converts with a relative error near 1e-16, well inside the tolerances of
+    1e-6 and 1e-12, and such a mean expands correctly today; rejecting it would
+    narrow the supported domain rather than guard it.
+    """
+    element_count = rows * columns
+    try:
+        count_as_float = float(element_count)
+    except OverflowError as exc:
+        raise AutodiffError(
+            "unsupported_reduction",
+            f"mean node {node_id!r} declares an operand of {rows!r} x {columns!r}, whose "
+            f"element count {element_count!r} is too large to convert to a float; the "
+            "expanded region scales by the reciprocal of that count, which this pass "
+            "cannot represent",
+        ) from exc
+    return 1.0 / count_as_float
 
 
 def _mean_axes(node: TensorNodeRecord) -> tuple[int, ...]:
@@ -830,6 +962,7 @@ def _supported_mean(
 
     operand_shape, operand_dtype = _mean_operand_shape_and_dtype(node, typespecs)
     rows, columns = _mean_operand_dimensions(node.node_id, operand_shape)
+    reciprocal_count = _mean_reciprocal_count(node.node_id, rows, columns)
     axes = _mean_axes(node)
     keepdims = _mean_keepdims(node)
     dtype = _mean_dtype(node.node_id, operand_dtype)
@@ -845,6 +978,7 @@ def _supported_mean(
         dtype=dtype,
         rows=rows,
         columns=columns,
+        reciprocal_count=reciprocal_count,
         keepdims=keepdims,
         output_value_id=node.output_value_id,
         output_typespec=output_typespec,
@@ -979,7 +1113,9 @@ def _emit_mean_region(
     row_ones = _emit_fill(minter, dtype=supported.dtype, shape=(1, rows))
     total_sum = _emit_matmul(minter, left=row_ones, right=row_sums)
 
-    reciprocal_count = 1.0 / float(rows * columns)
+    # Proven convertible during validation, so the region can never be reached
+    # with a count the scale cannot express.
+    reciprocal_count = supported.reciprocal_count
     if supported.keepdims:
         # The rank-preserving tier: the scale already has the mean's rank-2
         # shape, so it carries the mean's own value id and terminates the region.
@@ -1029,7 +1165,9 @@ def expand_mean_graph_detailed(graph: TensorGraph) -> MeanGraphExpansionResult:
     """
     nodes = graph.nodes
     existing_node_ids = _indexed_node_ids(nodes)
-    existing_value_ids = _indexed_value_ids(nodes, graph.inputs)
+    existing_value_ids = _mentioned_value_ids(
+        nodes, produced_inputs=graph.inputs, declared_value_ids=graph.outputs
+    )
     typespecs = _declared_typespecs(nodes, graph.inputs)
 
     # Validate every candidate before emitting any replacement nodes.
@@ -1307,20 +1445,6 @@ def _emit_broadcast_scale_region(
 # --------------------------------------------------------------------------
 
 
-def _existing_value_ids(program: DerivativeProgram) -> frozenset[str]:
-    """Return every value id the program names anywhere.
-
-    Wider than the set of produced values on purpose: a minted identifier must
-    not collide with a value the program merely reads or merely records a
-    typespec for either.
-    """
-    value_ids = set(_indexed_value_ids(program.nodes, []))
-    value_ids.update(program.value_typespecs)
-    for node in program.nodes:
-        value_ids.update(node.input_value_ids)
-    return frozenset(value_ids)
-
-
 def expand_mean_derivative_program_detailed(
     program: DerivativeProgram,
 ) -> MeanDerivativeExpansionResult:
@@ -1354,7 +1478,14 @@ def expand_mean_derivative_program_detailed(
     """
     nodes = program.nodes
     existing_node_ids = _indexed_node_ids(nodes)
-    existing_value_ids = _existing_value_ids(program)
+    existing_value_ids = _mentioned_value_ids(
+        nodes,
+        declared_value_ids=(
+            *program.value_typespecs,
+            *program.gradients.values(),
+            *program.output_gradients,
+        ),
+    )
     typespecs = _declared_typespecs(nodes, list(program.value_typespecs.items()))
     producers = {node.output_value_id: node for node in nodes}
     consumer_counts = _value_consumer_counts(nodes)
