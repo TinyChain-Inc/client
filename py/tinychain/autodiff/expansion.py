@@ -46,6 +46,12 @@ two-line materialization rather than a hand-written parser. Using it is not
 required; a handler that parses ``op_params`` itself observes the same schema
 documented above.
 
+The descriptor is purely declarative: it names a value, not an event, and reads
+no node identity beyond validating the node it was given. Two fill nodes with
+the same ``(fill, dtype, shape)`` triple describe the same constant, so a
+consumer that wants to avoid rematerializing an identical constant on every
+lowering may cache a materialized fill by that triple rather than by node id.
+
 Failures
 --------
 Every rejection is a categorized
@@ -115,6 +121,24 @@ shape ``[1, 1]``::
 intermediate -- which the predicate below requires to have exactly one consumer
 and to be no declared gradient output -- is the only value the pass removes.
 
+A note on "verbatim"
+~~~~~~~~~~~~~~~~~~~~~
+The specification's §8.3 and §8.4 tables, and FR-128-005, describe the terminal
+node of each region -- ``f5``/``f6`` here, ``e5`` above -- as carrying the
+replaced node's declared ``output_typespec`` *verbatim*. Neither emitter in this
+module does that: :func:`_emit_scale` and :func:`_emit_reshape` instead
+*derive* an equal value from the operands they actually read, and never look at
+the replaced node's declared type while doing it. The two readings agree for
+every artifact this framework produces -- clause 7 of the forward predicate and
+clause 6 of the gradient-path predicate each enforce that agreement before a
+region is proven expandable -- but deriving, not copying, is the correct
+reading of Inv-2: it is what makes truthfulness structural rather than
+incidental, because a node that derives its own declared type cannot state one
+its operation did not produce. This is a documentation divergence from the
+specification's wording, not a behavioral gap, and it is recorded here so a
+later reader does not "fix" an emitter back into copying a type -- which would
+quietly reopen the exact defect this design exists to close.
+
 Why this is sound for any value, and what it is *not* claiming
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 The rewrite rests on an algebraic identity, not on a claim about which rule
@@ -153,7 +177,18 @@ reduction case it exists for, keeping the rewrite reviewable; and it confines
 the one inexact step -- substituting ``* (1/d)`` for ``/ d``, which IEEE-754
 does not require to agree bit for bit -- to a divisor that is an exact integer
 element count rather than to an arbitrary application-chosen divisor whose
-numerics a caller may depend on.
+numerics a caller may depend on. The forward region's ``f5`` makes the same
+substitution for the same reason: its divisor is always the operand's own
+element count, ``r * c``, never an arbitrary application-chosen divisor.
+
+**The tolerance consequence.** Equivalence between an expanded and a
+non-expanded lowering is asserted on three axes, and only one is inexact:
+dtype and shape are asserted *exactly* equal, rank included -- a ``[1, 1]``
+result never satisfies a scalar expectation or vice versa -- while values are
+asserted within a relative tolerance of ``1e-6`` for ``f32`` and ``1e-12`` for
+``f64`` (§13.4). Bit-for-bit equality is never claimed on the value axis,
+because ``x * (1 / d)`` and ``x / d`` are not required to agree exactly in
+IEEE-754 arithmetic, even though ``d`` is always exact.
 
 A near miss is left alone and raises nothing
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -168,6 +203,72 @@ broadcast is not. In particular a `ReshapeOperator` preceding a matched region
 -- which is what performs the genuine rank change when the reduction declared
 ``keepdims=False`` -- is already truthful, is exactly the rank change clause 4
 requires to have happened, and is never merged into the emitted region.
+
+Required handlers, stated honestly (§9.3)
+------------------------------------------
+Neither expanded artifact needs a reduction, broadcast, or division handler --
+that is the whole point of expanding into matmuls -- but an expanded artifact
+is not free to lower, and this module states the true cost rather than
+understating it::
+
+    Tier                             Handlers the expanded region requires
+    --------------------------------  ---------------------------------------
+    Rank-preserving (keepdims=True)   FillOperator, MatmulOperator, MulOperator
+    Rank-reducing  (keepdims=False)   the above, plus ReshapeOperator (trivial reshapes only)
+
+``MatmulOperator`` keeps its existing two-operand contract, so a backend that
+already lowers matmul needs no change to that handler. ``MulOperator`` in the
+``right_literal`` form is already emitted by existing VJP rules, so a backend
+already lowering derivative programs already handles it. The two genuinely new
+requirements are ``FillOperator`` (both tiers) and a trivial ``ReshapeOperator``
+(rank-reducing tier). A backend lacking either fails closed at lowering, before
+any handler runs, with ``unsupported_operator`` naming the node.
+
+**The correction the specification's own §9.3 table does not spell out:** the
+rank-reducing tier's ``ReshapeOperator`` requirement applies to *both* the
+forward artifact and the derivative program -- not only the forward one where
+:func:`_emit_reshape` appears. When the source mean declared
+``keepdims=False``, the traced gradient chain already begins with a
+``ReshapeOperator`` from the seed's rank-0 shape to ``[1, 1]``, and
+:func:`expand_mean_derivative_program` leaves that node untouched, because it
+is already the genuine rank change the §8.4 predicate's clause 4 requires to
+have happened, and it is never merged into the emitted region (see "A near
+miss is left alone", above). A backend that registers ``ReshapeOperator`` for
+the forward artifact but skips it for the derivative program will lower the
+forward pass and then fail closed on the gradient path, naming that surviving
+reshape node. This is the single most likely omission for a backend author
+adopting this contract, and it is what forced two distinct registry variants
+-- with and without a reshape handler -- in this feature's equivalence tests.
+
+A consumer that wants only the smaller rank-preserving handler set writes
+``.mean(axes=[0, 1], keepdims=True)`` in its loss -- a one-token application
+change with no framework cost -- and this is the recommended lower-cost form
+whenever both tiers are not otherwise needed.
+
+The source-first differentiation contract (Inv-9)
+----------------------------------------------------
+Neither pass makes any promise about the differentiability of what it
+returns. This module adds no ``FillOperator`` VJP rule, and an expanded
+artifact is not designed to be a good differentiation input.
+
+This does **not** mean differentiating an expanded graph must fail. Reverse
+traversal (:mod:`tinychain.autodiff.reverse`) already skips a node whose
+inputs contain no requested differentiation target before it ever looks up a
+VJP rule for that node's operator, so the absence of a ``FillOperator`` rule
+does not, by itself, force an error; whether it does depends on how the
+requested target relates to the graph, exactly as it would for any other
+operator with no rule. An earlier version of this feature claimed
+differentiation must fail here; that claim is withdrawn (NG-10) because it is
+not something the framework's traversal order actually guarantees.
+
+The practical contract is simpler than either extreme: **the source graph is
+the canonical differentiation input.** A consumer that needs both a
+derivative and an expanded artifact differentiates the unmodified source
+graph -- before calling any expansion pass -- and calls an expansion pass only
+on the artifacts destined for analysis and lowering, never on the artifact it
+still intends to differentiate. This keeps the property the passes actually
+guarantee (a truthful, lowerable rewrite) separate from a property they never
+claimed (remaining a good differentiation input).
 
 The reserved identifier namespace
 ---------------------------------

@@ -1127,6 +1127,59 @@ function's local scope rather than the module's namespace. These checks are
 aimed at the realistic accident, not at deliberate circumvention by someone
 with commit access to this package.
 
+#### Mean expansion (opt-in, experimental)
+
+`tinychain.autodiff` also exports two opt-in passes that rewrite an all-axis,
+rank-2 `.mean(...)` into matmuls and constants — the point being that a
+backend with no reduction, broadcast, or division handler can still lower a
+graph or a derivative program that reduces this way, at the cost of
+registering a couple of handlers it might not otherwise need:
+
+```python
+from tinychain.autodiff import expand_mean_graph, expand_mean_derivative_program
+
+expanded_graph = expand_mean_graph(graph)                    # forward artifact
+expanded_program = expand_mean_derivative_program(program)   # gradient path
+```
+
+Each pass is called explicitly — no flag, no registry, no default behavior
+changes. `expand_mean_graph_detailed` and `expand_mean_derivative_program_detailed`
+return the same rewritten artifact alongside ordered `MeanExpansionRegion`
+provenance records; the composable forms above are exactly those detailed
+forms with the provenance dropped, so the two cannot disagree.
+
+Neither expanded artifact needs a reduction, broadcast, or division handler,
+but it is not free to lower:
+
+| Tier | Mean form | Handlers the expanded region requires |
+|---|---|---|
+| Rank-preserving | `.mean(axes=[0, 1], keepdims=True)` | `FillOperator`, `MatmulOperator`, `MulOperator` |
+| Rank-reducing | `.mean(axes=[0, 1], keepdims=False)` | the above, **plus** `ReshapeOperator`, restricted to trivial reshapes |
+
+`MatmulOperator` and `MulOperator` (`right_literal` form) are already
+supported by any backend that lowers ordinary derivative programs, so the
+genuinely new handlers are `FillOperator` (both tiers) and a trivial
+`ReshapeOperator` (rank-reducing tier only) — the latter is required for
+**both** the forward artifact and the derivative program: the gradient path's
+own leading seed reshape (`() -> [1, 1]`) survives expansion untouched, so a
+backend that registers the reshape handler only for the forward side will
+fail closed on the gradient path. Registering `ReshapeOperator` unconditionally
+whenever `FillOperator` is registered avoids this trap. A consumer that wants
+the smaller rank-preserving handler set writes `.mean(axes=[0, 1],
+keepdims=True)` — a one-token application change with no framework cost — and
+that is the recommended lower-cost form when both tiers are not otherwise
+needed.
+
+See `tinychain/autodiff/expansion.py`'s module docstring for the full
+contract: the supported mean domain, both emitted regions with their true
+shapes, the `FillOperator`/`FillDescriptor` schema, the broadcast-and-scale
+predicate and the identity it rests on, the numerical tolerance the
+reciprocal-multiply substitution implies, and why a pass promises nothing
+about the differentiability of what it returns — a consumer needing both a
+derivative and an expanded artifact differentiates the unmodified source
+graph first, then expands only the artifacts destined for analysis and
+lowering.
+
 ### Executor auth and routing contract
 
 `tc.backend(...)` uses one remote auth rule:
