@@ -451,6 +451,28 @@ def appends_a_malformed_input(graph: TensorGraph) -> TensorGraph:
     return dataclasses.replace(graph, inputs=[*graph.inputs, "notatuple"])
 
 
+def returns_a_non_sequence_gradient_list(program: DerivativeProgram) -> DerivativeProgram:
+    """A program whose gradient list is not a sequence at all."""
+    return dataclasses.replace(program, output_gradients=5)
+
+
+def returns_a_non_string_gradient(program: DerivativeProgram) -> DerivativeProgram:
+    """A program whose gradient list holds something that is not an identifier."""
+    return dataclasses.replace(program, output_gradients=[123])
+
+
+def returns_a_non_mapping_typespec_table(
+    program: DerivativeProgram,
+) -> DerivativeProgram:
+    """A program whose value typespec table is not a mapping."""
+    return dataclasses.replace(program, value_typespecs=5)
+
+
+def returns_a_sequence_typespec_table(program: DerivativeProgram) -> DerivativeProgram:
+    """The same defect in the shape that reads most like a plausible mistake."""
+    return dataclasses.replace(program, value_typespecs=["ghost_value"])
+
+
 def _duplicate_value_id(graph: TensorGraph) -> TensorGraph:
     first = graph.nodes[0]
     duplicate = _new_node(
@@ -1322,6 +1344,67 @@ def test_derivative_pass_returning_a_program_with_a_non_node_fails_naming_the_de
     )
 
 
+def test_derivative_pass_returning_a_non_sequence_gradient_list_fails_naming_the_defect(
+    source: _Source,
+) -> None:
+    with pytest.raises(AutodiffError) as excinfo:
+        _expand(source, derivative_expansions=[returns_a_non_sequence_gradient_list])
+
+    _assert_violation(
+        excinfo.value,
+        label="returns_a_non_sequence_gradient_list",
+        position=0,
+        mentions=["int"],
+    )
+
+
+def test_derivative_pass_returning_a_non_string_gradient_fails_naming_the_entry(
+    source: _Source,
+) -> None:
+    """Reported as the shape defect it is, naming the entry and its index.
+
+    The gradient-order rule already rejects this artifact, because a non-string
+    entry cannot equal any source gradient -- but it reports the whole expected
+    gradient list rather than the offending entry, which is the wrong end of
+    the diagnostic. The shape guard runs first and names what is actually
+    wrong.
+    """
+    with pytest.raises(AutodiffError) as excinfo:
+        _expand(source, derivative_expansions=[returns_a_non_string_gradient])
+
+    _assert_violation(
+        excinfo.value,
+        label="returns_a_non_string_gradient",
+        position=0,
+        mentions=["123", "index 0"],
+    )
+
+
+@pytest.mark.parametrize(
+    "expansion, label",
+    [
+        (returns_a_non_mapping_typespec_table, "returns_a_non_mapping_typespec_table"),
+        (returns_a_sequence_typespec_table, "returns_a_sequence_typespec_table"),
+    ],
+)
+def test_derivative_pass_returning_a_non_mapping_typespec_table_fails_naming_the_defect(
+    source: _Source, expansion: object, label: str
+) -> None:
+    """The recomputation reads this table; a malformed one must not reach it.
+
+    `analyze_derivative_dependencies` resolves metadata through
+    `value_typespecs`, so a pass that replaces the table with something that is
+    not a mapping fails inside a framework collaborator with a raw
+    `AttributeError` unless this stage rejects the artifact first.
+    """
+    with pytest.raises(AutodiffError) as excinfo:
+        _expand(source, derivative_expansions=[expansion])
+
+    assert excinfo.value.category == "expansion_contract_violation"
+    assert label in str(excinfo.value)
+    assert "position 0" in str(excinfo.value)
+
+
 def test_update_pass_returning_a_graph_with_a_non_node_fails_naming_the_defect() -> None:
     with pytest.raises(AutodiffError) as excinfo:
         _expand_update([appends_a_non_node])
@@ -1422,8 +1505,8 @@ def test_derivative_pass_detaching_the_seed_fails_the_recomputation(
 
 @pytest.mark.parametrize(
     "failing_rewrite",
-    [raises_runtime_error, returns_none, _duplicate_node_id],
-    ids=["raises", "wrong-type", "invalid-result"],
+    [raises_runtime_error, returns_none, _duplicate_node_id, appends_a_non_node],
+    ids=["raises", "wrong-type", "invalid-result", "malformed-artifact"],
 )
 def test_forward_pass_failing_at_position_one_leaves_position_two_uninvoked(
     source: _Source, failing_rewrite: object
