@@ -920,8 +920,15 @@ def _validate_artifact_shape(
     `missing_derivative_behavior` instead, so no artifact reaching this stage
     can carry one, and the gradient-order rule would reject it regardless.
     ``gradients`` and ``metadata`` are deliberately **not** checked -- nothing
-    on this path reads either, and guarding a field no rule consults would be
-    inventing a contract rather than protecting one.
+    on *this* path reads either, and guarding a field no rule consults would be
+    inventing a contract rather than protecting one. `compile_training_step`
+    does read both, but off the **source** derivative program, which is the one
+    artifact no expansion pass can reach: a pass receives a deep copy and the
+    source is never rewritten (Inv-1, FR-129-004). A pass therefore cannot put
+    a malformed `gradients` or `metadata` in front of any reader, and this
+    guard stays as narrow as its own path. A later change that reads either off
+    an expanded program would make that no longer true, and would inherit the
+    check.
 
     It is deliberately shape-only: what the containers hold, and nothing about
     what the identifiers inside them mean. Whether ids are unique, carried
@@ -1775,6 +1782,11 @@ def compile_training_step(
         )
         # The same sequence runs for every parameter, so every iteration
         # resolves the same labels; provenance records them once (Inv-8).
+        # Overwriting rather than accumulating is what keeps the record's shape
+        # independent of parameter count, and the `()` this starts from is
+        # never what provenance reports: `validate_declaration` has already
+        # rejected an empty `parameters`, so this loop always runs at least
+        # once (FR-129-016).
         update_pass_labels = expanded_update.pass_labels
         compiled_parameters.append(
             ParameterCompilation(
