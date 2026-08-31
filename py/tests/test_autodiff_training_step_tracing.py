@@ -407,11 +407,14 @@ def test_trace_loss_with_symbolic_shape_in_declared_input() -> None:
     T-01 already accepts a symbol as a shape dimension (`missing_shape_metadata`
     is raised only for an absent/malformed shape, not a symbolic one), so this
     stage must not reject or otherwise choke on a symbol flowing through
-    `builder.input(...)` and typed finalization.
+    `builder.input(...)` and typed finalization. Reduction stays on the
+    concrete axis only: reducing the symbolic axis itself is a distinct,
+    correctly-raised `unresolved_symbolic_shape` from the shape helpers, not
+    a property of this stage.
     """
 
     def square(*, x: object) -> object:
-        return (x * x).mean([0, 1])
+        return (x * x).mean([1])
 
     with tc.state.scoped_context():
         traced = trace_loss(
