@@ -89,6 +89,13 @@ def _validate_declaration_set(
     the same convention `training._required_optimizer_input_names` already
     uses for the same mistake.
 
+    Every key of `inputs` is required to be a `str` before anything iterates,
+    sorts, or reports those keys: a non-`str` key is still hashable -- dict
+    construction already requires that -- so it survives silently until a
+    later message tries to `sorted()` the declared input names for display,
+    which raises a bare `TypeError` for a mix of incomparable key types
+    rather than reporting the declaration mistake at its source.
+
     Each entry of `parameters` is required to be a `str` before it is hashed
     or looked up: the duplicate check and the `inputs` membership test both
     hash the entry, so an unhashable entry -- a `list`, `dict`, or `set` given
@@ -102,6 +109,14 @@ def _validate_declaration_set(
             "inputs must be a non-empty mapping of input name to typed "
             f"input spec, got {inputs!r}",
         )
+    for key in inputs:
+        if not isinstance(key, str):
+            raise AutodiffError(
+                "invalid_training_declaration",
+                f"inputs declares a key {key!r} of type "
+                f"{type(key).__name__!r}; each declared input name must be "
+                "a str",
+            )
     input_names = tuple(inputs)
 
     if isinstance(parameters, str) or not isinstance(parameters, Sequence):
