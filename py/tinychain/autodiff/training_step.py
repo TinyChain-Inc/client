@@ -61,6 +61,20 @@ are deliberate and should survive a later tidy-up:
   `DerivativeMetadata.source_graph_id` stays the content hash reverse
   traversal derives. Minting an id here instead would make two identical
   compilations disagree and break Inv-13's conditional determinism.
+
+`analyze_source_captures` closes the source phase. It asks
+`analyze_derivative_dependencies` what the source derivative program needs
+from the source forward graph, reads the answer through the documented
+`forward_capture` provenance, and derives the forward output selection from
+it. The capture set and the selection are one rule, not two (Inv-7), which is
+why one function produces both: a caller that received only the list would
+have to rebuild the selection itself, and that is the rejected alternative
+B-2 of §15.2. For the same reason the captures are never rediscovered by
+walking forward nodes -- §15.2's B-1 -- and the record restates no per-value
+provenance: dtype, shape, and provenance already live on the analysis it
+carries and, later, on `LoweredProgram.dependencies` (FR-129-013). What it
+adds are identifiers, because selecting them as forward outputs is an
+obligation of this compiler rather than a re-export of the analysis.
 """
 
 from __future__ import annotations
@@ -71,6 +85,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Optional
 
+from .dependencies import DependencyAnalysis, analyze_derivative_dependencies
 from .generate import generate
 from .graph import TensorGraph, TensorGraphBuilder
 from .protocol import AutodiffError
@@ -554,4 +569,100 @@ def differentiate_loss(
 
     return SourceDerivative(
         program=program, seed_value_id=seed_value_id, seed_label=seed_label
+    )
+
+
+@dataclass(frozen=True)
+class SourceCaptures:
+    """The source artifacts' ordered forward captures and the selection they imply.
+
+    ``analysis`` is the `DependencyAnalysis` object itself, unmodified: every
+    consumer that needs a capture's dtype, shape, or provenance reads it
+    there rather than from a field of this record (FR-129-013). It also still
+    reports a captured loss under `forward_capture` provenance -- removing
+    the loss is a rule about the forward *selection*, never a rewrite of the
+    analysis.
+
+    ``loss_value_id`` and ``forward_capture_value_ids`` are reported
+    separately and are always disjoint (FR-129-007): the first is the value
+    the step reports to the application, the second the values the forward
+    phase must retain for the backward phase. They are two different
+    obligations and this record does not blur them.
+
+    ``forward_selected_outputs`` is what the forward lowering selects, and is
+    exactly ``(loss_value_id,) + forward_capture_value_ids`` -- the single
+    equality Inv-7 states. It is carried rather than left to the call site so
+    the capture set and the selection derived from it cannot drift apart.
+    """
+
+    analysis: DependencyAnalysis
+    loss_value_id: str
+    forward_capture_value_ids: tuple[str, ...]
+    forward_selected_outputs: tuple[str, ...]
+
+
+def analyze_source_captures(
+    *, traced: TracedLoss, derivative: SourceDerivative
+) -> SourceCaptures:
+    """Determine the ordered forward captures and the forward selection, per §8.5.
+
+    The analysis runs against the **source** artifacts -- the traced forward
+    graph and the program `generate` returned -- with the minted seed
+    declared and the gradient value ids selected in `parameters` order, which
+    is what `output_gradients` already is (it is `wrt` order, and `wrt` order
+    is `parameters` order; Inv-6). Passing the gradients explicitly rather
+    than relying on the default states at this call site which selection the
+    capture set is a property of.
+
+    Captures are read through the documented `forward_capture` provenance, in
+    analysis order, and nothing else: not by walking forward nodes, and not
+    through `required_inputs`, which also carries the declared inputs and the
+    seed -- values the consumer binds itself and must never be asked to
+    retain from a forward run (§15.2 B-1, FR-129-005).
+    """
+    analysis = analyze_derivative_dependencies(
+        derivative.program,
+        forward_graph=traced.graph,
+        seed_value_ids=[derivative.seed_value_id],
+        outputs=list(derivative.program.output_gradients),
+    )
+
+    loss_value_id = traced.loss_value_id
+
+    # FR-129-006's deduplication, in the exact shape it states: order-
+    # preserving, first occurrence kept, and the loss dropped from the
+    # capture portion if it is also captured.
+    #
+    # Both guards are defensive, and deliberately so -- neither is reachable
+    # through the current rule set, and neither may be deleted as dead code:
+    #
+    # * The loss guard. No VJP rule in the default registry reads the value
+    #   its own node produced (`max`/`min`/`product` raise
+    #   `unsupported_reduction`; every implemented rule reads operands and
+    #   upstream cotangents only), and the loss is by construction the
+    #   forward graph's final output, so no traced loss can come back as a
+    #   forward capture today. The moment a rule that reads its own output is
+    #   registered, this branch becomes live -- and FR-129-006 states it
+    #   regardless of which rules happen to exist. The captured-loss cases in
+    #   `test_autodiff_training_step_captures.py` are what exercise it: they
+    #   hand a hand-built forward graph and derivative program to the real
+    #   analysis, with the loss captured first in one and last in the other.
+    # * The repeat guard. `analyze_derivative_dependencies` assigns each value
+    #   exactly one provenance and emits it once, so a repeat cannot arrive
+    #   from it; the guard states this stage's own rule rather than depending
+    #   on that property of a collaborator.
+    capture_value_ids: list[str] = []
+    for dependency in analysis.forward_captures:
+        value_id = dependency.value_id
+        if value_id == loss_value_id or value_id in capture_value_ids:
+            continue
+        capture_value_ids.append(value_id)
+
+    forward_capture_value_ids = tuple(capture_value_ids)
+
+    return SourceCaptures(
+        analysis=analysis,
+        loss_value_id=loss_value_id,
+        forward_capture_value_ids=forward_capture_value_ids,
+        forward_selected_outputs=(loss_value_id,) + forward_capture_value_ids,
     )
