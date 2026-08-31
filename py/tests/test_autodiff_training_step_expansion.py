@@ -1216,6 +1216,30 @@ def test_derivative_pass_reading_a_different_forward_value_fails_the_recomputati
     )
 
 
+def test_analysis_failure_during_the_recomputation_propagates_with_its_own_category(
+    source: _Source,
+) -> None:
+    """The analysis owns its categories (§13.3); only an inequality is this stage's.
+
+    The pass leaves an artifact this stage's structural rules accept -- unique
+    ids, no reassignment, every gradient produced in order, the seed untouched
+    -- but reads a value nothing produces. That is the dependency analysis
+    reporting on the artifact, not a pass breaking the expansion contract, so
+    the failure keeps `missing_dependency` rather than being re-categorized.
+    """
+
+    def read_an_unproduced_value(program: DerivativeProgram) -> DerivativeProgram:
+        return _read_a_different_forward_value(
+            program, source.capture_value_id, "ghost_value"
+        )
+
+    with pytest.raises(AutodiffError) as excinfo:
+        _expand(source, derivative_expansions=[read_an_unproduced_value])
+
+    assert excinfo.value.category == "missing_dependency"
+    assert "ghost_value" in str(excinfo.value)
+
+
 def test_derivative_pass_detaching_the_seed_fails_the_recomputation(
     source: _Source,
 ) -> None:
