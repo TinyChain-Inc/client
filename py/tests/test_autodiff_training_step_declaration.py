@@ -407,6 +407,16 @@ _BARE_EXCEPTION_SCENARIOS = {
     "parameter_entry_unhashable_list": {"parameters": (["w"],)},
     "parameter_entry_unhashable_dict": {"parameters": ({},)},
     "parameter_entry_unhashable_set": {"parameters": ({"w"},)},
+    # A non-`str` key in `inputs` is hashable (dict construction already
+    # requires that), so it survives declaration until the "not a key of
+    # inputs" message tries to `sorted()` the mixed-type key set -- which
+    # raises a bare `TypeError` for incomparable types. Only a *mix* of key
+    # types reproduces the crash: a single non-str key sorts fine alone, so
+    # there is no separate unhashable-adjacent variant to add here.
+    "inputs_key_not_a_str": {
+        "inputs": {1: {"dtype": "f32", "shape": ()}, "w": {"dtype": "f32", "shape": (3, 4)}},
+        "parameters": ("absent",),
+    },
 }
 
 
