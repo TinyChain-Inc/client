@@ -44,6 +44,7 @@ collaborator raised it, unchanged.
 from __future__ import annotations
 
 import inspect
+import keyword
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Optional
@@ -89,6 +90,27 @@ def validate_declaration(
     _validate_loss_signature(loss, input_names)
 
 
+def _require_identifier(name: str, *, role: str) -> None:
+    """Require *name* (already known to be a `str`) to be a usable identifier.
+
+    A name that is not a valid, non-keyword Python identifier cannot be
+    bound as a keyword argument. Left unchecked here, it is only caught
+    later -- by `_validate_loss_signature` for a loss with exact keyword
+    parameters, or not at all for a loss accepting `**kwargs`, in which case
+    it reaches `TensorGraphBuilder.input` and fails there with a raw,
+    uncategorized `ValueError`/`TypeError`. *role* names which declaration
+    the offending entry came from (`"inputs"` or `"parameters"`) so the
+    message points at the actual mistake.
+    """
+    if not name or not name.isidentifier() or keyword.iskeyword(name):
+        raise AutodiffError(
+            "invalid_training_declaration",
+            f"{role} declares a name {name!r}, which is not usable as a "
+            "keyword argument: a declared name must be a non-empty, "
+            "non-keyword Python identifier",
+        )
+
+
 def _validate_declaration_set(
     inputs: object, parameters: object
 ) -> tuple[str, ...]:
@@ -113,6 +135,26 @@ def _validate_declaration_set(
     where a name was expected -- would otherwise raise a bare `TypeError` from
     those checks themselves rather than being reported as the declaration
     mistake it is.
+
+    Every `inputs` key and `parameters` entry is also required to be a valid,
+    non-keyword Python identifier, checked here rather than left to whatever
+    happens to notice it later. A loss declaring exact keyword parameters
+    cannot bind a name like `"a b"`, so `_validate_loss_signature` rejects it
+    first and no builder is ever reached -- but a loss accepting `**kwargs`
+    binds any string key at all, so the same declaration would otherwise
+    reach `TensorGraphBuilder.input`, which fails with a raw, uncategorized
+    `ValueError`/`TypeError`. This mirrors
+    `training._validate_optimizer_input_name`, which validates
+    `optimizer_inputs` names in their own right for the identical reason.
+    Unlike `optimizer_inputs`, which is an independent name namespace,
+    `parameters` here is not a second namespace to check for its own sake --
+    every `parameters` entry is already required to be a key of `inputs`
+    (checked below), so a bad `parameters` name is necessarily also a bad
+    `inputs` key. The `parameters` entry is still checked explicitly rather
+    than relying on that coupling alone, so the failure is attributed to
+    whichever declaration actually names the bad identifier, and to keep the
+    two loops symmetric rather than one depending on an invariant enforced
+    only by the other.
     """
     if not isinstance(inputs, Mapping) or not inputs:
         raise AutodiffError(
@@ -128,6 +170,7 @@ def _validate_declaration_set(
                 f"{type(key).__name__!r}; each declared input name must be "
                 "a str",
             )
+        _require_identifier(key, role="inputs")
     input_names = tuple(inputs)
 
     if isinstance(parameters, str) or not isinstance(parameters, Sequence):
@@ -152,6 +195,7 @@ def _validate_declaration_set(
                 f"{type(name).__name__!r}; each parameter name must be a "
                 "str",
             )
+        _require_identifier(name, role="parameters")
         if name in seen:
             raise AutodiffError(
                 "invalid_training_declaration",
