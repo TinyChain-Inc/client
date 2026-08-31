@@ -31,15 +31,26 @@ Steps 1-3 run to completion before step 4, and step 4 runs to completion
 before any builder is entered -- `validate_declaration` returns normally or
 raises; it never calls the loss callable, so a rejected declaration can never
 have caused a side effect in the caller's loss body.
+
+Once a declaration validates, `trace_loss` performs the single typed trace:
+one `TensorGraphBuilder` declares every input, invokes the loss exactly once
+by keyword, and finalizes the resulting graph through the builder's typed
+`build(outputs=[...])` path -- never reimplemented here. `invalid_loss_output`
+is this module's own category for a loss that does not return a single
+`Tensor`; every other failure inside the traced call belongs to whichever
+collaborator raised it, unchanged.
 """
 
 from __future__ import annotations
 
 import inspect
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Optional
 
+from .graph import TensorGraph, TensorGraphBuilder
 from .protocol import AutodiffError
+from ..state import Scalar
 from .training import (
     Optimizer,
     _resolve_optimizer_inputs,
@@ -217,3 +228,79 @@ def _validate_loss_signature(
             f"loss callable {loss!r} must accept exactly the declared "
             f"input names {input_names!r} by keyword: {exc}",
         ) from exc
+
+
+@dataclass(frozen=True)
+class TracedLoss:
+    """The finalized typed graph produced by tracing a training-step loss.
+
+    ``input_value_ids`` maps every declared input name to its stable value id
+    in ``graph``, covering every declared name exactly once regardless of
+    whether the loss body actually reads it -- so a consumer binds runtime
+    values by name instead of scanning ``graph.inputs`` or inferring order.
+    ``loss_value_id`` is the value id of the single `Tensor` the loss
+    returned, and is also ``graph.outputs``'s only element.
+    """
+
+    graph: TensorGraph
+    loss_value_id: str
+    input_value_ids: Mapping[str, str]
+
+
+def trace_loss(
+    *, inputs: Mapping[str, object], input_names: Sequence[str], loss: Callable[..., object]
+) -> TracedLoss:
+    """Trace *loss* exactly once inside exactly one `TensorGraphBuilder`.
+
+    By the time this runs, `validate_declaration` has already validated the
+    declaration set, every typed input spec, the optimizer contract, and the
+    loss signature -- so this never re-checks any of that, and never reaches
+    a loss body that a declaration mistake should have prevented.
+
+    One builder is opened; every entry of *input_names* is declared through
+    `builder.input(name, **spec)`, in *input_names* order (already the
+    declaration's own mapping-insertion order, per `validate_declaration`);
+    *loss* is invoked exactly once, by keyword, with one declared `Tensor`
+    per name and no positional arguments. The call is not wrapped: an
+    exception raised inside the loss body -- `AutodiffError` or not,
+    interpreter control flow included -- propagates unchanged (see §13.2).
+
+    A return value that is not a single `Tensor` raises `invalid_loss_output`
+    naming the type actually returned. Otherwise the returned `Tensor` is
+    built as the graph's sole selected output through the builder's typed
+    `build(outputs=[...])` path, so typed finalization runs and rejects any
+    reachable value with incomplete dtype/shape metadata under that path's
+    own category -- never reimplemented here.
+    """
+    with TensorGraphBuilder() as builder:
+        input_tensors = {
+            name: builder.input(name, **_typed_input_spec(inputs[name], label=name))
+            for name in input_names
+        }
+        result = loss(**input_tensors)
+
+    # `Tensor` is a `Scalar` (see `collection/tensor/core.py`'s MRO), and every
+    # reduction -- `mean`, `max`, `min` -- is documented to return `Scalar`
+    # even under an active trace, so a fully reduced loss (the normal shape
+    # for a scalar loss) is legitimately a `Scalar`, never a `Tensor`.
+    # Checking the common base accepts both without accepting anything an
+    # ordinary Python collaborator could hand back by mistake: `None`, a
+    # tuple, a list, a plain number, and a bare `object()` are not `Scalar`.
+    if not isinstance(result, Scalar):
+        raise AutodiffError(
+            "invalid_loss_output",
+            f"loss callable {loss!r} must return a single Tensor, got "
+            f"{type(result).__name__!r}",
+        )
+
+    graph = builder.build(outputs=[result])
+
+    input_value_ids = {
+        name: builder.value_id(tensor) for name, tensor in input_tensors.items()
+    }
+
+    return TracedLoss(
+        graph=graph,
+        loss_value_id=builder.value_id(result),
+        input_value_ids=input_value_ids,
+    )
