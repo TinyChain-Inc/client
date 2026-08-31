@@ -337,6 +337,28 @@ def trace_loss(
             f"{type(result).__name__!r}",
         )
 
+    # `result` being a `Scalar` only proves its *type* is right -- it does not
+    # prove *this* trace produced it. Any Scalar subclass a caller has lying
+    # around (a Tensor traced by a different builder, a bare tc.String, a
+    # tc.Number) passes the check above unchanged. TensorGraphBuilder.value_id
+    # raises a bare ValueError for an object it never traced; that failure is
+    # not this stage's to leave uncategorized (NFR-129-004), and
+    # TensorGraphBuilder itself is off-limits to change, so it is caught here,
+    # at this stage's own call site, and reported as the second half of the
+    # same invalid_loss_output validation -- worded to be told apart from the
+    # wrong-type case above: this one names that the value was never traced
+    # by this trace, not that its type was wrong.
+    try:
+        builder.value_id(result)
+    except ValueError as exc:
+        raise AutodiffError(
+            "invalid_loss_output",
+            f"loss callable {loss!r} returned a {type(result).__name__!r} "
+            "scalar this trace never produced: the returned value must be "
+            "one this trace itself derived from the declared inputs, not an "
+            "untraced or foreign value",
+        ) from exc
+
     graph = builder.build(outputs=[result])
 
     input_value_ids = {
