@@ -95,9 +95,18 @@ def _context(node: TensorNodeRecord, inputs: list[object]) -> OperationContext:
     )
 
 
-def _assert_handler_matches_dispatcher(node: TensorNodeRecord, inputs: list[object]) -> None:
-    """The AC-56 delegation proof: a handler's own output vs. the dispatcher's, same node."""
-    registry = training_step_registry()
+def _assert_handler_matches_dispatcher(
+    node: TensorNodeRecord, inputs: list[object], *, registry=None
+) -> None:
+    """The AC-56 delegation proof: a handler's own output vs. the dispatcher's, same node.
+
+    Defaults to `training_step_registry()`; `FillOperator` is outside that
+    registry's measured set (the §17.5 loss never generates a fill node), so
+    its delegation is instead proven against `reduction_capable_registry()`,
+    which already resolves `FillOperator` unchanged from #128.
+    """
+    if registry is None:
+        registry = training_step_registry()
     handler = registry.lookup(node.operator)
     context = _context(node, inputs)
 
@@ -257,6 +266,9 @@ def test_div_handler_matches_dispatcher_for_a_right_literal():
 
 
 def test_fill_handler_matches_dispatcher():
+    # FillOperator is outside `training_step_registry`'s measured set (the
+    # §17.5 loss never generates a fill node), so this delegation proof runs
+    # against `reduction_capable_registry`, which already resolves it.
     node = _node(
         "n0",
         "v0",
@@ -266,7 +278,7 @@ def test_fill_handler_matches_dispatcher():
         out_shape=(2, 2),
     )
 
-    _assert_handler_matches_dispatcher(node, [])
+    _assert_handler_matches_dispatcher(node, [], registry=reduction_capable_registry())
 
 
 # --------------------------------------------------------------------------
