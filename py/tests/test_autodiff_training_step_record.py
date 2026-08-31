@@ -769,10 +769,27 @@ def test_lowerings_receive_no_injection_when_none_was_supplied(
 def test_derivative_lowering_receives_the_lowered_forward_graph_and_seed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """FR-129-008, under conditions where lowered and source actually differ.
+
+    Both sequences supply a rebuilding pass, so `lowered_forward_graph` and
+    `lowered_derivative_program` are distinct objects from the source
+    artifacts. An implementation that lowered `derivative.program` or passed
+    `forward_graph=traced.graph` -- either of which silently discards a whole
+    expansion sequence -- fails here, and passes if the fixture supplies no
+    pass at all.
+    """
     seams = _record_seams(monkeypatch)
-    record = _compile_two_parameters()
+    record = _compile_two_parameters(
+        forward_expansions=(_rebuild_graph_pass,),
+        derivative_expansions=(_rebuild_derivative_pass,),
+    )
+
+    assert record.lowered_forward_graph is not record.source_forward_graph
+    assert record.lowered_derivative_program is not record.source_derivative_program
 
     call = seams.of("lower_derivative_program")[0]
+    lowered = call.args[0] if call.args else call.kwargs["program"]
+    assert lowered is record.lowered_derivative_program
     assert call.kwargs["forward_graph"] is record.lowered_forward_graph
     assert tuple(call.kwargs["seed_value_ids"]) == record.seed_value_ids
     assert tuple(call.kwargs["outputs"]) == record.derivative.selected_outputs
@@ -797,10 +814,21 @@ def _rebuild_graph_pass(graph: TensorGraph) -> TensorGraph:
     expanded one is indistinguishable while every pass is the identity, so the
     tests that follow the expanded artifact through the seam use this pass
     rather than an identity one.
+
+    Identity under no passes is not merely a weak fixture here, it is the
+    *wrong* one: Inv-10 makes the source and lowered artifacts the same object
+    when no pass was supplied, so `lowered is record.lowered_...` holds for an
+    implementation that discarded the whole expansion sequence. Only a pass
+    that returns a distinct object can tell the two apart.
     """
     return TensorGraph(
         nodes=list(graph.nodes), inputs=list(graph.inputs), outputs=list(graph.outputs)
     )
+
+
+def _rebuild_derivative_pass(program: DerivativeProgram) -> DerivativeProgram:
+    """The same technique for a derivative program: equal, distinct object."""
+    return dataclasses.replace(program)
 
 
 def test_each_update_lowering_selects_only_that_updates_value(
