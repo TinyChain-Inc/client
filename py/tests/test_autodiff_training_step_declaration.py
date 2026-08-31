@@ -401,6 +401,12 @@ _BARE_EXCEPTION_SCENARIOS = {
     # C-implemented callable whose signature cannot be retrieved. `min` is a
     # plausible caller mistake for a loss argument.
     "loss_signature_unretrievable": {"loss": min},
+    # An unhashable parameter entry raises a bare `TypeError` from the
+    # membership tests before any category can be assigned. A nested list is
+    # a plausible caller typo for a parameter name.
+    "parameter_entry_unhashable_list": {"parameters": (["w"],)},
+    "parameter_entry_unhashable_dict": {"parameters": ({},)},
+    "parameter_entry_unhashable_set": {"parameters": ({"w"},)},
 }
 
 
