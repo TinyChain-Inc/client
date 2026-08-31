@@ -117,7 +117,7 @@ from typing import Optional
 
 from .dependencies import DependencyAnalysis, analyze_derivative_dependencies
 from .generate import generate
-from .graph import TensorGraph, TensorGraphBuilder
+from .graph import TensorGraph, TensorGraphBuilder, TensorNodeRecord
 from .protocol import AutodiffError
 from .reverse import DerivativeProgram
 from ..state import Scalar
@@ -853,6 +853,140 @@ def _same_node_definition(left: object, right: object) -> bool:
     )
 
 
+def _validate_artifact_shape(
+    result: object, *, label: str, position: int, sequence: str
+) -> None:
+    """Require a pass result to have the shape every later rule reads.
+
+    The type check that runs before this one proves only that the result is a
+    `TensorGraph` or a `DerivativeProgram`. Neither type validates what it is
+    constructed from, so an artifact of exactly the right type can still hold a
+    string where a node belongs, or a bare string where a `(value id,
+    typespec)` pair belongs. Every rule after this point reads
+    ``node.node_id``, ``node.output_value_id``, or unpacks a declared input,
+    and would fail on such an artifact with a raw `AttributeError` or
+    `ValueError` from inside a framework validator -- an uncategorized failure
+    for what is a pass breaching its contract (§8.6's "malformed artifact",
+    FR-129-020). This is the same care §9.1 already takes over a malformed
+    label, applied to the artifact.
+
+    The same applies to the two derivative-program fields something downstream
+    reads: ``output_gradients``, which the gradient rule compares as
+    identifiers, and ``value_typespecs``, which the recomputation's
+    `analyze_derivative_dependencies` resolves metadata through -- a table that
+    is not a mapping fails there, inside a collaborator, rather than here. A
+    gradient entry is required to be a `str` even though the field is annotated
+    `list[str | None]`: reverse traversal never emits `None`, raising
+    `missing_derivative_behavior` instead, so no artifact reaching this stage
+    can carry one, and the gradient-order rule would reject it regardless.
+    ``gradients`` and ``metadata`` are deliberately **not** checked -- nothing
+    on this path reads either, and guarding a field no rule consults would be
+    inventing a contract rather than protecting one.
+
+    It is deliberately shape-only: what the containers hold, and nothing about
+    what the identifiers inside them mean. Whether ids are unique, carried
+    forward for the same semantic node or value, or still reachable is owned by
+    `_validate_occupied_ids` and the per-artifact semantic validators, and
+    restating any of it here would create a second owner for a rule that has
+    one.
+    """
+    nodes = result.nodes
+    if isinstance(nodes, str) or not isinstance(nodes, Sequence):
+        raise _expansion_violation(
+            label=label,
+            position=position,
+            sequence=sequence,
+            detail=(
+                f"returned an artifact whose node list is a "
+                f"{type(nodes).__name__!r}, not a sequence of nodes"
+            ),
+        )
+    for index, node in enumerate(nodes):
+        if not isinstance(node, TensorNodeRecord):
+            raise _expansion_violation(
+                label=label,
+                position=position,
+                sequence=sequence,
+                detail=(
+                    f"returned an artifact whose node at index {index} is "
+                    f"{node!r}, a {type(node).__name__!r} rather than a "
+                    "TensorNodeRecord"
+                ),
+            )
+
+    if isinstance(result, DerivativeProgram):
+        gradients = result.output_gradients
+        if isinstance(gradients, str) or not isinstance(gradients, Sequence):
+            raise _expansion_violation(
+                label=label,
+                position=position,
+                sequence=sequence,
+                detail=(
+                    f"returned a program whose gradient list is a "
+                    f"{type(gradients).__name__!r}, not a sequence of value ids"
+                ),
+            )
+        for index, gradient in enumerate(gradients):
+            if not isinstance(gradient, str):
+                raise _expansion_violation(
+                    label=label,
+                    position=position,
+                    sequence=sequence,
+                    detail=(
+                        f"returned a program whose gradient at index {index} is "
+                        f"{gradient!r}, a {type(gradient).__name__!r} rather "
+                        "than a value id"
+                    ),
+                )
+
+        typespecs = result.value_typespecs
+        if not isinstance(typespecs, Mapping):
+            raise _expansion_violation(
+                label=label,
+                position=position,
+                sequence=sequence,
+                detail=(
+                    f"returned a program whose value typespec table is a "
+                    f"{type(typespecs).__name__!r}, not a mapping of value id "
+                    "to typespec"
+                ),
+            )
+        return
+
+    if not isinstance(result, TensorGraph):
+        return
+
+    declared_inputs = result.inputs
+    if isinstance(declared_inputs, str) or not isinstance(declared_inputs, Sequence):
+        raise _expansion_violation(
+            label=label,
+            position=position,
+            sequence=sequence,
+            detail=(
+                f"returned a graph whose declared input list is a "
+                f"{type(declared_inputs).__name__!r}, not a sequence of "
+                "declarations"
+            ),
+        )
+    for index, declaration in enumerate(declared_inputs):
+        if (
+            isinstance(declaration, str)
+            or not isinstance(declaration, Sequence)
+            or len(declaration) != 2
+            or not isinstance(declaration[0], str)
+        ):
+            raise _expansion_violation(
+                label=label,
+                position=position,
+                sequence=sequence,
+                detail=(
+                    f"returned a graph whose declared input at index {index} "
+                    f"is {declaration!r}, not a (value id, typespec) pair "
+                    "whose value id is a str"
+                ),
+            )
+
+
 def _validate_occupied_ids(
     result: object, pass_input: object, *, label: str, position: int, sequence: str
 ) -> None:
@@ -1156,6 +1290,9 @@ def _apply_expansion_sequence(
                     f"{expected_type.__name__} it was given"
                 ),
             )
+        _validate_artifact_shape(
+            current, label=label, position=position, sequence=sequence
+        )
         _validate_occupied_ids(
             current, pass_input, label=label, position=position, sequence=sequence
         )
