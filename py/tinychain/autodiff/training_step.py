@@ -173,12 +173,16 @@ def _validate_loss_signature(
     is known to be sound. `inspect.signature` on a non-callable raises
     `TypeError`, which is caught here exactly like a genuine binding mismatch,
     so a loss that is not callable is reported as an invalid loss signature
-    rather than escaping as a bare `TypeError`.
+    rather than escaping as a bare `TypeError`. Signature *retrieval* can also
+    fail on its own with `ValueError` -- for a C-implemented callable such as
+    `min` that carries no introspectable signature -- and that is caught here
+    too, so both failure modes are reported as an invalid loss signature
+    rather than one of them escaping bare.
     """
     try:
         signature = inspect.signature(loss)
         signature.bind(**dict.fromkeys(input_names))
-    except TypeError as exc:
+    except (TypeError, ValueError) as exc:
         raise AutodiffError(
             "invalid_loss_signature",
             f"loss callable {loss!r} must accept exactly the declared "
