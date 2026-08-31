@@ -39,6 +39,28 @@ by keyword, and finalizes the resulting graph through the builder's typed
 is this module's own category for a loss that does not return a single
 `Tensor`; every other failure inside the traced call belongs to whichever
 collaborator raised it, unchanged.
+
+`differentiate_loss` is the stage after that: it mints the seed value id,
+requests the VJP from the **source** forward graph, and checks the minted
+seed against the derivative program that comes back. Three properties of it
+are deliberate and should survive a later tidy-up:
+
+* The seed is **minted**, never taken from the caller (D-3, Inv-11), and its
+  concrete spelling is an implementation detail. Uniqueness comes from the
+  candidate search against the source graph plus the post-generation check --
+  never from the shape of the identifier -- so the spelling may be changed
+  freely, and nothing outside this module may depend on it.
+* `generate` is bound here as a module-level name and called bare. That
+  binding is what lets a test substitute a controlled `DerivativeProgram`,
+  which is the only way the post-generation collision path can be exercised
+  at all: `generate` performs no seed-collision check of its own, which is
+  precisely why FR-129-019 requires one here. Rewriting the call as
+  `generate_module.generate(...)` or importing it inside the function body
+  would silently disable that coverage.
+* `graph_id` defaults to `None` and is passed through untouched, so
+  `DerivativeMetadata.source_graph_id` stays the content hash reverse
+  traversal derives. Minting an id here instead would make two identical
+  compilations disagree and break Inv-13's conditional determinism.
 """
 
 from __future__ import annotations
@@ -49,8 +71,10 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Optional
 
+from .generate import generate
 from .graph import TensorGraph, TensorGraphBuilder
 from .protocol import AutodiffError
+from .reverse import DerivativeProgram
 from ..state import Scalar
 from .training import (
     Optimizer,
@@ -369,4 +393,165 @@ def trace_loss(
         graph=graph,
         loss_value_id=builder.value_id(result),
         input_value_ids=input_value_ids,
+    )
+
+
+# The first candidate the seed minter offers, and the stem every later
+# candidate is built from. The value is an implementation detail in the
+# strongest sense: §8.3 makes the *search* and the post-generation check the
+# source of uniqueness, and explicitly declines to promise any namespace to an
+# expansion pass, which is a plain callable and exposes no such protocol. It
+# is written as a constant here so the search reads as one rule rather than
+# two string literals, not because anything may rely on it. It is chosen to
+# sit outside the namespaces the surrounding machinery already mints into --
+# the tracer's `v…`/`n…`, reverse traversal's `d…`/`dn…`, and expansion's
+# `exn`/`exv` -- which lowers the odds of a collision but proves nothing on
+# its own; that is what the search and the check are for.
+_SEED_VALUE_ID_STEM = "tsv"
+
+
+@dataclass(frozen=True)
+class SourceDerivative:
+    """The source derivative program and the seed it was generated against.
+
+    ``program`` is the object `generate` returned, not a copy of it: the
+    source artifacts are never rewritten (Inv-1), so there is nothing to copy
+    them for. ``seed_value_id`` is the framework-minted identifier that is
+    unique against both source artifacts -- against the forward graph by
+    construction, and against this program by the check that ran before this
+    record existed. ``seed_label`` is the caller's display name, carried for
+    provenance and messages only; it is never an identifier (Inv-11).
+    """
+
+    program: DerivativeProgram
+    seed_value_id: str
+    seed_label: str
+
+
+def _source_value_typespecs(graph: TensorGraph) -> dict[str, dict[str, object]]:
+    """Map every typed value of *graph* to its typespec.
+
+    Declared inputs first, then node outputs, exactly as reverse traversal's
+    own `_value_typespecs` composes them -- so the typespec this module reads
+    for the loss output is the same one the traversal will read for it. A
+    loss value that is itself a declared input (a loss returning a parameter
+    unchanged) therefore resolves through `graph.inputs`, not only through
+    the node table.
+    """
+    typespecs: dict[str, dict[str, object]] = {}
+    for value_id, typespec in graph.inputs:
+        if typespec is not None:
+            typespecs[value_id] = dict(typespec)
+    for node in graph.nodes:
+        if node.output_typespec is not None:
+            typespecs[node.output_value_id] = dict(node.output_typespec)
+    return typespecs
+
+
+def _occupied_value_ids(graph: TensorGraph) -> set[str]:
+    """The value ids *graph* already uses: declared inputs and node outputs.
+
+    Exactly the set §8.3 names. Node *ids* are deliberately not included:
+    they live in a different namespace from value ids, and treating them as
+    occupied would narrow the candidate space for no stated reason.
+    """
+    occupied = {value_id for value_id, _ in graph.inputs}
+    occupied.update(node.output_value_id for node in graph.nodes)
+    return occupied
+
+
+def _mint_seed_value_id(graph: TensorGraph) -> str:
+    """Mint a value id that *graph* does not already use.
+
+    A deterministic search from `_SEED_VALUE_ID_STEM + "0"` onward: the first
+    unoccupied candidate wins, so two calls on equal graphs mint the same
+    seed (Inv-13) and the result depends on the occupied set alone, never on
+    how many times this function has run. The graph is finite and the
+    candidate space is unbounded, so the loop always terminates.
+
+    This establishes uniqueness against the forward graph only. Uniqueness
+    against the derivative program cannot be established here -- that program
+    does not exist yet -- which is why `differentiate_loss` checks it the
+    moment `generate` returns.
+    """
+    occupied = _occupied_value_ids(graph)
+    index = 0
+    while True:
+        candidate = f"{_SEED_VALUE_ID_STEM}{index}"
+        if candidate not in occupied:
+            return candidate
+        index += 1
+
+
+def _check_seed_against_derivative_program(
+    program: DerivativeProgram, seed_value_id: str
+) -> None:
+    """Fail if the derivative program produces the minted seed (FR-129-019).
+
+    Runs immediately after `generate` returns and **before** dependency
+    analysis or any expansion pass, so a seed that is simultaneously a free
+    input and a produced value is reported as the identity defect it is
+    rather than surfacing later as an analysis failure on a value the caller
+    believed was fresh.
+
+    Every node id and every node output value id the program produces is
+    checked. `program.value_typespecs` deliberately is not: reverse traversal
+    records the seed's own typespec there for every program it produces, so
+    reading that table would reject every derivative ever generated.
+    """
+    for node in program.nodes:
+        for produced_id in (node.node_id, node.output_value_id):
+            if produced_id == seed_value_id:
+                raise AutodiffError(
+                    "ambiguous_producer",
+                    f"the minted seed value id {seed_value_id!r} collides with "
+                    f"{produced_id!r}, which the source derivative program "
+                    "produces: the seed must be a free input of that program, "
+                    "never a value it computes",
+                )
+
+
+def differentiate_loss(
+    *,
+    traced: TracedLoss,
+    parameters: Sequence[str],
+    seed_label: str = "seed",
+    graph_id: Optional[str] = None,
+) -> SourceDerivative:
+    """Generate the source derivative program for *traced*, per §8.3/§8.4.
+
+    The seed is minted against the source forward graph; the VJP is requested
+    from that same graph object, with `wrt` equal to the declared parameters'
+    value ids in *parameters* order and the seed typespec taken from the loss
+    output's own typespec; and the minted seed is checked against everything
+    the returned program produces before this function returns.
+
+    Neither source artifact is rewritten (Inv-1): the graph is handed to
+    `generate` as-is and the program comes back out unchanged. *parameters*
+    order is the `wrt` order, which becomes `metadata.wrt_signature` and,
+    downstream, the gradient and record order -- the single chain of
+    equalities Inv-6 rests on.
+
+    `generate`'s own failures propagate unchanged, with their own categories
+    and messages: `missing_derivative_behavior` for a declared parameter that
+    receives no gradient, and the tracing/typing categories for a loss output
+    this transform cannot differentiate (§13.2, §13.3).
+    """
+    seed_value_id = _mint_seed_value_id(traced.graph)
+    seed_typespec = _source_value_typespecs(traced.graph).get(traced.loss_value_id)
+    wrt = [traced.input_value_ids[name] for name in parameters]
+
+    program = generate(
+        traced.graph,
+        traced.loss_value_id,
+        wrt,
+        seed_value_id,
+        seed_typespec=seed_typespec,
+        graph_id=graph_id,
+    )
+
+    _check_seed_against_derivative_program(program, seed_value_id)
+
+    return SourceDerivative(
+        program=program, seed_value_id=seed_value_id, seed_label=seed_label
     )
