@@ -859,16 +859,19 @@ that proves the lowering seam is usable by a generic, non-ILC consumer — it
 is not a shipped `tinychain` API, and a real backend brings its own
 `OperationHandlerRegistry` instead.
 
+This example is structural, not numerical: `bind_input` below is a
+placeholder that hands every free dependency a ones array of its own
+declared shape, purely so the compile can run without a real backend behind
+it. It proves the record's shape -- the three lowered programs and their
+selected outputs -- not any computed value. For a worked, numerically-checked
+run that executes those programs against concrete arrays through
+`lower_graph`/`lower_derivative_program`, see
+`py/tests/test_autodiff_training_step_end_to_end.py`.
+
 ```python
 import numpy as np
 import tinychain as tc
-from tinychain.autodiff import (
-    FusionHook,
-    OperationHandlerRegistry,
-    compile_training_step,
-    lower_derivative_program,
-    lower_graph,
-)
+from tinychain.autodiff import compile_training_step
 from tinychain.autodiff.training import SGD
 
 from tests.autodiff_reference_consumer import training_step_registry
@@ -876,26 +879,32 @@ from tests.autodiff_reference_consumer import training_step_registry
 
 def loss(x: tc.Tensor, y: tc.Tensor, w: tc.Tensor) -> tc.Tensor:
     residual = x @ w - y
-    return (residual * residual).mean()
+    return (residual * residual).mean([0, 1])
 
 
-step = compile_training_step(
-    loss,
-    inputs={
-        "x": {"dtype": "f32", "shape": (4, 3)},
-        "y": {"dtype": "f32", "shape": (4, 1)},
-        "w": {"dtype": "f32", "shape": (3, 1)},
-    },
-    parameters=["w"],
-    optimizer=SGD(learning_rate=0.01),
-    handlers=training_step_registry(),
-)
+def placeholder_binding(dependency: object) -> np.ndarray:
+    """A ones array of the dependency's own declared shape -- structural only."""
+    shape = tuple(int(dimension) for dimension in (dependency.shape or ()))
+    return np.ones(shape, dtype=np.float64)
+
+
+with tc.state.scoped_context():
+    step = compile_training_step(
+        loss,
+        inputs={
+            "x": {"dtype": "f64", "shape": (3, 2)},
+            "y": {"dtype": "f64", "shape": (3, 4)},
+            "w": {"dtype": "f64", "shape": (2, 4)},
+        },
+        parameters=["w"],
+        optimizer=SGD(),
+        optimizer_inputs={"learning_rate": {"dtype": "f64", "shape": []}},
+        handlers=training_step_registry(),
+        bind_input=placeholder_binding,
+    )
 
 # `step.forward`, `step.derivative`, and `step.parameter("w").update` are
-# lowered `LoweredProgram`s; a consumer executes them through its own
-# `lower_graph`/`lower_derivative_program` entry points (see
-# `py/tests/test_autodiff_training_step_end_to_end.py` for a worked,
-# numerically-checked run against `training_step_registry()`).
+# the three lowered `LoweredProgram`s this call produced.
 ```
 
 ### Every reachable operation needs a registered handler, fusion or not
