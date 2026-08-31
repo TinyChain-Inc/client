@@ -74,6 +74,27 @@ def test_autodiff_error_categories_cover_spec_codes():
         #   invalid_update_output:    the update callable did not return a Tensor
         "invalid_update_signature",
         "invalid_update_output",
+        # Reusable training-step compile orchestration. `details` are carried
+        # in the message as the offending declaration, callable, or expansion
+        # pass.
+        #   invalid_training_declaration: `inputs` or `parameters` is empty,
+        #                                 a parameter name is unknown or
+        #                                 repeated, or `parameter(name)` is
+        #                                 asked for an undeclared name
+        #   invalid_loss_signature:      the loss callable cannot be bound
+        #                                 against exactly the declared input
+        #                                 names
+        #   invalid_loss_output:         the loss callable returned something
+        #                                 other than a single Tensor
+        #   expansion_contract_violation: an expansion pass returned the
+        #                                 wrong type, raised a
+        #                                 non-AutodiffError exception, or
+        #                                 produced an artifact missing a
+        #                                 required semantic value
+        "invalid_training_declaration",
+        "invalid_loss_signature",
+        "invalid_loss_output",
+        "expansion_contract_violation",
     }
 
     assert set(AUTODIFF_ERROR_CATEGORIES) == expected
