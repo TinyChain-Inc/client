@@ -75,10 +75,40 @@ provenance: dtype, shape, and provenance already live on the analysis it
 carries and, later, on `LoweredProgram.dependencies` (FR-129-013). What it
 adds are identifiers, because selecting them as forward outputs is an
 obligation of this compiler rather than a re-export of the analysis.
+
+`expand_source_artifacts` is the stage after that, and the first one that runs
+caller-supplied rewrites. Its shape follows from three things the specification
+insists on together:
+
+* With every sequence empty the stage is **inert**: it returns the source
+  artifacts themselves, the same objects, so Inv-10 is observable by identity
+  rather than by comparison. With a non-empty sequence the first pass receives
+  a deep copy instead, because a pass is caller code that may mutate what it is
+  handed and the source artifacts are never rewritten (Inv-1, FR-129-004).
+  Those two rules are not in tension: the copy exists precisely because a pass
+  does, so there is nothing to copy for when none runs.
+* Every result is validated **between** passes, so a failure names the pass and
+  its zero-based position and no later pass ever sees a broken artifact. The
+  identifier rules are stated in `_validate_occupied_ids`, and the one that
+  looks too weak on first reading -- a value id keeps its *role*, not its
+  producing node -- is the one that lets this compiler compose with issue
+  #128's shipped passes at all. That docstring explains why, with the example;
+  read it before tightening anything there.
+* The per-pass checks and the final recomputation are two halves of one
+  contract, and neither is meaningful alone. The checks catch a structurally
+  broken artifact before the next pass compounds it. The recomputation catches
+  what no structural rule can: a pass that stayed entirely well-formed while
+  changing which forward values the derivative actually reads.
+
+`expand_update_graph` is the same machinery for one parameter's update graph,
+with that artifact's own semantic requirement and no recomputation, since an
+update graph has no dependency analysis to preserve.
+
 """
 
 from __future__ import annotations
 
+import copy
 import inspect
 import keyword
 from collections.abc import Callable, Mapping, Sequence
@@ -666,3 +696,619 @@ def analyze_source_captures(
         forward_capture_value_ids=forward_capture_value_ids,
         forward_selected_outputs=(loss_value_id,) + forward_capture_value_ids,
     )
+
+
+@dataclass(frozen=True)
+class ExpandedArtifacts:
+    """The artifacts the lowering phase consumes, plus the recomputed analysis.
+
+    ``lowered_forward_graph`` and ``lowered_derivative_program`` are the source
+    artifacts themselves when the matching sequence is empty -- the same
+    objects, not copies (Inv-10). With a non-empty sequence they are whatever
+    the last pass returned, validated.
+
+    ``analysis`` is the recomputation of §8.6 against these two artifacts and
+    the minted seed. It is carried rather than recomputed by the caller because
+    it is the evidence for the equality this stage just enforced, and because
+    lowering needs the same answer the check was made against.
+
+    ``forward_pass_labels`` and ``derivative_pass_labels`` are the §9.1 labels
+    of the passes that actually ran, in application order, for provenance. A
+    label is not an identifier and nothing may key off it: two passes may
+    legitimately carry the same label, which is why the position is what
+    distinguishes them in every message.
+    """
+
+    lowered_forward_graph: TensorGraph
+    lowered_derivative_program: DerivativeProgram
+    analysis: DependencyAnalysis
+    forward_pass_labels: tuple[str, ...]
+    derivative_pass_labels: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ExpandedUpdate:
+    """One parameter's expanded update graph and the labels that produced it.
+
+    ``lowered_graph`` is the source update graph itself when the sequence is
+    empty, for the same reason `ExpandedArtifacts` carries the source
+    artifacts: the stage is inert by default (Inv-10).
+    """
+
+    lowered_graph: TensorGraph
+    pass_labels: tuple[str, ...]
+
+
+def _pass_label(expansion: object) -> str:
+    """Resolve *expansion*'s display label, per §9.1.
+
+    The non-empty string `__qualname__` when the object carries one --
+    ordinary functions do -- and otherwise the concrete type's `__qualname__`,
+    which is what covers a callable instance, whose type's `__qualname__` is
+    not visible on the instance itself. An empty or non-string `__qualname__`
+    is treated as absent rather than reported verbatim: it would name nothing.
+
+    `getattr` with a default is what keeps a missing attribute from escaping
+    as a raw `AttributeError` (§9.1). Callers resolve the label **before**
+    invoking the pass, so a pass that rewrites its own `__qualname__` while
+    running cannot change how it is named in the failure it caused.
+    """
+    qualname = getattr(expansion, "__qualname__", None)
+    if isinstance(qualname, str) and qualname:
+        return qualname
+    return type(expansion).__qualname__
+
+
+def _expansion_violation(
+    *, label: str, position: int, sequence: str, detail: str
+) -> AutodiffError:
+    """Build the `expansion_contract_violation` every pass failure reports.
+
+    One constructor so the label, the zero-based position, and the sequence
+    name appear in every message in the same shape. FR-129-020 requires all
+    three: the label alone does not identify a pass, because two passes may
+    share one.
+    """
+    return AutodiffError(
+        "expansion_contract_violation",
+        f"expansion pass {label!r} at position {position} of the {sequence} "
+        f"expansion sequence {detail}",
+    )
+
+
+def _invoke_expansion(
+    expansion: Callable[..., object],
+    artifact: object,
+    *,
+    label: str,
+    position: int,
+    sequence: str,
+) -> object:
+    """Call one pass, applying §13.2's rule for an expansion pass.
+
+    An `AutodiffError` is the pass declining an artifact in the framework's own
+    vocabulary and propagates unchanged. Anything else is an uncategorized
+    breach of a declared artifact-to-artifact contract and is wrapped, with the
+    original chained so the pass's own traceback survives. `KeyboardInterrupt`
+    and `SystemExit` are `BaseException`s and are therefore never caught here
+    at all -- interpreter control flow is never wrapped anywhere (§13.2).
+    """
+    try:
+        return expansion(artifact)
+    except AutodiffError:
+        raise
+    except Exception as exc:
+        raise _expansion_violation(
+            label=label,
+            position=position,
+            sequence=sequence,
+            detail=f"raised {type(exc).__name__}: {exc}",
+        ) from exc
+
+
+def _declared_input_value_ids(artifact: object) -> tuple[str, ...]:
+    """The value ids *artifact* declares as free inputs.
+
+    A `DerivativeProgram` declares none: its free values are whatever its nodes
+    read and nothing produces, which is why the seed is checked by its own
+    rule rather than by looking for a declaration that does not exist.
+    """
+    if isinstance(artifact, TensorGraph):
+        return tuple(value_id for value_id, _ in artifact.inputs)
+    return ()
+
+
+def _produced_value_ids(artifact: object) -> tuple[str, ...]:
+    return tuple(node.output_value_id for node in artifact.nodes)
+
+
+def _available_value_ids(artifact: object) -> set[str]:
+    """Every value id *artifact* can supply: a declared input or a node output."""
+    return set(_declared_input_value_ids(artifact)) | set(_produced_value_ids(artifact))
+
+
+def _value_roles(artifact: object) -> dict[str, str]:
+    """Map each value id of *artifact* to the role it plays there.
+
+    Two roles only -- a declared free input, or a value some node produces.
+    Which role a value plays is the part of its identity a pass may not
+    silently change (see `_validate_occupied_ids`).
+    """
+    roles = {
+        value_id: "declared input"
+        for value_id in _declared_input_value_ids(artifact)
+    }
+    for node in artifact.nodes:
+        roles[node.output_value_id] = "node output"
+    return roles
+
+
+def _same_node_definition(left: object, right: object) -> bool:
+    """Whether two records with one node id describe the same computation."""
+    return (
+        type(left.operator) is type(right.operator)
+        and left.op_params == right.op_params
+        and list(left.input_value_ids) == list(right.input_value_ids)
+        and left.output_value_id == right.output_value_id
+    )
+
+
+def _validate_occupied_ids(
+    result: object, pass_input: object, *, label: str, position: int, sequence: str
+) -> None:
+    """Apply §8.6's identifier rules to one pass result.
+
+    Three rules, in the order a reader of a failure would want them:
+
+    1. Node ids and value ids are each unique within the result. A value id is
+       occupied by a declared input as much as by a node output, so the two
+       are checked against one set.
+    2. A **node id** present in both the pass input and the result carries the
+       same definition -- operator type, `op_params`, `input_value_ids`, and
+       `output_value_id`. Reusing an occupied node id for a different
+       computation is the reassignment §8.6 forbids.
+    3. A **value id** present in both keeps its role: a declared input stays a
+       declared input, a produced value stays produced.
+
+    Rule 3 is deliberately about the value's *role*, not about which node
+    produces it, and that is the subtle part. A real expansion pass replaces a
+    node with a region and has the region's terminal node carry the replaced
+    node's own output value id -- issue #128's `expand_mean_graph` emits the
+    loss value `v6` from the freshly minted `exn5` rather than from the `n3` it
+    replaced, and its derivative counterpart does the same for `d2`. Requiring
+    the producing *node* to be unchanged, or its definition to be unchanged,
+    would reject the shipped passes this compiler exists to compose with, so
+    the rule states what actually matters: a value the graph computed must not
+    quietly become a value the caller has to bind, and vice versa. Do not
+    "tighten" this back to producer identity.
+
+    Every comparison is against the **pass input**, not against the source
+    artifact: an id one pass minted is occupied for every pass after it.
+    """
+    node_ids: set[str] = set()
+    for node in result.nodes:
+        if node.node_id in node_ids:
+            raise _expansion_violation(
+                label=label,
+                position=position,
+                sequence=sequence,
+                detail=f"declares the node id {node.node_id!r} more than once",
+            )
+        node_ids.add(node.node_id)
+
+    value_ids: set[str] = set()
+    for value_id in _declared_input_value_ids(result):
+        if value_id in value_ids:
+            raise _expansion_violation(
+                label=label,
+                position=position,
+                sequence=sequence,
+                detail=f"declares the value id {value_id!r} more than once",
+            )
+        value_ids.add(value_id)
+    for node in result.nodes:
+        if node.output_value_id in value_ids:
+            raise _expansion_violation(
+                label=label,
+                position=position,
+                sequence=sequence,
+                detail=(
+                    f"declares the value id {node.output_value_id!r} more than "
+                    "once: an occupied value id may not be minted again"
+                ),
+            )
+        value_ids.add(node.output_value_id)
+
+    occupied_nodes = {node.node_id: node for node in pass_input.nodes}
+    for node in result.nodes:
+        occupied = occupied_nodes.get(node.node_id)
+        if occupied is not None and not _same_node_definition(occupied, node):
+            raise _expansion_violation(
+                label=label,
+                position=position,
+                sequence=sequence,
+                detail=(
+                    f"reassigns the occupied node id {node.node_id!r} to a "
+                    "different definition: an existing id may be carried "
+                    "forward only for the same semantic node"
+                ),
+            )
+
+    occupied_roles = _value_roles(pass_input)
+    for value_id, role in _value_roles(result).items():
+        occupied_role = occupied_roles.get(value_id)
+        if occupied_role is not None and occupied_role != role:
+            raise _expansion_violation(
+                label=label,
+                position=position,
+                sequence=sequence,
+                detail=(
+                    f"reassigns the occupied value id {value_id!r} from a "
+                    f"{occupied_role} to a {role}: an existing id may be "
+                    "carried forward only for the same semantic value"
+                ),
+            )
+
+
+def _validate_forward_result(
+    result: TensorGraph,
+    *,
+    traced: TracedLoss,
+    captures: SourceCaptures,
+    label: str,
+    position: int,
+) -> None:
+    """Require a forward result to still declare and produce what §8.6 names.
+
+    The required set is taken from the **source** artifacts, not from the pass
+    input, so the obligation is the same for every pass in the sequence and a
+    value dropped by pass 0 is reported against pass 0 rather than surviving
+    as an obligation nobody restates.
+    """
+    declared = set(_declared_input_value_ids(result))
+    for value_id in traced.input_value_ids.values():
+        if value_id not in declared:
+            raise _expansion_violation(
+                label=label,
+                position=position,
+                sequence="forward",
+                detail=f"no longer declares the input value {value_id!r}",
+            )
+
+    available = _available_value_ids(result)
+    for value_id in captures.forward_selected_outputs:
+        if value_id not in available:
+            raise _expansion_violation(
+                label=label,
+                position=position,
+                sequence="forward",
+                detail=(
+                    f"no longer produces the value {value_id!r}, which the "
+                    "forward phase must retain"
+                ),
+            )
+
+
+def _mentions_value(program: DerivativeProgram, value_id: str) -> bool:
+    """Whether *program* reads *value_id* anywhere, or reports it as a gradient."""
+    if any(value_id in node.input_value_ids for node in program.nodes):
+        return True
+    return value_id in program.output_gradients
+
+
+def _validate_derivative_result(
+    result: DerivativeProgram,
+    *,
+    derivative: SourceDerivative,
+    label: str,
+    position: int,
+) -> None:
+    """Require a derivative result to keep its gradients and its seed (§8.6).
+
+    Gradient *order* is checked as a whole-sequence equality because order is
+    meaning here (Inv-6): `output_gradients` is `wrt` order is `parameters`
+    order, and a permutation would silently reroute every gradient the record
+    reports. A gradient the source program computed must still be computed;
+    one the source did not compute -- a loss that is a declared parameter makes
+    the seed itself the gradient -- is not invented as a new obligation.
+
+    The seed is checked in both directions Inv-11 states. It must not be
+    produced, as a node id or as a value id, which is the same rule
+    `_check_seed_against_derivative_program` applies to the generated program
+    -- restated here because every pass is a new opportunity to break it. And
+    it must still be *read*, if the source program read it: a program that no
+    longer consumes the seed computes something that is no longer the caller's
+    derivative, even though nothing about it is structurally malformed.
+    """
+    if list(result.output_gradients) != list(derivative.program.output_gradients):
+        raise _expansion_violation(
+            label=label,
+            position=position,
+            sequence="derivative",
+            detail=(
+                "no longer reports the gradients "
+                f"{list(derivative.program.output_gradients)!r} in the same order"
+            ),
+        )
+
+    produced = set(_produced_value_ids(result))
+    source_produced = set(_produced_value_ids(derivative.program))
+    for value_id in derivative.program.output_gradients:
+        if value_id in source_produced and value_id not in produced:
+            raise _expansion_violation(
+                label=label,
+                position=position,
+                sequence="derivative",
+                detail=f"no longer produces the gradient {value_id!r}",
+            )
+
+    seed_value_id = derivative.seed_value_id
+    for node in result.nodes:
+        for produced_id in (node.node_id, node.output_value_id):
+            if produced_id == seed_value_id:
+                raise _expansion_violation(
+                    label=label,
+                    position=position,
+                    sequence="derivative",
+                    detail=(
+                        f"produces {seed_value_id!r}, the minted seed, which "
+                        "must remain a required free input and never a value "
+                        "the program computes"
+                    ),
+                )
+
+    if _mentions_value(derivative.program, seed_value_id) and not _mentions_value(
+        result, seed_value_id
+    ):
+        raise _expansion_violation(
+            label=label,
+            position=position,
+            sequence="derivative",
+            detail=(
+                f"no longer reads {seed_value_id!r}, the minted seed the source "
+                "program required as a free input"
+            ),
+        )
+
+
+def _validate_update_result(
+    result: TensorGraph,
+    *,
+    source_graph: TensorGraph,
+    updated_parameter_value_id: str,
+    label: str,
+    position: int,
+) -> None:
+    """Require an update result to keep its traced inputs and its output (§8.6)."""
+    declared = set(_declared_input_value_ids(result))
+    for value_id in _declared_input_value_ids(source_graph):
+        if value_id not in declared:
+            raise _expansion_violation(
+                label=label,
+                position=position,
+                sequence="update",
+                detail=f"no longer declares the input value {value_id!r}",
+            )
+
+    if updated_parameter_value_id not in _available_value_ids(result):
+        raise _expansion_violation(
+            label=label,
+            position=position,
+            sequence="update",
+            detail=(
+                f"no longer produces {updated_parameter_value_id!r}, the "
+                "updated parameter this update exists to compute"
+            ),
+        )
+
+
+def _apply_expansion_sequence(
+    expansions: Sequence[Callable[..., object]],
+    artifact: object,
+    *,
+    expected_type: type,
+    sequence: str,
+    validate: Callable[[object, str, int], None],
+) -> tuple[object, tuple[str, ...]]:
+    """Apply one sequence in order, validating between passes.
+
+    Two properties of the loop are the contract rather than an implementation
+    detail:
+
+    * With no passes the artifact is returned **as it came in** -- the same
+      object, never a copy -- which is what makes the whole stage inert by
+      default and observable by identity (Inv-10).
+    * With at least one pass, the first pass receives a deep copy. A pass is
+      caller code and may mutate what it is handed; the source artifacts are
+      never rewritten (Inv-1, FR-129-004), and the only way to guarantee that
+      against a hostile or careless pass is to keep the source object out of
+      its reach entirely. Later passes need no further copy: they already
+      receive an artifact that is not the source.
+
+    Validation happens after each pass and before the next one is invoked, so
+    a failure names the pass that caused it and no later pass ever sees a
+    broken artifact (§8.6).
+    """
+    if not expansions:
+        return artifact, ()
+
+    labels: list[str] = []
+    current = copy.deepcopy(artifact)
+    for position, expansion in enumerate(expansions):
+        label = _pass_label(expansion)
+        pass_input = current
+        current = _invoke_expansion(
+            expansion, pass_input, label=label, position=position, sequence=sequence
+        )
+        if not isinstance(current, expected_type):
+            raise _expansion_violation(
+                label=label,
+                position=position,
+                sequence=sequence,
+                detail=(
+                    f"returned {type(current).__name__!r}, not the "
+                    f"{expected_type.__name__} it was given"
+                ),
+            )
+        _validate_occupied_ids(
+            current, pass_input, label=label, position=position, sequence=sequence
+        )
+        validate(current, label, position)
+        labels.append(label)
+
+    return current, tuple(labels)
+
+
+def _applied_passes(labels: Sequence[str]) -> str:
+    """Describe an applied sequence for a message that cannot blame one pass."""
+    if not labels:
+        return "none"
+    return "; ".join(
+        f"{label!r} at position {position}" for position, label in enumerate(labels)
+    )
+
+
+def _preservation_difference(
+    source_analysis: DependencyAnalysis, analysis: DependencyAnalysis
+) -> list[str]:
+    """The value ids the recomputation and the source analysis disagree about.
+
+    Reported as a sorted set of identifiers rather than two whole dependency
+    tuples: the caller needs to know *which* values moved, and the equality
+    that failed is asserted over the dependencies themselves, metadata
+    included, not over this summary.
+    """
+    def value_ids(dependency_analysis: DependencyAnalysis) -> set[str]:
+        return {
+            dependency.value_id
+            for dependency in dependency_analysis.forward_captures
+            + dependency_analysis.seed_inputs
+        }
+
+    return sorted(value_ids(source_analysis).symmetric_difference(value_ids(analysis)))
+
+
+def expand_source_artifacts(
+    *,
+    traced: TracedLoss,
+    derivative: SourceDerivative,
+    captures: SourceCaptures,
+    forward_expansions: Sequence[Callable[[TensorGraph], TensorGraph]] = (),
+    derivative_expansions: Sequence[
+        Callable[[DerivativeProgram], DerivativeProgram]
+    ] = (),
+) -> ExpandedArtifacts:
+    """Apply both source expansion sequences and prove preservation, per §8.6.
+
+    The forward sequence runs first and completely, then the derivative
+    sequence, then the recomputation -- the order of §7.2's items 8, 9, and 10.
+    A forward failure therefore leaves every derivative pass uninvoked, which
+    is the point: a pass is caller code, and the framework does not run more of
+    it after the contract is already broken.
+
+    The recomputation is the second half of one preservation contract. The
+    per-pass checks catch a structurally broken artifact before the next pass
+    compounds it; only this recomputation catches a pass that stayed
+    structurally valid while changing *which* forward values the derivative
+    reads -- a rewritten region that reads a different capture, or one that
+    leaves the seed mentioned but no longer reaching any gradient. The ordered
+    capture set and the seed-input set must equal the source analysis of §8.5
+    exactly, dependency for dependency, and an inequality is this stage's own
+    `expansion_contract_violation`.
+
+    A failure raised by `analyze_derivative_dependencies` itself -- a
+    `missing_dependency`, an `ambiguous_producer` -- propagates unchanged. Those
+    categories belong to the analysis (§13.3); it is reporting on the artifact
+    it was given, not a pass breaching the contract §13.2 wraps, and its
+    message already names the offending value more precisely than a re-wording
+    could.
+
+    The inequality message names every applied pass with its position rather
+    than one culprit. After two sequences have run, responsibility genuinely is
+    not attributable to a single pass -- and with exactly one applied pass, the
+    common case, the message names exactly that pass and its position.
+    """
+    lowered_forward_graph, forward_pass_labels = _apply_expansion_sequence(
+        forward_expansions,
+        traced.graph,
+        expected_type=TensorGraph,
+        sequence="forward",
+        validate=lambda result, label, position: _validate_forward_result(
+            result, traced=traced, captures=captures, label=label, position=position
+        ),
+    )
+
+    lowered_derivative_program, derivative_pass_labels = _apply_expansion_sequence(
+        derivative_expansions,
+        derivative.program,
+        expected_type=DerivativeProgram,
+        sequence="derivative",
+        validate=lambda result, label, position: _validate_derivative_result(
+            result, derivative=derivative, label=label, position=position
+        ),
+    )
+
+    analysis = analyze_derivative_dependencies(
+        lowered_derivative_program,
+        forward_graph=lowered_forward_graph,
+        seed_value_ids=[derivative.seed_value_id],
+        outputs=list(derivative.program.output_gradients),
+    )
+
+    source_analysis = captures.analysis
+    if (
+        analysis.forward_captures != source_analysis.forward_captures
+        or analysis.seed_inputs != source_analysis.seed_inputs
+    ):
+        difference = _preservation_difference(source_analysis, analysis)
+        raise AutodiffError(
+            "expansion_contract_violation",
+            "expansion did not preserve the values the derivative needs: the "
+            "recomputed forward-capture and seed-input sets differ from the "
+            f"source analysis at {difference!r}"
+            f"; applied forward passes: {_applied_passes(forward_pass_labels)}"
+            f"; applied derivative passes: {_applied_passes(derivative_pass_labels)}",
+        )
+
+    return ExpandedArtifacts(
+        lowered_forward_graph=lowered_forward_graph,
+        lowered_derivative_program=lowered_derivative_program,
+        analysis=analysis,
+        forward_pass_labels=forward_pass_labels,
+        derivative_pass_labels=derivative_pass_labels,
+    )
+
+
+def expand_update_graph(
+    *,
+    graph: TensorGraph,
+    updated_parameter_value_id: str,
+    expansions: Sequence[Callable[[TensorGraph], TensorGraph]] = (),
+) -> ExpandedUpdate:
+    """Apply one parameter's update expansion sequence, per §8.6 and §8.7.
+
+    The same identifier and collaborator rules as the source sequences, with
+    the update artifact's own semantic requirement: every input the update was
+    traced with is still declared, and the updated parameter is still produced.
+    There is no recomputation here -- an update graph has no derivative
+    dependency analysis to preserve -- so the per-pass check is the whole
+    contract.
+
+    *graph* is the traced update graph and *updated_parameter_value_id* the
+    single value that update computes; how both were produced belongs to the
+    tracing stage, and this stage states its contract over the artifact alone.
+    """
+    lowered_graph, pass_labels = _apply_expansion_sequence(
+        expansions,
+        graph,
+        expected_type=TensorGraph,
+        sequence="update",
+        validate=lambda result, label, position: _validate_update_result(
+            result,
+            source_graph=graph,
+            updated_parameter_value_id=updated_parameter_value_id,
+            label=label,
+            position=position,
+        ),
+    )
+    return ExpandedUpdate(lowered_graph=lowered_graph, pass_labels=pass_labels)
