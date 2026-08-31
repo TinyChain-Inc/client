@@ -104,6 +104,32 @@ insists on together:
 with that artifact's own semantic requirement and no recomputation, since an
 update graph has no dependency analysis to preserve.
 
+`compile_training_step` is the public entry point, and is nothing more than
+the ordered composition of every stage above with the three lowerings, the
+per-parameter update cycle, and the record assembly (FR-129-001, §13.4). Two
+properties of how it reaches its collaborators are load-bearing:
+
+* `lower_graph`, `lower_derivative_program`, and `trace_parameter_update` are
+  bound here as module-level names and called bare, for the same reason
+  `generate` is. Inv-9 is an **identity** claim -- `handlers`, `fusion`, and
+  `bind_input` reach every lowering as the same objects, never a wrapper, a
+  filter, or a substituted default -- and an identity claim can only be
+  observed at the seam the call passes through. The same binding is what makes
+  "one update traced per parameter, with that parameter's own declared dtype
+  and shape for both typed inputs" observable at all. Rewriting a call as
+  `lowering.lower_graph(...)` or `training.trace_parameter_update(...)`, or
+  importing any of the three inside the function body, would silently disable
+  twenty-one test cases without failing one of them.
+* The record is assembled **once**, at the end, out of local values only. No
+  attribute is populated as the sequence proceeds and no half-filled record
+  exists at any point, so a failure at any stage leaves nothing observable
+  behind: the function returns a complete `CompiledTrainingStep` or raises
+  (§13.4).
+
+The module holds no module-level mutable state -- no cache, no registry, no
+accumulator (Inv-12) -- so two compilations of the same declarations are
+independent of each other and of their order.
+
 """
 
 from __future__ import annotations
@@ -113,21 +139,35 @@ import inspect
 import keyword
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Optional
 
-from .dependencies import DependencyAnalysis, analyze_derivative_dependencies
+from .dependencies import (
+    DependencyAnalysis,
+    ValueDependency,
+    analyze_derivative_dependencies,
+)
 from .generate import generate
 from .graph import TensorGraph, TensorGraphBuilder, TensorNodeRecord
+from .lowering import (
+    FusionHook,
+    LoweredProgram,
+    OperationHandlerRegistry,
+    lower_derivative_program,
+    lower_graph,
+)
 from .protocol import AutodiffError
 from .reverse import DerivativeProgram
 from ..state import Scalar
 from .training import (
     Optimizer,
+    _required_optimizer_input_names,
     _resolve_optimizer_inputs,
     _typed_input_spec,
     _update_label,
     _validate_declared_optimizer_inputs,
     _validate_update_signature,
+    trace_parameter_update,
 )
 
 
@@ -1455,3 +1495,330 @@ def expand_update_graph(
         ),
     )
     return ExpandedUpdate(lowered_graph=lowered_graph, pass_labels=pass_labels)
+
+
+@dataclass(frozen=True)
+class ParameterCompilation:
+    """Everything one declared parameter contributes to a compiled step.
+
+    One of these exists per declared parameter, always, in `parameters` order
+    -- one parameter is a tuple of length one and nothing else about the
+    surrounding record changes (§9.4, Inv-8). There is deliberately no scalar
+    counterpart anywhere in the record.
+
+    ``value_id`` is the parameter's own value id in the forward graph and
+    ``gradient_value_id`` the source derivative program's gradient for exactly
+    that value -- keyed by the value, never by position, so a mis-wiring
+    between two parameters is impossible rather than merely unlikely (Inv-6).
+
+    ``update_input_value_ids`` is the traced update's own per-name mapping,
+    carried through unmodified: ``"parameter"``, ``"gradient"``, and one entry
+    per declared optimizer input. A consumer binds runtime values by the name
+    it chose, never by scanning nodes or parsing an identifier.
+
+    ``source_update_graph`` and ``lowered_update_graph`` are the same object
+    when no update expansion pass was supplied, for the reason
+    `ExpandedUpdate` states. Per-value dependency provenance is not restated
+    here: it is reachable through ``update.dependencies`` (FR-129-013).
+    """
+
+    name: str
+    value_id: str
+    gradient_value_id: str
+    source_update_graph: TensorGraph
+    lowered_update_graph: TensorGraph
+    update: LoweredProgram
+    update_input_value_ids: Mapping[str, str]
+    updated_parameter_value_id: str
+
+
+@dataclass(frozen=True)
+class TrainingStepProvenance:
+    """Enough to identify what produced a record, and to detect a changed one.
+
+    Three sources, and no fourth: the derivative metadata (the source graph id
+    and the two contract versions), the caller's own ordered declarations
+    (parameters, inputs, seed label, and the optimizer's identity), and the
+    labels of the expansion passes that actually ran.
+
+    ``wrt_signature`` is the parameter *value ids* in order and
+    ``parameter_names`` the parameter *names* in the same order; together with
+    `CompiledTrainingStep.parameters` and `derivative.selected_outputs` they
+    are the four carriers Inv-6 requires to agree.
+
+    ``optimizer_input_names`` is read off the optimizer's own declaration
+    rather than off the caller's mapping (FR-129-014). Validation has already
+    proven the two name *sets* agree, so only their order could differ, and
+    the requirement names the optimizer as the source.
+
+    ``update_expansions`` records the update sequence's labels **once**. The
+    same sequence is applied once per parameter, and repeating the labels per
+    parameter would make the record's shape vary with parameter count, which
+    Inv-8 forbids.
+
+    A label is not an identifier: two passes may legitimately carry the same
+    one, so nothing may key off these tuples (§9.1).
+    """
+
+    source_graph_id: str
+    transform_version: str
+    tensor_op_contract_version: str
+    wrt_signature: tuple[str, ...]
+    parameter_names: tuple[str, ...]
+    input_names: tuple[str, ...]
+    seed_value_ids: tuple[str, ...]
+    seed_label: str
+    optimizer_label: str
+    optimizer_input_names: tuple[str, ...]
+    forward_expansions: tuple[str, ...]
+    derivative_expansions: tuple[str, ...]
+    update_expansions: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class CompiledTrainingStep:
+    """One compiled training step: a framework envelope over opaque values.
+
+    The structure, the field names, the ordering, and every identifier in this
+    record are framework-owned and backend-neutral. The `LoweredProgram`
+    values inside it are not: they hold target values the consumer's own
+    handlers produced, which this module carried without importing,
+    inspecting, comparing, hashing, or iterating (Inv-3). The record is
+    therefore not portable between backends, not comparable across consumers,
+    and not serializable, and nothing here claims otherwise (§9.3, NG-7).
+
+    Four artifacts are named separately so a consumer can tell what was
+    traced, what was differentiated, and what was actually lowered, and can
+    diff the pair when an expansion is in play. With no passes supplied the
+    ``source_*`` and ``lowered_*`` members are the *same objects*, which is
+    itself observable (Inv-10).
+
+    ``loss_value_id`` and ``forward_capture_value_ids`` are reported
+    separately and never conflated (FR-129-007): the first is what the step
+    reports to the application, the second what the forward phase must retain
+    for the backward phase. ``forward.selected_outputs`` is exactly
+    ``(loss_value_id,) + forward_capture_value_ids`` (Inv-7), and
+    ``derivative.selected_outputs`` the gradient value ids in ``parameters``
+    order.
+
+    Per-value dependency and capture provenance is deliberately **not**
+    restated: it is already carried per program by `LoweredProgram`'s own
+    ``dependencies``, on ``forward``, on ``derivative``, and on each
+    parameter's ``update`` (FR-129-013). The capture *identifiers* appear
+    because selecting them is an output obligation of this compiler, not a
+    re-export of the analysis.
+    """
+
+    source_forward_graph: TensorGraph
+    source_derivative_program: DerivativeProgram
+    lowered_forward_graph: TensorGraph
+    lowered_derivative_program: DerivativeProgram
+    forward: LoweredProgram
+    derivative: LoweredProgram
+    input_value_ids: Mapping[str, str]
+    loss_value_id: str
+    forward_capture_value_ids: tuple[str, ...]
+    seed_value_ids: tuple[str, ...]
+    parameters: tuple[ParameterCompilation, ...]
+    provenance: TrainingStepProvenance
+
+    def parameter(self, name: str) -> ParameterCompilation:
+        """Return the compilation of the parameter called *name*.
+
+        The by-name accessor §9.4 puts in place of a scalar convenience field.
+        A name that was not declared as a parameter -- including a declared
+        *input* that is not one -- is a declaration mistake and is reported as
+        one, with the names that were declared (FR-129-015).
+        """
+        for compiled in self.parameters:
+            if compiled.name == name:
+                return compiled
+        raise AutodiffError(
+            "invalid_training_declaration",
+            f"{name!r} is not a declared parameter of this training step; "
+            "the declared parameters are "
+            f"{tuple(compiled.name for compiled in self.parameters)!r}",
+        )
+
+
+def compile_training_step(
+    loss: Callable[..., object],
+    *,
+    inputs: Mapping[str, Mapping[str, object]],
+    parameters: Sequence[str],
+    optimizer: Optimizer,
+    optimizer_inputs: Optional[Mapping[str, Mapping[str, object]]] = None,
+    handlers: OperationHandlerRegistry,
+    fusion: Optional[FusionHook] = None,
+    bind_input: Optional[Callable[[ValueDependency], object]] = None,
+    seed_label: str = "seed",
+    forward_expansions: Sequence[Callable[[TensorGraph], TensorGraph]] = (),
+    derivative_expansions: Sequence[
+        Callable[[DerivativeProgram], DerivativeProgram]
+    ] = (),
+    update_expansions: Sequence[Callable[[TensorGraph], TensorGraph]] = (),
+) -> CompiledTrainingStep:
+    """Compile a framework-traced loss into one lowered training step.
+
+    The ordered composition of every stage this module owns, in the order
+    FR-129-001 and §13.4 state and in no other: declaration and optimizer
+    validation, loss-signature binding, one typed trace, seed minting, the VJP
+    from the source graph, the post-generation collision check, source
+    dependency analysis and capture determination, the expansion sequences
+    with their preservation check, forward lowering, derivative lowering, the
+    per-parameter update cycle, and finally the record.
+
+    Nothing here re-implements a check another owner already performs. Every
+    failure a caller can provoke is raised by the stage that owns it, with
+    that stage's own category and message: a malformed declaration or optimizer
+    contract by the validators of `validate_declaration`, a wrong loss
+    signature or return by `trace_loss`, a seed collision by
+    `differentiate_loss`, a pass breaching its contract by
+    `expand_source_artifacts` or `expand_update_graph`, and a malformed
+    `handlers` or `fusion` by the lowering module's own validation as
+    `handler_contract_violation` (FR-129-021). An exception raised inside the
+    loss body or inside the optimizer's `update` body is application logic and
+    propagates entirely unchanged (§13.2).
+
+    `handlers`, `fusion`, and `bind_input` are passed to all three lowerings
+    exactly as given -- the same objects, never wrapped, filtered, or replaced
+    by a default (Inv-9). The forward lowering selects the loss followed by
+    every capture; the derivative lowering receives the *lowered* forward
+    graph and the minted seed and selects the gradients in `parameters` order;
+    each update lowering selects exactly that update's own updated-parameter
+    value (FR-129-008).
+
+    Per parameter, in order, the optimizer update is traced with that
+    parameter's **own** declared dtype and shape for both the `parameter` and
+    the `gradient` typed input, with the declared optimizer inputs shared
+    across parameters (§8.7).
+
+    The record is built once, at the end, from local values: a failure at any
+    stage raises and leaves nothing partially assembled.
+    """
+    validate_declaration(
+        inputs=inputs,
+        parameters=parameters,
+        loss=loss,
+        optimizer=optimizer,
+        optimizer_inputs=optimizer_inputs,
+    )
+
+    # Declaration order for the inputs, caller order for the parameters. The
+    # second is the `wrt` order, and therefore the gradient order, the record
+    # order, and `wrt_signature`'s order -- the single chain Inv-6 rests on.
+    input_names = tuple(inputs)
+    parameter_names = tuple(parameters)
+
+    traced = trace_loss(inputs=inputs, input_names=input_names, loss=loss)
+    derivative = differentiate_loss(
+        traced=traced, parameters=parameter_names, seed_label=seed_label
+    )
+    captures = analyze_source_captures(traced=traced, derivative=derivative)
+    expanded = expand_source_artifacts(
+        traced=traced,
+        derivative=derivative,
+        captures=captures,
+        forward_expansions=forward_expansions,
+        derivative_expansions=derivative_expansions,
+    )
+
+    forward = lower_graph(
+        expanded.lowered_forward_graph,
+        handlers=handlers,
+        outputs=list(captures.forward_selected_outputs),
+        fusion=fusion,
+        bind_input=bind_input,
+    )
+
+    # Keyed by each parameter's own forward value, never by position: this is
+    # the one place a two-parameter step could silently swap its gradients.
+    gradient_value_ids = [
+        derivative.program.gradients[traced.input_value_ids[name]]
+        for name in parameter_names
+    ]
+
+    lowered_derivative = lower_derivative_program(
+        expanded.lowered_derivative_program,
+        forward_graph=expanded.lowered_forward_graph,
+        seed_value_ids=[derivative.seed_value_id],
+        handlers=handlers,
+        outputs=gradient_value_ids,
+        fusion=fusion,
+        bind_input=bind_input,
+    )
+
+    compiled_parameters: list[ParameterCompilation] = []
+    update_pass_labels: tuple[str, ...] = ()
+    for name, gradient_value_id in zip(parameter_names, gradient_value_ids):
+        # Both typed inputs take *this* parameter's declared spec. A gradient
+        # has the shape of the value it is a gradient of, so reusing the first
+        # parameter's spec would mis-type every later one.
+        declared_spec = inputs[name]
+        traced_update = trace_parameter_update(
+            optimizer,
+            parameter=declared_spec,
+            gradient=declared_spec,
+            optimizer_inputs=optimizer_inputs,
+        )
+        expanded_update = expand_update_graph(
+            graph=traced_update.graph,
+            updated_parameter_value_id=traced_update.updated_parameter_id,
+            expansions=update_expansions,
+        )
+        update = lower_graph(
+            expanded_update.lowered_graph,
+            handlers=handlers,
+            outputs=[traced_update.updated_parameter_id],
+            fusion=fusion,
+            bind_input=bind_input,
+        )
+        # The same sequence runs for every parameter, so every iteration
+        # resolves the same labels; provenance records them once (Inv-8).
+        update_pass_labels = expanded_update.pass_labels
+        compiled_parameters.append(
+            ParameterCompilation(
+                name=name,
+                value_id=traced.input_value_ids[name],
+                gradient_value_id=gradient_value_id,
+                source_update_graph=traced_update.graph,
+                lowered_update_graph=expanded_update.lowered_graph,
+                update=update,
+                update_input_value_ids=MappingProxyType(
+                    dict(traced_update.input_value_ids)
+                ),
+                updated_parameter_value_id=traced_update.updated_parameter_id,
+            )
+        )
+
+    metadata = derivative.program.metadata
+    provenance = TrainingStepProvenance(
+        source_graph_id=metadata.source_graph_id,
+        transform_version=metadata.transform_version,
+        tensor_op_contract_version=metadata.tensor_op_contract_version,
+        wrt_signature=tuple(metadata.wrt_signature),
+        parameter_names=parameter_names,
+        input_names=input_names,
+        seed_value_ids=(derivative.seed_value_id,),
+        seed_label=seed_label,
+        optimizer_label=type(optimizer).__name__,
+        optimizer_input_names=_required_optimizer_input_names(optimizer),
+        forward_expansions=expanded.forward_pass_labels,
+        derivative_expansions=expanded.derivative_pass_labels,
+        update_expansions=update_pass_labels,
+    )
+
+    return CompiledTrainingStep(
+        source_forward_graph=traced.graph,
+        source_derivative_program=derivative.program,
+        lowered_forward_graph=expanded.lowered_forward_graph,
+        lowered_derivative_program=expanded.lowered_derivative_program,
+        forward=forward,
+        derivative=lowered_derivative,
+        input_value_ids=MappingProxyType(dict(traced.input_value_ids)),
+        loss_value_id=traced.loss_value_id,
+        forward_capture_value_ids=captures.forward_capture_value_ids,
+        seed_value_ids=(derivative.seed_value_id,),
+        parameters=tuple(compiled_parameters),
+        provenance=provenance,
+    )
