@@ -790,8 +790,16 @@ def test_a_derivative_pass_dropping_the_seed_fails_as_an_expansion_contract_viol
     # A dropped seed is *also* visible to the final preservation
     # recomputation, whose message names the same pass and the same seed --
     # so the category and the message alone cannot tell the per-pass rule
-    # from the recomputation. The next pass never running is what can: §8.6
-    # validates each result before the following pass is invoked.
+    # from the recomputation. The next pass never running is what can.
+    #
+    # This is not over-specification, and it must not be "simplified" into a
+    # message check: §8.6 makes "validate each result before the next pass
+    # runs" a normative requirement in its own right, precisely so that a
+    # broken artifact never compounds through the rest of the sequence.
+    # Asserting the following pass was never invoked is therefore asserting
+    # the contract, not an implementation detail -- and it is the only
+    # assertion available that distinguishes the two owners, so dropping it
+    # would leave the per-pass seed rule certified by nothing at all.
     invoked_after: list[str] = []
 
     def never_reached(program: DerivativeProgram) -> DerivativeProgram:
@@ -1239,10 +1247,12 @@ def test_the_injection_points_reach_the_lowerings_unwrapped() -> None:
     record = _compile(fusion=fusion)
 
     assert offered, "the fusion hook was never offered an operation"
-    # Every one of the three lowerings must have been offered something: the
-    # same object reaches all of them, so a module that threaded it to only
-    # some of them -- or replaced it with a default for one -- is caught here
-    # rather than by the fact that it was offered anything at all.
+    # Containment, not intersection: the derivative lowering re-lowers the
+    # forward capture nodes, so a mere intersection test still sees forward
+    # node ids even when the forward lowering itself was handed no hook at
+    # all. Requiring every source node of every lowering to have been offered
+    # is what catches a hook threaded to only some of the three, or replaced
+    # by a default for one of them.
     for label, program in (
         ("forward", record.forward),
         ("derivative", record.derivative),
