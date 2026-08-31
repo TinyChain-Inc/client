@@ -88,6 +88,13 @@ def _validate_declaration_set(
     string is rejected rather than iterated character by character, matching
     the same convention `training._required_optimizer_input_names` already
     uses for the same mistake.
+
+    Each entry of `parameters` is required to be a `str` before it is hashed
+    or looked up: the duplicate check and the `inputs` membership test both
+    hash the entry, so an unhashable entry -- a `list`, `dict`, or `set` given
+    where a name was expected -- would otherwise raise a bare `TypeError` from
+    those checks themselves rather than being reported as the declaration
+    mistake it is.
     """
     if not isinstance(inputs, Mapping) or not inputs:
         raise AutodiffError(
@@ -112,6 +119,13 @@ def _validate_declaration_set(
 
     seen: set[str] = set()
     for name in parameters:
+        if not isinstance(name, str):
+            raise AutodiffError(
+                "invalid_training_declaration",
+                f"parameters declares {name!r} of type "
+                f"{type(name).__name__!r}; each parameter name must be a "
+                "str",
+            )
         if name in seen:
             raise AutodiffError(
                 "invalid_training_declaration",
