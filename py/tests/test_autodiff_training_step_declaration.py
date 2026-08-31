@@ -397,6 +397,10 @@ _BARE_EXCEPTION_SCENARIOS = {
     "parameter_repeated_three_times": {"parameters": ("w", "w", "w")},
     "loss_not_callable": {"loss": "not callable"},
     "plain_optimizer_wrong_signature": {"optimizer": _plain_update_wrong_signature},
+    # `inspect.signature` raises `ValueError` -- not `TypeError` -- for a
+    # C-implemented callable whose signature cannot be retrieved. `min` is a
+    # plausible caller mistake for a loss argument.
+    "loss_signature_unretrievable": {"loss": min},
 }
 
 
