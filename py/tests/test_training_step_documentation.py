@@ -119,3 +119,38 @@ def test_readme_documents_training_step_end_to_end_example() -> None:
     assert "compile_training_step" in text
     assert "tests.autodiff_reference_consumer" in text
     assert "test-tree" in text.lower()
+
+
+def _readme_training_step_example_source() -> str:
+    """The one fenced Python block under the training-step README heading.
+
+    A reader copies exactly this block, so the block itself -- not a
+    paraphrase of it -- is what must be extracted and executed.
+    """
+    readme_path = Path(__file__).resolve().parents[1] / "README.md"
+    text = readme_path.read_text(encoding="utf-8")
+
+    heading = "### Compiling a training step end to end"
+    after_heading = text[text.index(heading) + len(heading) :]
+    fence_start = after_heading.index("```python") + len("```python")
+    fence_end = after_heading.index("```", fence_start)
+    return after_heading[fence_start:fence_end]
+
+
+def test_readme_training_step_example_runs_verbatim() -> None:
+    """The copy-pasteable block must actually execute, not merely parse.
+
+    Extracted and `exec`'d exactly as a reader would run it (as `__main__`,
+    from `py/`, so its `from tests.autodiff_reference_consumer import ...`
+    resolves the same way the test suite's own imports do) -- eyeballing the
+    source is not proof it runs.
+    """
+    source = _readme_training_step_example_source()
+
+    namespace: dict[str, object] = {"__name__": "__main__"}
+    exec(compile(source, "py/README.md (training-step example)", "exec"), namespace)
+
+    step = namespace["step"]
+    assert step.forward.selected_outputs
+    assert step.derivative.selected_outputs
+    assert step.parameter("w").update.selected_outputs
