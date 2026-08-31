@@ -387,6 +387,82 @@ def test_validate_declaration_never_invokes_loss_on_loss_signature_mismatch() ->
 
 
 # --------------------------------------------------------------------------
+# AC (declaration-stage identifier validity): every declared `inputs`/
+# `parameters` name must be usable as a Python identifier.
+#
+# A loss accepting exact keyword parameters cannot bind a name like `"a b"`,
+# so `_validate_loss_signature` rejects it first and the declaration never
+# reaches a builder. A `**kwargs` loss binds any string key at all, so the
+# same declaration is not caught there -- and, absent a check here, would
+# reach `TensorGraphBuilder.input`, which fails with a raw, uncategorized
+# `ValueError`/`TypeError` (violating NFR-129-004). This mirrors
+# `training._validate_optimizer_input_name`
+# (tinychain/autodiff/training.py:352-375), which validates
+# `optimizer_inputs` names "in their own right rather than incidentally" for
+# the identical reason. `parameters` entries are always also `inputs` keys
+# (already enforced by the membership check), so a bad name reachable
+# through `parameters` is exercised here too, not only through `inputs`.
+# --------------------------------------------------------------------------
+
+
+def _kwargs_loss(**kwargs: object) -> object:
+    raise AssertionError("loss body must not be invoked during declaration validation")
+
+
+_BAD_IDENTIFIER_NAMES = {
+    "non_identifier": "a b",
+    "keyword": "class",
+    "empty": "",
+}
+
+
+@pytest.mark.parametrize(
+    "bad_name", _BAD_IDENTIFIER_NAMES.values(), ids=_BAD_IDENTIFIER_NAMES
+)
+def test_validate_declaration_non_identifier_input_name_raises_invalid_training_declaration(
+    bad_name: str,
+) -> None:
+    inputs = {
+        bad_name: {"dtype": "f32", "shape": (2, 3)},
+        "w": {"dtype": "f32", "shape": (3, 4)},
+    }
+
+    with pytest.raises(AutodiffError) as excinfo:
+        _call(inputs=inputs, parameters=("w",), loss=_kwargs_loss)
+
+    assert excinfo.value.category == "invalid_training_declaration"
+    assert repr(bad_name) in excinfo.value.message
+
+
+@pytest.mark.parametrize(
+    "bad_name", _BAD_IDENTIFIER_NAMES.values(), ids=_BAD_IDENTIFIER_NAMES
+)
+def test_validate_declaration_non_identifier_parameter_name_raises_invalid_training_declaration(
+    bad_name: str,
+) -> None:
+    inputs = {
+        bad_name: {"dtype": "f32", "shape": (2, 3)},
+        "w": {"dtype": "f32", "shape": (3, 4)},
+    }
+
+    with pytest.raises(AutodiffError) as excinfo:
+        _call(inputs=inputs, parameters=(bad_name,), loss=_kwargs_loss)
+
+    assert excinfo.value.category == "invalid_training_declaration"
+    assert repr(bad_name) in excinfo.value.message
+
+
+def test_validate_declaration_non_identifier_input_name_never_invokes_kwargs_loss() -> None:
+    counting_loss = _CountingLoss()
+    inputs = {"a b": {"dtype": "f32", "shape": (2, 3)}, "w": {"dtype": "f32", "shape": (3, 4)}}
+
+    with pytest.raises(AutodiffError):
+        _call(inputs=inputs, parameters=("w",), loss=counting_loss)
+
+    assert counting_loss.calls == 0
+
+
+# --------------------------------------------------------------------------
 # AC: no framework-raised failure is a bare KeyError/TypeError/ValueError/
 # AssertionError
 # --------------------------------------------------------------------------
