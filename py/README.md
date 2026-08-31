@@ -842,6 +842,62 @@ time and therefore normalizes rather than lets escape uncategorized.
 handler reporting failure, and are deliberately left to propagate rather than
 being folded into `handler_contract_violation`.
 
+### Compiling a training step end to end
+
+`tinychain.autodiff.compile_training_step` composes tracing, differentiation,
+capture analysis, expansion, and lowering into one `CompiledTrainingStep`. It
+takes a framework-traced loss and returns lowered forward, derivative, and
+per-parameter update programs, plus the provenance to identify what produced
+them — see `tinychain/autodiff/training_step.py`'s module documentation for
+the exact compile sequence, the seed and capture-selection rules, and the
+collaborator-failure table.
+
+The example below drives it with `tests.autodiff_reference_consumer`, the
+one dense-array handler registry the test tree shares across its autodiff
+suites (`training_step_registry()`). That module is test-tree infrastructure
+that proves the lowering seam is usable by a generic, non-ILC consumer — it
+is not a shipped `tinychain` API, and a real backend brings its own
+`OperationHandlerRegistry` instead.
+
+```python
+import numpy as np
+import tinychain as tc
+from tinychain.autodiff import (
+    FusionHook,
+    OperationHandlerRegistry,
+    compile_training_step,
+    lower_derivative_program,
+    lower_graph,
+)
+from tinychain.autodiff.training import SGD
+
+from tests.autodiff_reference_consumer import training_step_registry
+
+
+def loss(x: tc.Tensor, y: tc.Tensor, w: tc.Tensor) -> tc.Tensor:
+    residual = x @ w - y
+    return (residual * residual).mean()
+
+
+step = compile_training_step(
+    loss,
+    inputs={
+        "x": {"dtype": "f32", "shape": (4, 3)},
+        "y": {"dtype": "f32", "shape": (4, 1)},
+        "w": {"dtype": "f32", "shape": (3, 1)},
+    },
+    parameters=["w"],
+    optimizer=SGD(learning_rate=0.01),
+    handlers=training_step_registry(),
+)
+
+# `step.forward`, `step.derivative`, and `step.parameter("w").update` are
+# lowered `LoweredProgram`s; a consumer executes them through its own
+# `lower_graph`/`lower_derivative_program` entry points (see
+# `py/tests/test_autodiff_training_step_end_to_end.py` for a worked,
+# numerically-checked run against `training_step_registry()`).
+```
+
 ### Every reachable operation needs a registered handler, fusion or not
 
 **Precondition.** Support is checked for every reachable operation *before*

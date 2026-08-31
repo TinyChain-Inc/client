@@ -159,6 +159,15 @@ _TRAINING_EXPORTS = frozenset(
     }
 )
 
+_TRAINING_STEP_EXPORTS = frozenset(
+    {
+        "CompiledTrainingStep",
+        "ParameterCompilation",
+        "TrainingStepProvenance",
+        "compile_training_step",
+    }
+)
+
 
 def __getattr__(name: str) -> object:
     if name in _ARTIFACT_EXPORTS:
@@ -199,6 +208,11 @@ def __getattr__(name: str) -> object:
     if name in _TRAINING_EXPORTS:
         training_module = import_module(".training", __name__)
         value = getattr(training_module, name)
+        globals()[name] = value
+        return value
+    if name in _TRAINING_STEP_EXPORTS:
+        training_step_module = import_module(".training_step", __name__)
+        value = getattr(training_step_module, name)
         globals()[name] = value
         return value
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
@@ -328,4 +342,8 @@ __all__ = [
     "TracedUpdate",
     "sgd_update",
     "trace_parameter_update",
+    "CompiledTrainingStep",
+    "ParameterCompilation",
+    "TrainingStepProvenance",
+    "compile_training_step",
 ]

@@ -7,6 +7,131 @@ declaration never reaches the caller's loss body: the declaration set itself
 (`inputs` and `parameters`), the loss signature bound against the declared
 input names, and the optimizer contract in both directions.
 
+Public surface: exactly four names are exported through
+`tinychain.autodiff` -- `compile_training_step`, `CompiledTrainingStep`,
+`ParameterCompilation`, and `TrainingStepProvenance`. Every stage function in
+this module (`validate_declaration`, `trace_loss`, `differentiate_loss`,
+`analyze_source_captures`, `expand_source_artifacts`, `expand_update_graph`)
+and every private record they return stay module-private; `compile_training_step`
+is their only public composition (FR-129-022).
+
+Compile sequence (FR-129-001): `compile_training_step` performs, in this order
+and no other: (1) declaration and optimizer validation, (2) loss-signature
+validation, (3) a single typed trace and finalization, (4) seed minting,
+(5) the VJP from the source graph, (6) the post-generation seed collision
+check, (7) source derivative dependency analysis and capture determination,
+(8) forward expansions, (9) derivative expansions, (10) per-pass preservation
+validation and final dependency recomputation, (11) forward lowering,
+(12) derivative lowering, (13) per-parameter update tracing, expansion,
+validation, and lowering, and (14) record assembly. A failure at any stage
+raises and leaves nothing partially assembled: the function either returns a
+complete `CompiledTrainingStep` or raises.
+
+Why expansion follows differentiation (§7.4): the traced source forward graph
+is the canonical semantic artifact the application authored, and the VJP is
+generated from it -- never from a rewritten copy. Expansion passes are
+caller-supplied structural rewrites for analysis and lowering; their contract
+preserves the semantic values named below, but it does not require them to
+preserve the graph's differentiability or any VJP-specific structural
+precondition. Generating the derivative after expansion would make
+differentiation depend on arbitrary pass behavior and would discard the
+stable source-to-derivative relationship this record exists to preserve.
+Source-first differentiation is an explicit orchestration invariant (Inv-1):
+generate once from the source graph, keep that graph and derivative
+unchanged, then expand copies intended for analysis and lowering.
+
+The four artifacts (§6): `source_forward_graph` and `source_derivative_program`
+are what tracing and differentiation produced, before any expansion pass runs
+and never rewritten afterward. `lowered_forward_graph` and
+`lowered_derivative_program` are what the expansion sequences produced --
+with every expansion sequence empty, these are the *same objects* as the
+source pair (Inv-10), which makes that inertness observable by identity
+rather than by comparison. `forward` and `derivative` are the two
+`LoweredProgram`s that came out of lowering the lowered pair. Naming the four
+separately lets a consumer tell what was traced, what was differentiated, and
+what was actually lowered, and diff the pair when an expansion is in play.
+
+Capture selection rule (§8.5): the ordered forward-capture set is the
+`forward_capture` dependencies `analyze_derivative_dependencies` reports for
+the source artifacts, in analysis order. It is used twice and only twice:
+as the forward lowering's selected outputs -- `[loss_value_id] + captures`,
+with the loss removed from the capture portion if it also appears there, and
+with order-preserving first-occurrence deduplication (Inv-7) -- and as the
+record's own `forward_capture_value_ids` field, reported separately from
+`loss_value_id` so a consumer can tell what is reported to the application
+from what is retained for the backward phase (FR-129-007). The two uses are
+one rule, not two: `analyze_source_captures` produces both from the same
+analysis so nothing downstream has to rebuild the selection by walking
+forward nodes.
+
+Seed contract (§8.3): the seed value id is **minted** by the framework, never
+taken from the caller. A candidate is checked against every declared input
+value id and every node output value id of the source forward graph, and a
+deterministic successor is tried until one is free; the concrete spelling is
+an implementation detail nothing outside this module may depend on.
+Immediately after `generate` returns, and before dependency analysis or any
+expansion pass, the minted seed is checked against every node and value id
+the source derivative program produced -- a collision raises
+`ambiguous_producer` (FR-129-019). Every expansion pass must then preserve
+that same seed identity as a required free input without producing or
+reassigning it; a pass that drops or reassigns it fails as
+`expansion_contract_violation` naming the pass and its position (Inv-11). The
+caller-supplied `seed_label` is a display name recorded in provenance only --
+it carries no identity and is never used as a value id.
+
+Arity rule (§9.4): `parameters` is a tuple of `ParameterCompilation` in
+declaration order, always. One parameter means `len(parameters) == 1` and
+nothing else about the record's shape changes (Inv-8) -- there is
+deliberately no scalar `parameter`/`gradient`/`update`/`updated_parameter`
+field and no single-parameter convenience overload, because such a field
+would encode one consumer's present arity limit into the framework.
+`CompiledTrainingStep.parameter(name)` is the by-name accessor; a name that
+was not declared as a parameter is reported as `invalid_training_declaration`
+naming the declared parameters.
+
+Collaborator-failure table (§13.2): the loss callable's body and the
+optimizer's `update` body are called directly by the orchestrator, not
+through the lowering module's consumer-callback wrapper, so each has an
+explicit rule of its own.
+
+| Collaborator | Raises `AutodiffError` | Raises anything else |
+|---|---|---|
+| loss callable body | propagates unchanged | propagates unchanged |
+| optimizer `update` body | propagates unchanged | propagates unchanged |
+| expansion pass | propagates unchanged | wrapped as `expansion_contract_violation` |
+| handler / fusion hook / binder | propagates unchanged | wrapped as `handler_contract_violation` |
+
+The loss and optimizer rows propagate unchanged either way because their
+bodies are application code: the traceback they raise is the most useful
+diagnostic available, and wrapping it would bury the caller's own error
+inside a framework category. An expansion pass is a framework-shaped
+collaborator with a declared artifact-to-artifact contract, so an
+uncategorized failure from one is a contract breach and is wrapped; a
+handler, fusion hook, or binder failure is existing lowering behavior,
+reached unchanged. `KeyboardInterrupt` and `SystemExit` are never wrapped
+anywhere.
+
+Dependency provenance (FR-129-013): per-value dependency and capture
+provenance is never restated by this module's records. It already lives on
+the `DependencyAnalysis` each stage carries internally and, for a consumer,
+on `LoweredProgram.dependencies` -- reachable on `CompiledTrainingStep.forward`,
+`.derivative`, and on each parameter's `.update`. What the records add on top
+are the *identifiers* the compiler itself is obligated to select (the loss
+value id, the capture value ids, the gradient value ids), never a duplicate of
+the analysis those identifiers came from.
+
+Conditional determinism: given equal declarations and collaborators that are
+themselves deterministic and free of observable side effects, two calls to
+`compile_training_step` produce records with equal framework structure --
+equal value ids, equal ordering, equal selections, and equal provenance
+(Inv-13). Equality of the target values inside a `LoweredProgram` holds only
+insofar as the consumer's own handlers produce equal values; no determinism
+is claimed for an arbitrary collaborator, and none can be. The module itself
+holds no module-level mutable state -- no cache, no registry, no accumulator
+(Inv-12) -- so two compilations of the same declarations are independent of
+each other and of their order; that is a property of this module alone and
+says nothing about what a collaborator does.
+
 The optimizer contract and the typed-input-spec well-formedness of each
 declared input are **not** re-implemented here. Both are delegated to the
 validators `tinychain.autodiff.training` already owns -- one owner per check --
@@ -126,9 +251,8 @@ properties of how it reaches its collaborators are load-bearing:
   behind: the function returns a complete `CompiledTrainingStep` or raises
   (§13.4).
 
-The module holds no module-level mutable state -- no cache, no registry, no
-accumulator (Inv-12) -- so two compilations of the same declarations are
-independent of each other and of their order.
+See "Conditional determinism" above for what this module's absence of
+module-level state does and does not guarantee.
 
 """
 
