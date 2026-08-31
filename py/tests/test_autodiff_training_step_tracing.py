@@ -79,8 +79,20 @@ def test_trace_loss_records_declared_inputs_in_declaration_order() -> None:
     declared_value_ids = [
         traced.input_value_ids[name] for name in LINEAR_INPUT_NAMES
     ]
-    graph_input_ids = [value_id for value_id, _typespec in traced.graph.inputs]
-    assert graph_input_ids == declared_value_ids
+    # Compares the full (value_id, typespec) pairs, not ids alone: an id-only
+    # comparison passes even if the graph boundary carries a typespec
+    # unrelated to (or entirely absent from) the caller's declared spec, so
+    # it would not catch a builder.input(...) call given the wrong dtype/shape
+    # or a skipped typed build() -- the exact shape of fault that cost T-01
+    # three rounds.
+    expected_pairs = [
+        (
+            value_id,
+            {"dtype": LINEAR_INPUTS[name]["dtype"], "shape": list(LINEAR_INPUTS[name]["shape"])},
+        )
+        for name, value_id in zip(LINEAR_INPUT_NAMES, declared_value_ids)
+    ]
+    assert traced.graph.inputs == expected_pairs
 
 
 def test_trace_loss_graph_outputs_is_exactly_the_one_loss_value_id() -> None:
@@ -190,6 +202,41 @@ def test_trace_loss_rejects_non_tensor_return_naming_what_it_returned(
 
     assert error.value.category == "invalid_loss_output"
     assert expected_type_name in error.value.message
+
+
+def _returns_a_foreign_scalar(*, x: object, w: object, y: object) -> object:
+    """Compute normally, then return a `Scalar` this trace never produced.
+
+    `tc.String` is a `Scalar` subclass (see the module MRO note in
+    `training_step.trace_loss`), so it passes the `isinstance(result, Scalar)`
+    check the same way a genuine reduction output does -- but it was never
+    registered by this builder, so it has no value id here. The escape is
+    not narrow to a foreign `Tensor`: any untraced `Scalar` subclass reaches
+    the same path, `tc.String` and `tc.Number` included.
+    """
+    x @ w - y
+    return tc.String("hello")
+
+
+def test_trace_loss_rejects_a_foreign_scalar_this_trace_never_produced() -> None:
+    """A `Scalar` that passes the type check but was never traced here.
+
+    Today this is a bare `ValueError` from `TensorGraphBuilder.value_id`
+    ("object was never traced by this TensorGraphBuilder"), escaping
+    uncategorized -- an NFR-129-004 breach `isinstance(result, Scalar)`
+    alone cannot close, since the object genuinely is a `Scalar`. The
+    contract is `invalid_loss_output`, naming that the loss returned a
+    scalar this trace never produced.
+    """
+    with tc.state.scoped_context():
+        with pytest.raises(AutodiffError) as error:
+            trace_loss(
+                inputs=LINEAR_INPUTS,
+                input_names=LINEAR_INPUT_NAMES,
+                loss=_returns_a_foreign_scalar,
+            )
+
+    assert error.value.category == "invalid_loss_output"
 
 
 # --------------------------------------------------------------------------
