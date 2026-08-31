@@ -10,12 +10,12 @@ building a second consumer.
 Every handler below delegates to `tests.autodiff_execution.NumpyAutodiffDispatcher`
 for its actual dense-array result -- the single source of operator meaning the
 node-level executor and this lowering-level registry agree on. A handler here
-never restates matmul, mean, broadcast, division, or fill semantics; it only
-adapts an `OperationContext` into the shape `NumpyAutodiffDispatcher` expects
-(it reads only `.operator` and `.op_params`, so an `OperationContext` -- which
-carries both -- can stand in for a `TensorNodeRecord` directly) and, for the
-trivial-reshape handler, adds one extra structural check the dispatcher itself
-does not perform.
+never restates matmul, mean, broadcast, division, add, subtract, transpose,
+reshape, or fill semantics; it only adapts an `OperationContext` into the shape
+`NumpyAutodiffDispatcher` expects (it reads only `.operator` and `.op_params`,
+so an `OperationContext` -- which carries both -- can stand in for a
+`TensorNodeRecord` directly) and, for the trivial-reshape handler, adds one
+extra structural check the dispatcher itself does not perform.
 
 This module imports only public `tinychain.autodiff` names and `numpy`, and
 the `tests.autodiff_execution` sibling module it extends with `FillOperator`
@@ -24,6 +24,32 @@ support.
 `test_autodiff_fake_consumer.py` is a separate, narrow, self-contained proof
 of the generic lowering seam and is not related to this module -- it stays
 untouched.
+
+**This module serves two features and remains the only shared consumer**
+(§17.1's ownership rule). Issue #128 built the rank-preserving tier
+(`limited_operation_registry`) and the reduction-capable tier
+(`reduction_capable_registry`); this module's other subtask adds
+`training_step_registry`, resolving every concrete operator a full
+training-step compilation produces. The two #128 factories keep their exact
+pre-existing `supported_types()`; new capability arrives only as a new
+factory, never by widening an existing one.
+
+`training_step_registry`'s operator set was measured, not assumed, by
+compiling the loss of §17.3.1/§17.5 (`d = x @ w - y`, `d * d`, `mean(...)`
+with `SGD`) against a permissive recording registry and enumerating every
+concrete operator type the forward, derivative, and update programs actually
+produced. The measured set is nine concrete operator types: `AddOperator`,
+`BroadcastOperator`, `DivOperator`, `MatmulOperator`, `MeanOperator`,
+`MulOperator`, `ReshapeOperator`, `SubOperator`, and `TransposeOperator`. This
+supersedes one detail of §17.1's prose account: §17.1 describes the
+subtract-rule contribution as "a literal-scaled multiply", but the real trace
+produces that scaling as `DivOperator(right_literal=...)` from the mean
+rule's reciprocal, not a second, differently-shaped `MulOperator` -- the
+`MulOperator` the forward trace already needs simply reappears, unchanged in
+kind, in the derivative and in the traced update. A future reader hitting
+this discrepancy should treat the measured set above, not the prose, as
+authoritative; the prose correction is tracked as a spec-text item, not
+something this module edits.
 """
 
 from __future__ import annotations
@@ -33,6 +59,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from tinychain.autodiff import (
+    AddOperator,
     AutodiffError,
     BroadcastOperator,
     DivOperator,
@@ -44,7 +71,9 @@ from tinychain.autodiff import (
     OperationHandler,
     OperationHandlerRegistry,
     ReshapeOperator,
+    SubOperator,
     TensorOperator,
+    TransposeOperator,
 )
 
 from tests.autodiff_execution import NumpyAutodiffDispatcher
@@ -142,6 +171,51 @@ class _TrivialReshapeHandler:
         return _delegate(context)
 
 
+class _ReshapeHandler:
+    """Lowers any reshape -- including one that changes rank -- via the shared semantics.
+
+    Unlike `_TrivialReshapeHandler`, this general handler adds no element-count
+    pre-check of its own: it is the handler a full training-step compilation
+    needs, where a generated reshape (for example the derivative's seed
+    reshape from a scalar-shaped value to a higher-rank one) is already known
+    well-formed by the framework that generated it, so this handler delegates
+    unconditionally and lets `NumpyAutodiffDispatcher`'s own `np.reshape`
+    report a malformed target shape.
+    """
+
+    operator_type = ReshapeOperator
+
+    def lower(self, context: OperationContext) -> np.ndarray:
+        return _delegate(context)
+
+
+class _AddHandler:
+    """Lowers an add (including operands of different, broadcastable shapes)."""
+
+    operator_type = AddOperator
+
+    def lower(self, context: OperationContext) -> np.ndarray:
+        return _delegate(context)
+
+
+class _SubHandler:
+    """Lowers a subtract via the shared semantics."""
+
+    operator_type = SubOperator
+
+    def lower(self, context: OperationContext) -> np.ndarray:
+        return _delegate(context)
+
+
+class _TransposeHandler:
+    """Lowers a transpose, including a non-trivial permutation, via the shared semantics."""
+
+    operator_type = TransposeOperator
+
+    def lower(self, context: OperationContext) -> np.ndarray:
+        return _delegate(context)
+
+
 def limited_operation_registry(*, include_trivial_reshape: bool = False) -> OperationHandlerRegistry:
     """Return a registry resolving exactly `FillOperator`, `MatmulOperator`, `MulOperator`.
 
@@ -172,6 +246,39 @@ def reduction_capable_registry() -> OperationHandlerRegistry:
     registry.register(_MeanHandler())
     registry.register(_BroadcastHandler())
     registry.register(_DivHandler())
+    return registry
+
+
+def training_step_registry() -> OperationHandlerRegistry:
+    """Return the registry for a full training-step compilation.
+
+    Resolves exactly the nine concrete operator types the §17.5 loss
+    produces across its forward, derivative, and update programs -- the set
+    this module's docstring records as measured from a real compilation:
+    `AddOperator`, `BroadcastOperator`, `DivOperator`, `MatmulOperator`,
+    `MeanOperator`, `MulOperator`, `ReshapeOperator`, `SubOperator`, and
+    `TransposeOperator`. `FillOperator` is not among them: this loss's three
+    programs never generate a fill node, so this registry does not resolve
+    one either -- adding an unneeded handler here would widen the registry
+    past what was actually measured. Every handler delegates to the same
+    `NumpyAutodiffDispatcher` semantics the other two factories use; the
+    reshape handler here is the general one (`_ReshapeHandler`), not the
+    trivial-reshape opt-in `limited_operation_registry` offers, because a
+    generated reshape may change rank.
+
+    This factory is additive: it does not alter what
+    `limited_operation_registry` or `reduction_capable_registry` resolve.
+    """
+    registry = OperationHandlerRegistry()
+    registry.register(_MatmulHandler())
+    registry.register(_MulHandler())
+    registry.register(_MeanHandler())
+    registry.register(_BroadcastHandler())
+    registry.register(_DivHandler())
+    registry.register(_ReshapeHandler())
+    registry.register(_AddHandler())
+    registry.register(_SubHandler())
+    registry.register(_TransposeHandler())
     return registry
 
 
