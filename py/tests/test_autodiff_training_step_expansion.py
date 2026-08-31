@@ -412,6 +412,45 @@ def _duplicate_node_id(graph: TensorGraph) -> TensorGraph:
     return dataclasses.replace(graph, nodes=[*graph.nodes, duplicate])
 
 
+def _mint_one_node_id_twice(graph: TensorGraph) -> TensorGraph:
+    """Mint the same new node id twice, for two different computations.
+
+    Neither node id occurs in the pass input, so the semantic-identity rule
+    has nothing to compare them against, and the two outputs are distinct
+    values, so the value-uniqueness rule is satisfied too. Only the node-id
+    uniqueness rule can reject this.
+    """
+    first = graph.nodes[0]
+    return dataclasses.replace(
+        graph,
+        nodes=[
+            *graph.nodes,
+            _new_node(
+                node_id="exn_twice",
+                output_value_id="exv_first",
+                input_value_ids=[first.output_value_id],
+                output_typespec=first.output_typespec,
+            ),
+            _new_node(
+                node_id="exn_twice",
+                output_value_id="exv_second",
+                input_value_ids=list(first.input_value_ids),
+                output_typespec=first.output_typespec,
+            ),
+        ],
+    )
+
+
+def appends_a_non_node(artifact: object) -> object:
+    """Return an artifact of the right type whose node list holds a non-node."""
+    return dataclasses.replace(artifact, nodes=[*artifact.nodes, "junk"])
+
+
+def appends_a_malformed_input(graph: TensorGraph) -> TensorGraph:
+    """Return a graph whose declared inputs hold something that is not a pair."""
+    return dataclasses.replace(graph, inputs=[*graph.inputs, "notatuple"])
+
+
 def _duplicate_value_id(graph: TensorGraph) -> TensorGraph:
     first = graph.nodes[0]
     duplicate = _new_node(
@@ -978,6 +1017,30 @@ def test_derivative_pass_dropping_the_seed_fails_naming_the_seed(
     assert source.seed_value_id in str(excinfo.value)
 
 
+def test_derivative_pass_dropping_the_seed_leaves_the_next_pass_uninvoked(
+    source: _Source,
+) -> None:
+    """The per-pass seed rule, isolated from the recomputation that follows it.
+
+    A dropped seed is also visible to the final recomputation, so the failure
+    alone does not prove the per-pass check ran. What only the per-pass check
+    can do is stop the sequence: the pass after the offender must never see the
+    broken artifact.
+    """
+
+    def drop_the_seed(program: DerivativeProgram) -> DerivativeProgram:
+        return _drop_the_seed(program, source.seed_value_id)
+
+    later = _CountingPass()
+
+    with pytest.raises(AutodiffError) as excinfo:
+        _expand(source, derivative_expansions=[drop_the_seed, later])
+
+    assert excinfo.value.category == "expansion_contract_violation"
+    assert source.seed_value_id in str(excinfo.value)
+    assert later.calls == 0
+
+
 def test_update_pass_dropping_a_declared_input_fails_naming_the_input() -> None:
     def drop_the_first_input(graph: TensorGraph) -> TensorGraph:
         return _drop_first_declared_input(graph)
@@ -1187,6 +1250,97 @@ def test_pass_returning_its_input_unchanged_is_accepted(source: _Source) -> None
 
     assert result.lowered_forward_graph == source.graph
     assert result.lowered_derivative_program == source.program
+
+
+def test_forward_pass_minting_one_node_id_twice_fails_naming_the_id(
+    source: _Source,
+) -> None:
+    """Only the uniqueness rule can reject this one.
+
+    The duplicated id is minted by the pass, so it is absent from the pass
+    input and the semantic-identity rule never looks at it, and the two nodes
+    produce different values, so value uniqueness is satisfied.
+    """
+    with pytest.raises(AutodiffError) as excinfo:
+        _expand(source, forward_expansions=[_mint_one_node_id_twice])
+
+    _assert_violation(
+        excinfo.value,
+        label="_mint_one_node_id_twice",
+        position=0,
+        mentions=["exn_twice"],
+    )
+
+
+# --------------------------------------------------------------------------
+# a malformed artifact of the right type (§8.6, FR-129-020)
+#
+# The type check accepts these -- they really are a `TensorGraph` and a
+# `DerivativeProgram` -- and every rule after it reads their contents. An
+# artifact whose node list or input list does not hold what those rules read
+# must be reported as the pass's contract breach, with the same care §9.1
+# takes over a malformed label, rather than escaping as a raw `AttributeError`
+# or `ValueError` from inside a validator.
+# --------------------------------------------------------------------------
+
+
+def test_forward_pass_returning_a_graph_with_a_non_node_fails_naming_the_defect(
+    source: _Source,
+) -> None:
+    with pytest.raises(AutodiffError) as excinfo:
+        _expand(source, forward_expansions=[appends_a_non_node])
+
+    _assert_violation(
+        excinfo.value, label="appends_a_non_node", position=0, mentions=["junk"]
+    )
+
+
+def test_forward_pass_returning_a_malformed_declared_input_fails_naming_the_defect(
+    source: _Source,
+) -> None:
+    with pytest.raises(AutodiffError) as excinfo:
+        _expand(
+            source, forward_expansions=[module_level_pass, appends_a_malformed_input]
+        )
+
+    _assert_violation(
+        excinfo.value,
+        label="appends_a_malformed_input",
+        position=1,
+        mentions=["notatuple"],
+    )
+
+
+def test_derivative_pass_returning_a_program_with_a_non_node_fails_naming_the_defect(
+    source: _Source,
+) -> None:
+    with pytest.raises(AutodiffError) as excinfo:
+        _expand(source, derivative_expansions=[appends_a_non_node])
+
+    _assert_violation(
+        excinfo.value, label="appends_a_non_node", position=0, mentions=["junk"]
+    )
+
+
+def test_update_pass_returning_a_graph_with_a_non_node_fails_naming_the_defect() -> None:
+    with pytest.raises(AutodiffError) as excinfo:
+        _expand_update([appends_a_non_node])
+
+    _assert_violation(
+        excinfo.value, label="appends_a_non_node", position=0, mentions=["junk"]
+    )
+
+
+def test_update_pass_returning_a_malformed_declared_input_fails_naming_the_defect() -> None:
+    with pytest.raises(AutodiffError) as excinfo:
+        _expand_update([appends_a_malformed_input])
+
+    _assert_violation(
+        excinfo.value,
+        label="appends_a_malformed_input",
+        position=0,
+        mentions=["notatuple"],
+    )
 
 
 # --------------------------------------------------------------------------
@@ -1449,7 +1603,7 @@ def test_pass_label_is_resolved_before_the_pass_is_invoked(source: _Source) -> N
     assert "label_assigned_during_the_call" not in message
 
 
-def test_two_same_labelled_passes_are_distinguished_by_position(
+def test_a_failing_pass_after_a_successful_one_reports_its_own_position(
     source: _Source,
 ) -> None:
     with pytest.raises(AutodiffError) as excinfo:

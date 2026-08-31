@@ -975,6 +975,12 @@ def _validate_forward_result(
                 detail=f"no longer declares the input value {value_id!r}",
             )
 
+    # "Declared or produced" is deliberately the weaker test here: a required
+    # value that survived only by turning from a computed value into a free
+    # input would pass it. What rejects that is the value-role rule in
+    # `_validate_occupied_ids`, which runs first for every pass. The two are
+    # one check split across two owners -- do not delete the role rule as
+    # redundant on the strength of this one, or the gap opens silently.
     available = _available_value_ids(result)
     for value_id in captures.forward_selected_outputs:
         if value_id not in available:
