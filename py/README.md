@@ -475,7 +475,7 @@ documented deferred subset and are **not** source-captured in this release; thei
 intentional absence is enforced by the capture-vs-VJP registry parity test.
 `tc.autodiff.captured_route_operators()` returns the route-name → concrete
 operator allowlist, and `tc.autodiff.captured_operator_types()` returns the
-captured operator types (used by the FR-013 parity check).
+captured operator types used by the capture-vs-VJP parity check.
 
 Forward dtype and shape are inferred for every captured node:
 
@@ -517,8 +517,8 @@ on payloads, dispatch, or eager/deferred execution outside a trace context. In
 particular, `Tensor.mean(...)` still returns its usual value type when no trace
 is active.
 
-The later `ilc-api` migration to this surface (Issue 86 `T-03d`) owns replacing
-the manual fixed-helper graph construction with a typed trace.
+Downstream consumers can replace manual fixed-helper graph construction with
+this typed tracing surface when they adopt it.
 
 ### Route derivative discovery
 
@@ -998,9 +998,9 @@ Both raise `AutodiffError("invalid_update_signature", ...)`, and a
 malformed `required_optimizer_inputs` — one that is not a collection of
 names, or a bare string, which would otherwise declare one input per
 character — raises the same category rather than escaping as a raw
-`TypeError`. All of it runs before the builder is entered and before any spec
-is read, so a rejected declaration never reaches the expression. The result is
-that an optimizer is checked at least as strictly as the equivalent plain
+`TypeError`. All of it runs before the builder is entered and before any typed
+input declaration is read, so a rejection never reaches the expression. The
+result is that an optimizer is checked at least as strictly as the equivalent plain
 callable: the same mistake yields the same category on both paths. A plain
 callable is traced exactly as before, including a `**kwargs` callable, which
 still binds any declaration and lets its own body decide.
@@ -1012,7 +1012,7 @@ delegates to a shared instance of it, so the two cannot drift apart. New
 callers should pass `SGD()` instead, which additionally gets the name check
 above. Neither it, nor `SGD`, nor
 `trace_parameter_update` constructs a graph-record or operator type directly;
-doing so is a spec invariant, not just a style preference, and is checked by
+doing so is forbidden, not just a style preference, and is checked by
 a dedicated regression test that additionally scans the module's own
 namespace so an import alias cannot quietly reintroduce direct construction
 either. See "What this surface does and does not guard against ILC-style
@@ -1126,6 +1126,59 @@ one of `training.py`'s own functions, since that alias is bound in the
 function's local scope rather than the module's namespace. These checks are
 aimed at the realistic accident, not at deliberate circumvention by someone
 with commit access to this package.
+
+#### Mean expansion (opt-in, experimental)
+
+`tinychain.autodiff` also exports two opt-in passes that rewrite an all-axis,
+rank-2 `.mean(...)` into matmuls and constants — the point being that a
+backend with no reduction, broadcast, or division handler can still lower a
+graph or a derivative program that reduces this way, at the cost of
+registering a couple of handlers it might not otherwise need:
+
+```python
+from tinychain.autodiff import expand_mean_graph, expand_mean_derivative_program
+
+expanded_graph = expand_mean_graph(graph)                    # forward artifact
+expanded_program = expand_mean_derivative_program(program)   # gradient path
+```
+
+Each pass is called explicitly — no flag, no registry, no default behavior
+changes. `expand_mean_graph_detailed` and `expand_mean_derivative_program_detailed`
+return the same rewritten artifact alongside ordered `MeanExpansionRegion`
+provenance records; the composable forms above are exactly those detailed
+forms with the provenance dropped, so the two cannot disagree.
+
+Neither expanded artifact needs a reduction, broadcast, or division handler,
+but it is not free to lower:
+
+| Tier | Mean form | Handlers the expanded region requires |
+|---|---|---|
+| Rank-preserving | `.mean(axes=[0, 1], keepdims=True)` | `FillOperator`, `MatmulOperator`, `MulOperator` |
+| Rank-reducing | `.mean(axes=[0, 1], keepdims=False)` | the above, **plus** `ReshapeOperator`, restricted to trivial reshapes |
+
+`MatmulOperator` and `MulOperator` (`right_literal` form) are already
+supported by any backend that lowers ordinary derivative programs, so the
+genuinely new handlers are `FillOperator` (both tiers) and a trivial
+`ReshapeOperator` (rank-reducing tier only) — the latter is required for
+**both** the forward artifact and the derivative program: the gradient path's
+own leading seed reshape (`() -> [1, 1]`) survives expansion untouched, so a
+backend that registers the reshape handler only for the forward side will
+fail closed on the gradient path. Registering `ReshapeOperator` unconditionally
+whenever `FillOperator` is registered avoids this trap. A consumer that wants
+the smaller rank-preserving handler set writes `.mean(axes=[0, 1],
+keepdims=True)` — a one-token application change with no framework cost — and
+that is the recommended lower-cost form when both tiers are not otherwise
+needed.
+
+See `tinychain/autodiff/expansion.py`'s module docstring for the full
+contract: the supported mean domain, both emitted regions with their true
+shapes, the `FillOperator`/`FillDescriptor` schema, the broadcast-and-scale
+predicate and the identity it rests on, the numerical tolerance the
+reciprocal-multiply substitution implies, and why a pass promises nothing
+about the differentiability of what it returns — a consumer needing both a
+derivative and an expanded artifact differentiates the unmodified source
+graph first, then expands only the artifacts destined for analysis and
+lowering.
 
 ### Executor auth and routing contract
 

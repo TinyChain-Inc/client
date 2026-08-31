@@ -1,12 +1,9 @@
 """A fake, non-ILC consumer proving the extensible lowering seam is generic.
 
-Spec acceptance criterion 3 requires a fake consumer that lowers at least two
-concrete operators and one supported fusion through the framework traversal
-seam, using no framework-private access and no ILC concept. This module is
-that proof: a consumer with no framework-private access and no target-specific
-concept can lower two concrete operators and one supported fusion into its own
-representation, reaching the seam through public `tinychain.autodiff` names
-alone.
+The consumer lowers at least two concrete operators and one supported fusion
+through the framework traversal seam, using no framework-private access and no
+ILC concept. It emits its own representation through public
+``tinychain.autodiff`` names alone.
 
 `FakeExpr` below is this test's own throwaway expression tree -- it shares no
 type, no naming, and no representation with any encrypted or ILC target IR.

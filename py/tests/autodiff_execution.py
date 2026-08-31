@@ -7,6 +7,7 @@ from tinychain.autodiff import (
     BroadcastOperator,
     BroadcastReduceOperator,
     DivOperator,
+    FillOperator,
     MatmulOperator,
     MeanOperator,
     MulOperator,
@@ -15,7 +16,27 @@ from tinychain.autodiff import (
     SumOperator,
     TensorNodeRecord,
     TransposeOperator,
+    fill_descriptor,
 )
+
+# Explicit, total mapping from a fill descriptor's dtype string to the numpy
+# dtype it denotes. Kept total over the differentiable dtypes the framework
+# validates elsewhere (`FLOATING_DTYPES`, `seed.FLOAT_DTYPES`); an unmapped
+# dtype fails loudly rather than silently widening to a float64 guess, which
+# would let a later equivalence assertion pass for the wrong reason.
+_FILL_NUMPY_DTYPES: dict[str, np.dtype] = {
+    "f32": np.dtype(np.float32),
+    "f64": np.dtype(np.float64),
+}
+
+
+def numpy_dtype_for_fill(dtype: str) -> np.dtype:
+    """Return the numpy dtype a fill descriptor's ``dtype`` string denotes.
+
+    Raises ``KeyError`` for any dtype outside the explicit, total mapping --
+    this test-only helper never guesses a dtype it was not told about.
+    """
+    return _FILL_NUMPY_DTYPES[dtype]
 
 
 class NumpyAutodiffDispatcher:
@@ -24,6 +45,9 @@ class NumpyAutodiffDispatcher:
     def __call__(self, node: TensorNodeRecord, args: list[object]) -> np.ndarray:
         if isinstance(node.operator, AddOperator):
             return np.asarray(args[0]) + np.asarray(args[1])
+        if isinstance(node.operator, FillOperator):
+            descriptor = fill_descriptor(node)
+            return np.full(descriptor.shape, descriptor.fill, dtype=numpy_dtype_for_fill(descriptor.dtype))
         if isinstance(node.operator, BroadcastOperator):
             return np.broadcast_to(np.asarray(args[0]), tuple(node.op_params["shape"]))
         if isinstance(node.operator, BroadcastReduceOperator):

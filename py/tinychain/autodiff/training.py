@@ -5,7 +5,7 @@ it is a typed Tensor expression over declared inputs. This module supplies the
 one piece that is otherwise missing from the public tracing surface -- typed
 parameter/gradient/optimizer inputs and a single selected updated-parameter
 output -- so an update can be authored and traced entirely with ordinary
-`Tensor` operations (spec invariant 6) and then handed to the same structured
+`Tensor` operations and then handed to the same structured
 dependency analysis and extensible lowering seam as any other traced graph.
 
 `Optimizer` below is the contract that binds an update expression to the names
@@ -21,7 +21,7 @@ and its own configuration; graph construction, dependency analysis, lowering,
 provider execution, encrypted state lifecycle, and the training loop are all
 outside it.
 
-Named invariants and where each is enforced (spec-driven, each in one place):
+Behavioral guarantees and where each is enforced:
 
 * **Update-callable well-formedness.** The signature that will be invoked --
   a plain callable itself, or an `Optimizer`'s `update` method -- must accept

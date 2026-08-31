@@ -2,20 +2,19 @@
 
 This internal module is the single choke point through which ordinary ``Tensor``
 operations record autodiff graph nodes while a :class:`TensorGraphBuilder` is the
-active trace context (client ADR-004; spec §8.1;
-https://github.com/TinyChain-Inc/client/issues/95).
+active trace context.
 
 Centralizing capture here removes the duplicated per-operation hooks that
 previously lived in ``collection/tensor/core.py`` and drifted out of sync with
-the VJP rule set (spec §2.2, §9.1). ``Tensor`` remains responsible for building
+the VJP rule set. ``Tensor`` remains responsible for building
 the ordinary symbolic/eager result and then calls :func:`record_operation`; the
 recorder owns the route→concrete-operator allowlist, value-id resolution, forward
 dtype/shape inference (via the pure ``shape`` helpers), and single-record
 construction. It is the sole extension point for future supported operations.
 
-The capture allowlist is explicit and reviewable (spec §9.1, FR-013):
-Add, Sub, Mul, Matmul, Mean, and Transpose are captured; Div, Sum, and Reshape
-are deliberately NOT captured in this issue even though they have VJP rules.
+The capture allowlist is explicit and reviewable: Add, Sub, Mul, Matmul, Mean,
+and Transpose are captured; Div, Sum, and Reshape are deliberately not captured
+even though they have VJP rules.
 """
 
 from __future__ import annotations
@@ -71,7 +70,7 @@ def _infer_elementwise(
     params: Mapping[str, object],
     symbol_bindings: dict[str, int],
 ) -> _InferenceResult:
-    """Infer output metadata for a captured Add/Sub/Mul node (spec §10.1-§10.2)."""
+    """Infer output metadata for a captured Add/Sub/Mul node."""
     lhs_metadata, rhs_metadata = operand_metadata
     if lhs_metadata is None or rhs_metadata is None:
         return {}, None
@@ -91,7 +90,7 @@ def _infer_matmul(
     params: Mapping[str, object],
     symbol_bindings: dict[str, int],
 ) -> _InferenceResult:
-    """Infer output metadata for a captured Matmul node (spec §10.1, §10.3)."""
+    """Infer output metadata for a captured Matmul node."""
     lhs_metadata, rhs_metadata = operand_metadata
     if lhs_metadata is None or rhs_metadata is None:
         return {}, None
@@ -111,10 +110,10 @@ def _infer_mean(
     params: Mapping[str, object],
     _symbol_bindings: dict[str, int],
 ) -> _InferenceResult:
-    """Infer output metadata for a captured Mean node (spec §10.1, §10.4).
+    """Infer output metadata for a captured Mean node.
 
     Explicit axes are required for a differentiable traced Mean; ``axes=None``
-    fails with ``unsupported_reduction`` at record time (spec §10.4.9, §13.2).
+    fails with ``unsupported_reduction`` at record time.
     """
     axes = params.get("axes")
     keepdims = bool(params.get("keepdims", False))
@@ -139,7 +138,7 @@ def _infer_transpose(
     params: Mapping[str, object],
     _symbol_bindings: Optional[dict[str, int]] = None,
 ) -> _InferenceResult:
-    """Infer output metadata for a captured Transpose node (spec §10.5).
+    """Infer output metadata for a captured Transpose node.
 
     A ``None`` permutation reverses all axes, matching the ordinary symbolic
     transpose default.
@@ -183,8 +182,8 @@ def _untyped_operation_params(operation: str, params: Mapping[str, object]) -> d
     return {}
 
 
-# Explicit, reviewable route→concrete-operator allowlist (spec §9.1, FR-013).
-# Div/Sum/Reshape are deliberately absent (deferred subset, spec §5.2).
+# Explicit, reviewable route-to-concrete-operator allowlist.
+# Div, Sum, and Reshape are deliberately absent despite having VJP rules.
 _CAPTURED_OPERATORS: dict[str, type[TensorOperator]] = {
     "add": AddOperator,
     "sub": SubOperator,
@@ -213,22 +212,22 @@ def record_operation(
     """Record one captured tensor operation on the active trace, if any.
 
     ``Tensor`` calls this after constructing the ordinary symbolic/eager result
-    (spec §8.1). Behavior:
+    and then invokes this recorder. Behavior:
 
-    1. Returns immediately when no builder is active (Invariant 3) or when
+    1. Returns immediately when no builder is active or when
        ``operation`` is not in the capture allowlist (Div/Sum/Reshape/logical
        ops are not captured; an uncaptured intermediate on a selected path is
-       caught later by fail-closed finalization, spec §5.2, FR-008).
+       caught later by fail-closed finalization).
     2. Resolves/registers operand and result value IDs on the active builder,
        which also retains strong references so ``id()`` reuse cannot corrupt
-       dataflow identity (Invariant 6).
+       dataflow identity.
     3. Reads operand metadata from the builder side table and, when every
        operand is typed, infers the output dtype/shape via the pure ``shape``
-       helpers (record-time validation, spec §13.3).
+       helpers.
     4. Stores the inferred result metadata on the builder and constructs exactly
        one concrete :class:`TensorNodeRecord` with the concrete operator,
        normalized ``op_params``, ordered input value IDs, and ``output_typespec``
-       (Invariants 5-6), then appends it.
+       then appends it.
     """
     builder = get_active_builder()
     if builder is None:
@@ -272,7 +271,7 @@ def record_operation(
 
 
 def captured_operator_types() -> frozenset[type[TensorOperator]]:
-    """Return the concrete operator types the recorder captures (FR-013 parity)."""
+    """Return the concrete operator types the recorder captures."""
     return frozenset(_CAPTURED_OPERATORS.values())
 
 

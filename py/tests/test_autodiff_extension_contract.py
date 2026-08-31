@@ -59,6 +59,23 @@ _TRAINING_EXPORTS = frozenset(
     }
 )
 
+_EXPANSION_EXPORTS = frozenset(
+    {
+        "BROADCAST_SCALE_EXPANSION",
+        "FillDescriptor",
+        "FillOperator",
+        "MEAN_EXPANSION_FORWARD",
+        "MeanDerivativeExpansionResult",
+        "MeanExpansionRegion",
+        "MeanGraphExpansionResult",
+        "expand_mean_derivative_program",
+        "expand_mean_derivative_program_detailed",
+        "expand_mean_graph",
+        "expand_mean_graph_detailed",
+        "fill_descriptor",
+    }
+)
+
 
 def test_dependency_analysis_surface_is_exported_from_autodiff_package() -> None:
     import tinychain.autodiff as autodiff
@@ -114,6 +131,38 @@ def test_traced_update_surface_is_exported_from_autodiff_package() -> None:
 
     assert not hasattr(tc, "trace_parameter_update")
     assert not hasattr(tc, "sgd_update")
+
+
+def test_expansion_surface_is_exported_from_autodiff_package() -> None:
+    import tinychain.autodiff as autodiff
+    from tinychain.autodiff import expansion
+
+    assert _EXPANSION_EXPORTS.issubset(set(autodiff.__all__))
+    for export_name in _EXPANSION_EXPORTS:
+        assert hasattr(autodiff, export_name)
+
+    assert autodiff.FillOperator is expansion.FillOperator
+    assert autodiff.FillDescriptor is expansion.FillDescriptor
+    assert autodiff.fill_descriptor is expansion.fill_descriptor
+    assert autodiff.expand_mean_graph is expansion.expand_mean_graph
+    assert autodiff.expand_mean_graph_detailed is expansion.expand_mean_graph_detailed
+    assert (
+        autodiff.expand_mean_derivative_program is expansion.expand_mean_derivative_program
+    )
+    assert (
+        autodiff.expand_mean_derivative_program_detailed
+        is expansion.expand_mean_derivative_program_detailed
+    )
+    assert autodiff.MeanExpansionRegion is expansion.MeanExpansionRegion
+    assert autodiff.MeanGraphExpansionResult is expansion.MeanGraphExpansionResult
+    assert (
+        autodiff.MeanDerivativeExpansionResult is expansion.MeanDerivativeExpansionResult
+    )
+    assert autodiff.MEAN_EXPANSION_FORWARD == expansion.MEAN_EXPANSION_FORWARD
+    assert autodiff.BROADCAST_SCALE_EXPANSION == expansion.BROADCAST_SCALE_EXPANSION
+
+    for export_name in _EXPANSION_EXPORTS:
+        assert not hasattr(tc, export_name)
 
 
 def test_unknown_autodiff_attribute_still_raises_attribute_error() -> None:

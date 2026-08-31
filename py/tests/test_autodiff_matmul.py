@@ -1,6 +1,6 @@
-"""Unit tests for MatmulVjpRule and transpose_last_two helper (T-04b).
+"""Unit tests for MatmulVjpRule and the transpose-last-two helper.
 
-E2e matmul gradient tests (marked tc_server) require tc-server + T-05b installed.
+End-to-end matmul gradient tests marked ``tc_server`` require ``tc-server``.
 """
 from __future__ import annotations
 

@@ -115,6 +115,23 @@ _DEPENDENCY_EXPORTS = frozenset(
     }
 )
 
+_EXPANSION_EXPORTS = frozenset(
+    {
+        "BROADCAST_SCALE_EXPANSION",
+        "FillDescriptor",
+        "FillOperator",
+        "MEAN_EXPANSION_FORWARD",
+        "MeanDerivativeExpansionResult",
+        "MeanExpansionRegion",
+        "MeanGraphExpansionResult",
+        "expand_mean_derivative_program",
+        "expand_mean_derivative_program_detailed",
+        "expand_mean_graph",
+        "expand_mean_graph_detailed",
+        "fill_descriptor",
+    }
+)
+
 _LOWERING_EXPORTS = frozenset(
     {
         "LOWERING_CLAIM_HANDLER",
@@ -167,6 +184,11 @@ def __getattr__(name: str) -> object:
     if name in _DEPENDENCY_EXPORTS:
         dependencies_module = import_module(".dependencies", __name__)
         value = getattr(dependencies_module, name)
+        globals()[name] = value
+        return value
+    if name in _EXPANSION_EXPORTS:
+        expansion_module = import_module(".expansion", __name__)
+        value = getattr(expansion_module, name)
         globals()[name] = value
         return value
     if name in _LOWERING_EXPORTS:
@@ -277,6 +299,18 @@ __all__ = [
     "ValueDependency",
     "analyze_derivative_dependencies",
     "analyze_graph_dependencies",
+    "FillDescriptor",
+    "FillOperator",
+    "BROADCAST_SCALE_EXPANSION",
+    "MEAN_EXPANSION_FORWARD",
+    "MeanDerivativeExpansionResult",
+    "MeanExpansionRegion",
+    "MeanGraphExpansionResult",
+    "expand_mean_derivative_program",
+    "expand_mean_derivative_program_detailed",
+    "expand_mean_graph",
+    "expand_mean_graph_detailed",
+    "fill_descriptor",
     "LOWERING_CLAIM_HANDLER",
     "LOWERING_CLAIM_FUSION",
     "FusionContext",

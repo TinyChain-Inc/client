@@ -297,8 +297,8 @@ class Tensor(Collection, Comparable):
 
     def mean(self, axes: object = None, keepdims: bool = False) -> Scalar:
         """Returns Scalar. Under an active typed trace, mean is captured as a
-        MeanOperator node with normalized axes/keepdims (issue #95); the public
-        return type is still Scalar."""
+        MeanOperator node with normalized axes and keepdims; the public return
+        type is still Scalar."""
         return self._reduction_post("mean", axes, keepdims, capture_operation="mean")
 
     def norm(self, axis: object = None, keepdims: bool = False) -> Scalar:
