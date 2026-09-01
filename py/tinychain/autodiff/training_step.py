@@ -182,10 +182,12 @@ are deliberate and should survive a later tidy-up:
   precisely why FR-129-019 requires one here. Rewriting the call as
   `generate_module.generate(...)` or importing it inside the function body
   would silently disable that coverage.
-* `graph_id` defaults to `None` and is passed through untouched, so
+* `generate`'s optional `graph_id` is deliberately not passed at all, so
   `DerivativeMetadata.source_graph_id` stays the content hash reverse
   traversal derives. Minting an id here instead would make two identical
-  compilations disagree and break Inv-13's conditional determinism.
+  compilations disagree and break Inv-13's conditional determinism, and
+  forwarding one from the caller would put a value nothing in this module
+  can check into the provenance the record reports.
 
 `analyze_source_captures` closes the source phase. It asks
 `analyze_derivative_dependencies` what the source derivative program needs
@@ -725,7 +727,6 @@ def differentiate_loss(
     traced: TracedLoss,
     parameters: Sequence[str],
     seed_label: str = "seed",
-    graph_id: Optional[str] = None,
 ) -> SourceDerivative:
     """Generate the source derivative program for *traced*, per §8.3/§8.4.
 
@@ -756,7 +757,6 @@ def differentiate_loss(
         wrt,
         seed_value_id,
         seed_typespec=seed_typespec,
-        graph_id=graph_id,
     )
 
     _check_seed_against_derivative_program(program, seed_value_id)
@@ -872,9 +872,11 @@ class ExpandedArtifacts:
     the last pass returned, validated.
 
     ``analysis`` is the recomputation of §8.6 against these two artifacts and
-    the minted seed. It is carried rather than recomputed by the caller because
-    it is the evidence for the equality this stage just enforced, and because
-    lowering needs the same answer the check was made against.
+    the minted seed. It is carried because it is the evidence for the equality
+    this stage just enforced -- the answer the check was made against, kept
+    with the artifacts it was made about. Lowering is not handed it:
+    `lower_graph` and `lower_derivative_program` derive their own dependencies
+    from the artifacts they receive.
 
     ``forward_pass_labels`` and ``derivative_pass_labels`` are the §9.1 labels
     of the passes that actually ran, in application order, for provenance. A
@@ -1904,13 +1906,23 @@ def compile_training_step(
             fusion=fusion,
             bind_input=bind_input,
         )
-        # The same sequence runs for every parameter, so every iteration
-        # resolves the same labels; provenance records them once (Inv-8).
-        # Overwriting rather than accumulating is what keeps the record's shape
-        # independent of parameter count, and the `()` this starts from is
-        # never what provenance reports: `validate_declaration` has already
+        # One label tuple for the whole step, never one per parameter (Inv-8).
+        # Overwriting rather than accumulating is what keeps the record's
+        # shape independent of parameter count, and the `()` this starts from
+        # is never what provenance reports: `validate_declaration` has already
         # rejected an empty `parameters`, so this loop always runs at least
         # once (FR-129-016).
+        #
+        # What provenance reports is therefore the *last*-resolved labels, not
+        # the first. That distinction is only observable for a pass that
+        # rewrites its own `__qualname__` while it runs -- §9.1 permits
+        # exactly that, and `_pass_label` resolves the label after invoking
+        # the pass -- on a step with more than one parameter, where such a
+        # pass resolves a different label on each iteration. Capturing the
+        # first-resolved labels instead would make the reported ones
+        # first-by-construction and is the better rule, but it changes what a
+        # compiled record reports, so it is deliberately left to a separate
+        # change rather than folded into this one.
         update_pass_labels = expanded_update.pass_labels
         compiled_parameters.append(
             ParameterCompilation(
@@ -1936,7 +1948,11 @@ def compile_training_step(
         parameter_names=parameter_names,
         input_names=input_names,
         seed_value_ids=(derivative.seed_value_id,),
-        seed_label=seed_label,
+        # Read off the record rather than from this function's own argument:
+        # the seed identity and the seed label reported together are then the
+        # pair `differentiate_loss` produced, so a later stage that normalises
+        # the label cannot leave provenance reporting the raw argument.
+        seed_label=derivative.seed_label,
         optimizer_label=type(optimizer).__name__,
         optimizer_input_names=_required_optimizer_input_names(optimizer),
         forward_expansions=expanded.forward_pass_labels,
