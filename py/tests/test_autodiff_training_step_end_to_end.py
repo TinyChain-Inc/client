@@ -51,7 +51,6 @@ No production file is modified by this module.
 
 from __future__ import annotations
 
-import dataclasses
 from collections.abc import Mapping
 from types import MappingProxyType
 
@@ -69,6 +68,16 @@ from tinychain.autodiff.training import SGD
 from tests.autodiff_reference_consumer import (
     recording_registry,
     training_step_registry,
+)
+from tests.autodiff_training_step_numeric_support import (
+    ONE_PARAMETER_INPUTS,
+    SCALAR_SPEC,
+    TWO_PARAMETER_INPUTS,
+    ExecutedStep,
+    concrete_inputs as _concrete_inputs,
+    placeholder_binding,
+    reference_gradients,
+    reference_loss,
 )
 
 
@@ -89,29 +98,12 @@ TOLERANCE = 1e-12
 # --------------------------------------------------------------------------
 # declarations
 #
-# `x` is 3x2 and `w` is 2x4: an asymmetric shape, so a transposed matmul
-# anywhere on the path gives a shape error or a detectably wrong answer rather
-# than a plausible one. The batch dimension is 3, greater than one.
+# The input specs are the shared ones imported above: `x` is 3x2 and `w` is
+# 2x4, an asymmetric shape, so a transposed matmul anywhere on the path gives
+# a shape error or a detectably wrong answer rather than a plausible one. The
+# batch dimension is 3, greater than one. The losses below stay local because
+# each file reduces with its own `keepdims` choice.
 # --------------------------------------------------------------------------
-
-SCALAR_SPEC: Mapping[str, object] = {"dtype": "f64", "shape": []}
-
-ONE_PARAMETER_INPUTS: Mapping[str, Mapping[str, object]] = {
-    "x": {"dtype": "f64", "shape": (3, 2)},
-    "y": {"dtype": "f64", "shape": (3, 4)},
-    "w": {"dtype": "f64", "shape": (2, 4)},
-}
-
-TWO_PARAMETER_INPUTS: Mapping[str, Mapping[str, object]] = {
-    "x": {"dtype": "f64", "shape": (3, 2)},
-    "y": {"dtype": "f64", "shape": (3, 4)},
-    "w": {"dtype": "f64", "shape": (2, 4)},
-    "b": {"dtype": "f64", "shape": (3, 4)},
-}
-
-# Element count of the residual, the divisor the mean's derivative carries.
-RESIDUAL_SIZE = 3 * 4
-
 
 def residual_loss(*, x: object, y: object, w: object) -> object:
     """The §17.3.1 loss: the multiply's VJP reads its own operand."""
@@ -127,61 +119,24 @@ def biased_residual_loss(*, x: object, y: object, w: object, b: object) -> objec
 
 # --------------------------------------------------------------------------
 # concrete arrays
+#
+# The declarations, the reference calculus, and the `ExecutedStep` record are
+# shared with `test_autodiff_training_step_expansion_composition` and imported
+# above; only this file's own generator seed is local, so the two suites never
+# assert over one shared draw.
 # --------------------------------------------------------------------------
+
+RNG_SEED = 20260831
 
 
 def concrete_inputs(*, with_bias: bool) -> dict[str, np.ndarray]:
-    """Fixed, non-degenerate `f64` arrays for one run."""
-    generator = np.random.default_rng(20260831)
-    values = {
-        "x": generator.normal(size=(3, 2)),
-        "y": generator.normal(size=(3, 4)),
-        "w": generator.normal(size=(2, 4)),
-    }
-    if with_bias:
-        values["b"] = generator.normal(size=(3, 4))
-    return values
-
-
-def reference_gradients(values: Mapping[str, np.ndarray]) -> dict[str, np.ndarray]:
-    """`dL/dw` and, when a bias is declared, `dL/db`, computed directly.
-
-    Written straight from the calculus of the loss, with no reference to any
-    compiled artifact: `L = mean(d * d)` for `d = x @ w (+ b) - y`, so
-    `dL/dd = 2 * d / N`, `dL/dw = x.T @ dL/dd`, and `dL/db = dL/dd`.
-    """
-    residual = values["x"] @ values["w"] - values["y"]
-    if "b" in values:
-        residual = residual + values["b"]
-    residual_gradient = 2.0 * residual / RESIDUAL_SIZE
-    gradients = {"w": values["x"].T @ residual_gradient}
-    if "b" in values:
-        gradients["b"] = residual_gradient
-    return gradients
-
-
-def reference_loss(values: Mapping[str, np.ndarray]) -> float:
-    residual = values["x"] @ values["w"] - values["y"]
-    if "b" in values:
-        residual = residual + values["b"]
-    return float(np.mean(residual * residual))
+    """This file's fixed, non-degenerate `f64` arrays for one run."""
+    return _concrete_inputs(with_bias=with_bias, seed=RNG_SEED)
 
 
 # --------------------------------------------------------------------------
 # phase 1 -- the structural compile
 # --------------------------------------------------------------------------
-
-
-def placeholder_binding(dependency: object) -> np.ndarray:
-    """A ones array of the dependency's own declared shape.
-
-    Used only by the compile phase, whose numbers no assertion in this file
-    reads. Driving it off the framework's analyzed shape rather than off a
-    hand-written table keeps the compile working for whichever free
-    dependencies a program actually has.
-    """
-    shape = tuple(int(dimension) for dimension in (dependency.shape or ()))
-    return np.ones(shape, dtype=np.float64)
 
 
 def compile_step(
@@ -351,15 +306,6 @@ def run_update(
     )
     outputs = dict(zip(program.selected_outputs, program.output_values, strict=True))
     return np.asarray(outputs[compiled.updated_parameter_value_id])
-
-
-@dataclasses.dataclass(frozen=True)
-class ExecutedStep:
-    """Everything one executed training step produced."""
-
-    loss: float
-    gradients: Mapping[str, np.ndarray]
-    updated: Mapping[str, np.ndarray]
 
 
 def execute_step(

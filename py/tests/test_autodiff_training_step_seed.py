@@ -34,18 +34,30 @@ which is the only seam by which a collision can be exercised at all.
 from __future__ import annotations
 
 import inspect
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import Optional
 
 import pytest
 import tinychain as tc
-from tinychain.autodiff import dependencies as _dependencies_module
 from tinychain.autodiff import training_step
 from tinychain.autodiff.generate import generate as _real_generate
 from tinychain.autodiff.graph import MulOperator, TensorGraph, TensorNodeRecord
-from tinychain.autodiff.protocol import AutodiffError, DerivativeMetadata
+from tinychain.autodiff.protocol import AutodiffError
 from tinychain.autodiff.reverse import DerivativeProgram
 from tinychain.autodiff.training_step import TracedLoss, trace_loss
+
+from tests.autodiff_training_step_seed_support import (
+    PARAMETER_NAMES,
+    SPEC,
+    AnalysisEntered as _AnalysisEntered,
+    FixedGenerate as _FixedGenerate,
+    fake_program as _fake_program,
+    forbid_dependency_analysis as _forbid_dependency_analysis,
+    mint_seed_against as _mint_seed_against,
+    mul_chain as _mul_chain,
+    occupied_value_ids as _occupied_value_ids,
+    traced_chain as _traced_chain,
+)
 
 
 # --------------------------------------------------------------------------
@@ -63,72 +75,16 @@ def _differentiate_loss(**kwargs: object) -> object:
 
 
 # --------------------------------------------------------------------------
-# fixtures: hand-built source graphs
+# fixtures
 #
-# These graphs are built directly rather than traced, because the property
-# under test is what the minter does when specific identifiers are already
-# occupied -- and a traced graph's identifiers are chosen by the builder, not
-# by the test. The end-to-end cases below use the real tracer.
+# The hand-built source graphs, the `generate` seam, and the analysis seam are
+# shared with `test_autodiff_training_step_contract` and imported above; only
+# the specs and losses this file alone uses are declared here. The end-to-end
+# cases below use the real tracer.
 # --------------------------------------------------------------------------
 
-SPEC: Mapping[str, object] = {"dtype": "f32", "shape": [2, 3]}
 SYMBOLIC_SPEC: Mapping[str, object] = {"dtype": "f32", "shape": ["N", 3]}
 INTEGER_SPEC: Mapping[str, object] = {"dtype": "i32", "shape": [2, 3]}
-
-PARAMETER_NAMES = ("w", "b")
-
-
-def _mul_chain(
-    output_value_ids: Sequence[str],
-    *,
-    input_value_ids: tuple[str, str] = ("pa", "pb"),
-    spec: Mapping[str, object] = SPEC,
-) -> TensorGraph:
-    """A chain of elementwise multiplies with caller-chosen identifiers.
-
-    Value ids are deliberately unlike the tracer's own (`pa`/`pb` rather than
-    `v0`/`v1`) so a `wrt` built from parameter *names*, or from declaration
-    order, cannot accidentally agree with a `wrt` built from the parameters'
-    value ids in `parameters` order.
-    """
-    first, second = input_value_ids
-    nodes: list[TensorNodeRecord] = []
-    previous = first
-    for index, output_value_id in enumerate(output_value_ids):
-        nodes.append(
-            TensorNodeRecord(
-                node_id=f"m{index}",
-                output_value_id=output_value_id,
-                operator=MulOperator(),
-                op_params={},
-                input_value_ids=[previous, second],
-                output_typespec=dict(spec),
-            )
-        )
-        previous = output_value_id
-    return TensorGraph(
-        nodes=nodes,
-        inputs=[(first, dict(spec)), (second, dict(spec))],
-        outputs=[output_value_ids[-1]],
-    )
-
-
-def _traced_chain(
-    output_value_ids: Sequence[str],
-    *,
-    input_value_ids: tuple[str, str] = ("pa", "pb"),
-    spec: Mapping[str, object] = SPEC,
-) -> TracedLoss:
-    graph = _mul_chain(output_value_ids, input_value_ids=input_value_ids, spec=spec)
-    return TracedLoss(
-        graph=graph,
-        loss_value_id=output_value_ids[-1],
-        input_value_ids={
-            PARAMETER_NAMES[0]: input_value_ids[0],
-            PARAMETER_NAMES[1]: input_value_ids[1],
-        },
-    )
-
 
 LINEAR_INPUTS: Mapping[str, Mapping[str, object]] = {
     "x": {"dtype": "f32", "shape": (2, 3)},
@@ -186,93 +142,6 @@ class _RecordingGenerate:
     def only_call(self) -> dict[str, object]:
         assert len(self.calls) == 1, f"expected exactly one generate call, got {len(self.calls)}"
         return self.calls[0]
-
-
-class _FixedGenerate:
-    """Returns a caller-controlled `DerivativeProgram`, ignoring the graph.
-
-    The seed the stage minted is recorded and handed to *build_program*, so a
-    collision can be constructed against an identifier the test never had to
-    guess.
-    """
-
-    def __init__(self, build_program) -> None:
-        self._build_program = build_program
-        self.seeds: list[object] = []
-        self.calls: list[dict[str, object]] = []
-
-    def __call__(self, *args: object, **kwargs: object) -> DerivativeProgram:
-        bound = inspect.signature(_real_generate).bind(*args, **kwargs)
-        bound.apply_defaults()
-        self.calls.append(dict(bound.arguments))
-        seed = bound.arguments["seed"]
-        seed_value_id = seed[0] if isinstance(seed, list) else seed
-        self.seeds.append(seed_value_id)
-        return self._build_program(seed_value_id)
-
-
-class _AnalysisEntered(BaseException):
-    """Raised by the analysis seam so entering it can never go unnoticed.
-
-    Derives from `BaseException`, not `Exception`, so a stage that wrapped
-    collaborator failures in a broad `except Exception` could not swallow it
-    and re-report a different category.
-    """
-
-
-def _forbid_dependency_analysis(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
-    """Install a recording seam over both dependency analyses.
-
-    Patched on the owning module *and* on `training_step` itself, so the seam
-    holds whether the stage reaches the analyses through the module or
-    through a name bound at import time -- this stage does not call them at
-    all today, and this test must keep failing if a later change makes it.
-    """
-    calls: list[tuple] = []
-
-    def recorder(*args: object, **kwargs: object):
-        calls.append((args, kwargs))
-        raise _AnalysisEntered("dependency analysis was entered")
-
-    for module in (_dependencies_module, training_step):
-        for name in ("analyze_derivative_dependencies", "analyze_graph_dependencies"):
-            monkeypatch.setattr(module, name, recorder, raising=False)
-    return calls
-
-
-def _fake_metadata(wrt: Sequence[str]) -> DerivativeMetadata:
-    return DerivativeMetadata(
-        source_graph_id="source",
-        transform_version="0.1.0",
-        tensor_op_contract_version="0.1.0",
-        wrt_signature=tuple(wrt),
-        seed_contract="",
-    )
-
-
-def _fake_program(
-    *,
-    nodes: Sequence[TensorNodeRecord],
-    wrt: Sequence[str],
-    gradient_value_id: str,
-    seed_value_id: Optional[str] = None,
-) -> DerivativeProgram:
-    value_typespecs = {value_id: dict(SPEC) for value_id in wrt}
-    value_typespecs[gradient_value_id] = dict(SPEC)
-    # The seed is always present in `value_typespecs` -- reverse traversal
-    # records it there deliberately. A check that looked there instead of at
-    # the produced node ids and output value ids would therefore reject every
-    # program ever generated, so the fixture keeps that entry present in the
-    # non-colliding control too.
-    if seed_value_id is not None:
-        value_typespecs[seed_value_id] = dict(SPEC)
-    return DerivativeProgram(
-        nodes=list(nodes),
-        gradients={wrt[0]: gradient_value_id},
-        output_gradients=[gradient_value_id],
-        metadata=_fake_metadata(wrt),
-        value_typespecs=value_typespecs,
-    )
 
 
 def _derivative_node(*, node_id: str, output_value_id: str) -> TensorNodeRecord:
@@ -363,24 +232,11 @@ def _program_identifiers(program: DerivativeProgram) -> set[str]:
     return identifiers
 
 
-def _occupied_value_ids(graph: TensorGraph) -> set[str]:
-    """Exactly the set §8.3 requires the candidate search to avoid."""
-    occupied = {value_id for value_id, _ in graph.inputs}
-    occupied.update(node.output_value_id for node in graph.nodes)
-    return occupied
-
-
 # --------------------------------------------------------------------------
 # AC-1: the minted seed is absent from the source graph's declared input
 # value ids and from every node output value id, including for a graph built
 # to occupy the minter's natural first candidates.
 # --------------------------------------------------------------------------
-
-
-def _mint_seed_against(traced: TracedLoss) -> str:
-    return _differentiate_loss(
-        traced=traced, parameters=[PARAMETER_NAMES[0]]
-    ).seed_value_id
 
 
 def test_minted_seed_walks_past_every_occupied_candidate_it_is_offered() -> None:

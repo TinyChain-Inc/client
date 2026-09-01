@@ -26,9 +26,11 @@ Six groups, in §17.6 order:
    graph occupying the minter's natural first candidates it *discovers* them
    by minting against a graph that does not contain them; and **ordering is
    observed, not assumed**, so "before dependency analysis" is proved by a
-   seam that raises a `BaseException` sentinel if it is ever entered. A
-   mechanical case at the end re-asserts the first rule over this file's own
-   source.
+   seam that raises a `BaseException` sentinel if it is ever entered. The
+   harness these cases run on is shared with
+   `test_autodiff_training_step_seed` and lives in
+   `tests.autodiff_training_step_seed_support`; a mechanical case at the end
+   re-asserts the first rule over this file's source and that module's.
 4. **Conditional determinism** (Inv-13) -- equal framework structure for equal
    declarations and deterministic collaborators, with a companion case that
    documents the limit by compiling with a handler that returns a fresh object
@@ -53,30 +55,32 @@ from __future__ import annotations
 
 import ast
 import dataclasses
-import inspect
 import pathlib
 import sys
 from collections.abc import Mapping, Sequence
-from typing import Optional
 
 import pytest
 import tinychain as tc
 from tinychain.autodiff import compile_training_step
-from tinychain.autodiff import dependencies as _dependencies_module
 from tinychain.autodiff import training_step
-from tinychain.autodiff.generate import generate as _real_generate
 from tinychain.autodiff.graph import MulOperator, TensorGraph, TensorNodeRecord
 from tinychain.autodiff.lowering import OperationHandlerRegistry
-from tinychain.autodiff.protocol import (
-    AUTODIFF_ERROR_CATEGORIES,
-    AutodiffError,
-    DerivativeMetadata,
-)
+from tinychain.autodiff.protocol import AUTODIFF_ERROR_CATEGORIES, AutodiffError
 from tinychain.autodiff.reverse import DerivativeProgram
 from tinychain.autodiff.training import SGD, Optimizer
-from tinychain.autodiff.training_step import TracedLoss
 
 from tests.autodiff_reference_consumer import training_step_registry
+from tests import autodiff_training_step_seed_support as seed_support
+from tests.autodiff_training_step_seed_support import (
+    PARAMETER_NAMES as SEED_PARAMETERS,
+    SPEC as SEED_SPEC,
+    FixedGenerate as _FixedGenerate,
+    fake_program as _shared_fake_program,
+    forbid_dependency_analysis as _forbid_dependency_analysis,
+    mint_seed_against as _mint_seed_against,
+    occupied_value_ids as _occupied_value_ids,
+    traced_chain as _traced_chain,
+)
 
 
 # --------------------------------------------------------------------------
@@ -523,67 +527,23 @@ def test_a_handler_exception_is_categorized_handler_contract_violation() -> None
 #
 # Hand-built source graphs, because the property under test is what the minter
 # does when specific identifiers are already occupied, and a traced graph's
-# identifiers are chosen by the builder rather than by the test.
+# identifiers are chosen by the builder rather than by the test. That harness
+# -- the graph builder, the `generate` seam, and the analysis seam -- is
+# shared with `test_autodiff_training_step_seed`, which certifies the same
+# stage from the other side, and is imported above rather than copied.
 # ==========================================================================
 
-SEED_SPEC: Mapping[str, object] = {"dtype": "f32", "shape": [2, 3]}
-SEED_PARAMETERS = ("w", "b")
 
-
-def _mul_chain(
-    output_value_ids: Sequence[str],
-    *,
-    input_value_ids: tuple[str, str] = ("pa", "pb"),
-) -> TensorGraph:
-    first, second = input_value_ids
-    nodes: list[TensorNodeRecord] = []
-    previous = first
-    for index, output_value_id in enumerate(output_value_ids):
-        nodes.append(
-            TensorNodeRecord(
-                node_id=f"m{index}",
-                output_value_id=output_value_id,
-                operator=MulOperator(),
-                op_params={},
-                input_value_ids=[previous, second],
-                output_typespec=dict(SEED_SPEC),
-            )
-        )
-        previous = output_value_id
-    return TensorGraph(
+def _fake_program(
+    *, nodes: Sequence[TensorNodeRecord], seed_value_id: str
+) -> DerivativeProgram:
+    """The shared fixture, fixed to this section's single-parameter chain."""
+    return _shared_fake_program(
         nodes=nodes,
-        inputs=[(first, dict(SEED_SPEC)), (second, dict(SEED_SPEC))],
-        outputs=[output_value_ids[-1]],
+        wrt=("pa",),
+        gradient_value_id="d0",
+        seed_value_id=seed_value_id,
     )
-
-
-def _traced_chain(
-    output_value_ids: Sequence[str],
-    *,
-    input_value_ids: tuple[str, str] = ("pa", "pb"),
-) -> TracedLoss:
-    graph = _mul_chain(output_value_ids, input_value_ids=input_value_ids)
-    return TracedLoss(
-        graph=graph,
-        loss_value_id=output_value_ids[-1],
-        input_value_ids={
-            SEED_PARAMETERS[0]: input_value_ids[0],
-            SEED_PARAMETERS[1]: input_value_ids[1],
-        },
-    )
-
-
-def _occupied_value_ids(graph: TensorGraph) -> set[str]:
-    """Exactly the set §8.3 requires the candidate search to avoid."""
-    occupied = {value_id for value_id, _ in graph.inputs}
-    occupied.update(node.output_value_id for node in graph.nodes)
-    return occupied
-
-
-def _mint_seed_against(traced: TracedLoss) -> str:
-    return training_step.differentiate_loss(
-        traced=traced, parameters=[SEED_PARAMETERS[0]]
-    ).seed_value_id
 
 
 def test_the_minted_seed_walks_past_every_occupied_candidate_including_a_parameters_own_id() -> None:
@@ -617,75 +577,6 @@ def test_the_minted_seed_walks_past_every_occupied_candidate_including_a_paramet
         discovered.append(seed)
 
     assert len(set(discovered)) == 8
-
-
-class _AnalysisEntered(BaseException):
-    """Raised by the analysis seam, so entering it can never go unnoticed.
-
-    A `BaseException` rather than an `Exception`, so no broad `except
-    Exception` anywhere on the path could swallow it and report a category.
-    """
-
-
-def _forbid_dependency_analysis(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
-    calls: list[tuple] = []
-
-    def recorder(*args: object, **kwargs: object):
-        calls.append((args, kwargs))
-        raise _AnalysisEntered("dependency analysis was entered")
-
-    for module in (_dependencies_module, training_step):
-        for name in ("analyze_derivative_dependencies", "analyze_graph_dependencies"):
-            monkeypatch.setattr(module, name, recorder, raising=False)
-    return calls
-
-
-class _FixedGenerate:
-    """Returns a caller-built `DerivativeProgram`, recording the minted seed.
-
-    The collision is therefore constructed out of the identifier the stage
-    actually minted -- never one this file guessed.
-    """
-
-    def __init__(self, build_program) -> None:
-        self._build_program = build_program
-        self.seeds: list[object] = []
-
-    def __call__(self, *args: object, **kwargs: object) -> DerivativeProgram:
-        bound = inspect.signature(_real_generate).bind(*args, **kwargs)
-        bound.apply_defaults()
-        seed = bound.arguments["seed"]
-        seed_value_id = seed[0] if isinstance(seed, list) else seed
-        self.seeds.append(seed_value_id)
-        return self._build_program(seed_value_id)
-
-
-def _fake_program(
-    *, nodes: Sequence[TensorNodeRecord], seed_value_id: str
-) -> DerivativeProgram:
-    metadata = DerivativeMetadata(
-        source_graph_id="source",
-        transform_version="0.1.0",
-        tensor_op_contract_version="0.1.0",
-        wrt_signature=("pa",),
-        seed_contract="",
-    )
-    # The seed is always present in `value_typespecs`: reverse traversal
-    # records it there for every program it produces, so a check reading that
-    # table instead of the produced ids would reject every derivative ever
-    # generated.
-    value_typespecs = {
-        "pa": dict(SEED_SPEC),
-        "d0": dict(SEED_SPEC),
-        seed_value_id: dict(SEED_SPEC),
-    }
-    return DerivativeProgram(
-        nodes=list(nodes),
-        gradients={"pa": "d0"},
-        output_gradients=["d0"],
-        metadata=metadata,
-        value_typespecs=value_typespecs,
-    )
 
 
 @pytest.mark.parametrize("collide_on", ["output_value_id", "node_id"])
@@ -877,10 +768,18 @@ def test_no_assertion_in_this_file_names_the_minted_seeds_spelling() -> None:
     whose candidate search never advances, and would break the moment the
     spelling changed -- neither of which is the property under test. The seed
     is obtained from a real compile and this file's own source is searched for
-    it, so the guard cannot go stale.
+    it, so the guard cannot go stale. The shared seed harness is searched with
+    it: moving a fixture into that module must not move it out of this guard's
+    reach.
     """
     seed_value_id = _compile().seed_value_ids[0]
-    source = pathlib.Path(__file__).read_text(encoding="utf-8")
+    source = "".join(
+        path.read_text(encoding="utf-8")
+        for path in (
+            pathlib.Path(__file__),
+            pathlib.Path(seed_support.__file__),
+        )
+    )
 
     assert seed_value_id not in source, (
         f"this file names the minted seed {seed_value_id!r} literally; §8.3 "
