@@ -171,3 +171,65 @@ def test_unknown_autodiff_attribute_still_raises_attribute_error() -> None:
 
     with pytest.raises(AttributeError):
         autodiff.definitely_not_a_real_autodiff_export
+
+
+_TRAINING_STEP_EXPORTS = frozenset(
+    {
+        "CompiledTrainingStep",
+        "ParameterCompilation",
+        "TrainingStepProvenance",
+        "compile_training_step",
+    }
+)
+
+
+def test_training_step_surface_is_exported_from_autodiff_package() -> None:
+    import tinychain.autodiff as autodiff
+    from tinychain.autodiff import training_step
+
+    assert _TRAINING_STEP_EXPORTS.issubset(set(autodiff.__all__))
+    for export_name in _TRAINING_STEP_EXPORTS:
+        assert hasattr(autodiff, export_name)
+
+    assert autodiff.CompiledTrainingStep is training_step.CompiledTrainingStep
+    assert autodiff.ParameterCompilation is training_step.ParameterCompilation
+    assert autodiff.TrainingStepProvenance is training_step.TrainingStepProvenance
+    assert autodiff.compile_training_step is training_step.compile_training_step
+
+    assert not hasattr(tc, "compile_training_step")
+    assert not hasattr(tc, "CompiledTrainingStep")
+    assert not hasattr(tc, "ParameterCompilation")
+    assert not hasattr(tc, "TrainingStepProvenance")
+
+
+def test_importing_autodiff_package_does_not_import_training_step_module() -> None:
+    """The export must stay lazy: touching the package alone must never import
+    `training_step` -- only resolving one of its four names may."""
+    import subprocess
+    import sys
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys\n"
+            "import tinychain.autodiff\n"
+            "assert 'tinychain.autodiff.training_step' not in sys.modules, (\n"
+            "    'importing the package alone must not import training_step'\n"
+            ")\n",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_every_autodiff_all_entry_resolves() -> None:
+    """A name listed in `__all__` but absent from every export frozenset, or
+    present in a frozenset but absent from `__all__`, is the classic failure
+    this pins against -- across the whole surface, not just one addition."""
+    import tinychain.autodiff as autodiff
+
+    assert len(autodiff.__all__) == len(set(autodiff.__all__))
+    for export_name in autodiff.__all__:
+        assert hasattr(autodiff, export_name), export_name

@@ -457,4 +457,8 @@ def test_expansion_module_adds_no_autodiff_error_category() -> None:
         "handler_contract_violation",
         "invalid_update_signature",
         "invalid_update_output",
+        "invalid_training_declaration",
+        "invalid_loss_signature",
+        "invalid_loss_output",
+        "expansion_contract_violation",
     )

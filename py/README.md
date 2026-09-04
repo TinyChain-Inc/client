@@ -842,6 +842,71 @@ time and therefore normalizes rather than lets escape uncategorized.
 handler reporting failure, and are deliberately left to propagate rather than
 being folded into `handler_contract_violation`.
 
+### Compiling a training step end to end
+
+`tinychain.autodiff.compile_training_step` composes tracing, differentiation,
+capture analysis, expansion, and lowering into one `CompiledTrainingStep`. It
+takes a framework-traced loss and returns lowered forward, derivative, and
+per-parameter update programs, plus the provenance to identify what produced
+them — see `tinychain/autodiff/training_step.py`'s module documentation for
+the exact compile sequence, the seed and capture-selection rules, and the
+collaborator-failure table.
+
+The example below drives it with `tests.autodiff_reference_consumer`, the
+one dense-array handler registry the test tree shares across its autodiff
+suites (`training_step_registry()`). That module is test-tree infrastructure
+that proves the lowering seam is usable by a generic, non-ILC consumer — it
+is not a shipped `tinychain` API, and a real backend brings its own
+`OperationHandlerRegistry` instead.
+
+This example is structural, not numerical: `bind_input` below is a
+placeholder that hands every free dependency a ones array of its own
+declared shape, purely so the compile can run without a real backend behind
+it. It proves the record's shape -- the three lowered programs and their
+selected outputs -- not any computed value. For a worked, numerically-checked
+run that executes those programs against concrete arrays through
+`lower_graph`/`lower_derivative_program`, see
+`py/tests/test_autodiff_training_step_end_to_end.py`.
+
+```python
+import numpy as np
+import tinychain as tc
+from tinychain.autodiff import compile_training_step
+from tinychain.autodiff.training import SGD
+
+from tests.autodiff_reference_consumer import training_step_registry
+
+
+def loss(x: tc.Tensor, y: tc.Tensor, w: tc.Tensor) -> tc.Tensor:
+    residual = x @ w - y
+    return (residual * residual).mean([0, 1])
+
+
+def placeholder_binding(dependency: object) -> np.ndarray:
+    """A ones array of the dependency's own declared shape -- structural only."""
+    shape = tuple(int(dimension) for dimension in (dependency.shape or ()))
+    return np.ones(shape, dtype=np.float64)
+
+
+with tc.state.scoped_context():
+    step = compile_training_step(
+        loss,
+        inputs={
+            "x": {"dtype": "f64", "shape": (3, 2)},
+            "y": {"dtype": "f64", "shape": (3, 4)},
+            "w": {"dtype": "f64", "shape": (2, 4)},
+        },
+        parameters=["w"],
+        optimizer=SGD(),
+        optimizer_inputs={"learning_rate": {"dtype": "f64", "shape": []}},
+        handlers=training_step_registry(),
+        bind_input=placeholder_binding,
+    )
+
+# `step.forward`, `step.derivative`, and `step.parameter("w").update` are
+# the three lowered `LoweredProgram`s this call produced.
+```
+
 ### Every reachable operation needs a registered handler, fusion or not
 
 **Precondition.** Support is checked for every reachable operation *before*

@@ -284,6 +284,27 @@ raising ``malformed_derivative_ir`` naming the identifier rather than silently
 shadowing an existing value. An artifact that already contains a duplicate node
 or value id is rejected the same way, before anything is minted.
 
+Every public pass takes an optional, keyword-only ``reserved_id_prefix``
+choosing the namespace that invocation mints from: ``None`` -- the default --
+is ``exn…``/``exv…`` exactly as above, and a string ``p`` mints ``pn…``/``pv…``
+instead. It exists because §17.7 requires composing the forward pass and the
+gradient-path pass in a *single* compile: both mint from zero, so with one
+shared namespace the lowered forward graph and the lowered derivative program
+each contain ``exv0``, and the §8.6 preservation recomputation rejects the pair
+as an ambiguous producer. Namespacing the two apart is the caller's own
+decision to make, and this parameter is where they make it.
+
+The parameter is keyword-only with a default so that a pass remains a function
+of exactly one positional argument -- what makes it usable, unwrapped, as an
+expansion in the first place. A supplied prefix is validated before any
+artifact is read: an empty prefix, a non-string, and a prefix beginning with a
+letter another stage's identifier namespace is spelled from (the tracer's
+``v``/``n``, the reverse transform's ``d``/``dn``) are refused as
+``malformed_derivative_ir``. That last rule is deliberately conservative -- see
+:data:`_FOREIGN_NAMESPACE_LEADERS`. A caller-declared namespace only ever
+*widens* what counts as reserved: the module defaults stay reserved whichever
+prefix is in force.
+
 These identifiers name positions inside one artifact. They are not addresses: a
 declared input's address is the ``IdRef`` its name produces, and its value id is
 minted separately, so a parameter named ``weights`` is value ``v0`` and nothing a
@@ -547,53 +568,168 @@ def _check_declaration_agrees(
 EXPANSION_NODE_ID_PREFIX = "exn"
 EXPANSION_VALUE_ID_PREFIX = "exv"
 
+# The root the two constants above are spelled from. A caller-supplied
+# `reserved_id_prefix` replaces exactly this root and nothing else: a prefix
+# `"fw"` mints `fwn…` and `fwv…`, and passing `"ex"` back reproduces the two
+# constants character for character. The constants remain the documented
+# defaults; this root exists so the derivation `<root> + "n"` / `<root> + "v"`
+# has one spelling rather than being restated at each call site.
+_DEFAULT_RESERVED_ID_PREFIX = "ex"
+
+# Leading letters an identifier namespace owned by another stage is spelled
+# from: the tracer's `v…`/`n…` and the reverse transform's `d…`/`dn…`. A prefix
+# starting with one of these is refused.
+#
+# The rule is deliberately *conservative*, and rejects more than it strictly
+# must: `"vjp"` and `"norm"` could not actually collide, because a traced id is
+# a leading letter followed by digits and `vjpn0` is not. It is written this
+# way because the cost of the two rules is not symmetric. A reader who is
+# refused `"vjp"` reads this comment and picks another prefix; a reader whose
+# subtly-overlapping prefix is *accepted* gets an ambiguous artifact far from
+# here, which is exactly the failure this parameter exists to remove. A rule
+# stated as "does not begin with a letter another stage owns" is also one a
+# caller can hold in their head, which a rule about digits is not.
+_FOREIGN_NAMESPACE_LEADERS = ("v", "n", "d")
+
+
+@dataclass(frozen=True)
+class _ReservedNamespace:
+    """The node and value prefixes one pass invocation mints from."""
+
+    node_prefix: str
+    value_prefix: str
+
+    def prefixes(self) -> tuple[str, str]:
+        return (self.node_prefix, self.value_prefix)
+
+
+_DEFAULT_RESERVED_NAMESPACE = _ReservedNamespace(
+    node_prefix=EXPANSION_NODE_ID_PREFIX, value_prefix=EXPANSION_VALUE_ID_PREFIX
+)
+
+
+def _reserved_namespace(reserved_id_prefix: str | None) -> _ReservedNamespace:
+    """Resolve a caller-supplied prefix into the namespace a pass mints from.
+
+    `None` -- the default of every public pass -- resolves to the two module
+    constants, so an artifact expanded without the argument is identical to one
+    expanded before the argument existed.
+
+    A supplied prefix is validated here, before any artifact is read, so a
+    prefix that could never be a safe namespace is reported as the caller
+    mistake it is rather than surfacing later as an ambiguous identifier. The
+    category is `malformed_derivative_ir`, the module's existing vocabulary for
+    an identifier-level defect; this module adds no error category.
+    """
+    if reserved_id_prefix is None:
+        return _DEFAULT_RESERVED_NAMESPACE
+    # `bool` is excluded explicitly: `True` reaching a string field is a
+    # construction defect, not a prefix, and `isinstance(True, int)` would let
+    # a laxer check through.
+    if isinstance(reserved_id_prefix, bool) or not isinstance(reserved_id_prefix, str):
+        raise AutodiffError(
+            "malformed_derivative_ir",
+            f"reserved_id_prefix must be a string, got {reserved_id_prefix!r}",
+        )
+    if not reserved_id_prefix.strip():
+        raise AutodiffError(
+            "malformed_derivative_ir",
+            f"reserved_id_prefix must be a non-empty string, got "
+            f"{reserved_id_prefix!r}; an empty prefix would mint into the tracer's "
+            "own namespace",
+        )
+    if reserved_id_prefix.startswith(_FOREIGN_NAMESPACE_LEADERS):
+        raise AutodiffError(
+            "malformed_derivative_ir",
+            f"reserved_id_prefix {reserved_id_prefix!r} begins with an identifier "
+            f"namespace another stage owns {_FOREIGN_NAMESPACE_LEADERS!r} -- the "
+            "tracer's 'v'/'n' and the reverse transform's 'd'/'dn'; the check is "
+            "deliberately conservative and refuses the whole leading letter",
+        )
+    return _ReservedNamespace(
+        node_prefix=f"{reserved_id_prefix}n", value_prefix=f"{reserved_id_prefix}v"
+    )
+
 
 class _IdentifierMinter:
     """Deterministic source of reserved node and value identifiers.
 
     Constructed once per pass invocation over the identifiers the input
-    artifact already uses. Both mint methods take no argument, so every caller
-    -- this pass and the gradient-path pass that shares this module -- mints
-    from one place and cannot disagree about the namespace or the ordering.
+    artifact already uses, and over the namespace that invocation mints from.
+    Both mint methods take no argument, so every caller -- this pass and the
+    gradient-path pass that shares this module -- mints from one place and
+    cannot disagree about the namespace or the ordering.
+
+    The namespace is a constructor argument rather than a module constant so
+    that two passes composed in one compile can be namespaced apart. Nothing
+    else about minting changes with it: indices still run from zero, and every
+    minted identifier is still checked against the input artifact, under
+    whichever namespace is in force.
     """
 
     def __init__(
-        self, *, existing_node_ids: frozenset[str], existing_value_ids: frozenset[str]
+        self,
+        *,
+        existing_node_ids: frozenset[str],
+        existing_value_ids: frozenset[str],
+        namespace: _ReservedNamespace = _DEFAULT_RESERVED_NAMESPACE,
     ) -> None:
         self._existing_node_ids = existing_node_ids
         self._existing_value_ids = existing_value_ids
+        self._namespace = namespace
         self._node_index = 0
         self._value_index = 0
 
     def mint_node_id(self) -> str:
         """Return the next reserved node id, rejecting a collision."""
-        node_id = f"{EXPANSION_NODE_ID_PREFIX}{self._node_index}"
+        prefix = self._namespace.node_prefix
+        node_id = f"{prefix}{self._node_index}"
         self._node_index += 1
         if node_id in self._existing_node_ids:
             raise AutodiffError(
                 "malformed_derivative_ir",
                 f"minted node id {node_id!r} collides with a node id already present in "
-                f"the artifact; {EXPANSION_NODE_ID_PREFIX!r} is a reserved expansion namespace",
+                f"the artifact; {prefix!r} is a reserved expansion namespace",
             )
         return node_id
 
     def mint_value_id(self) -> str:
         """Return the next reserved value id, rejecting a collision."""
-        value_id = f"{EXPANSION_VALUE_ID_PREFIX}{self._value_index}"
+        prefix = self._namespace.value_prefix
+        value_id = f"{prefix}{self._value_index}"
         self._value_index += 1
         if value_id in self._existing_value_ids:
             raise AutodiffError(
                 "malformed_derivative_ir",
                 f"minted value id {value_id!r} collides with a value id already present in "
-                f"the artifact; {EXPANSION_VALUE_ID_PREFIX!r} is a reserved expansion namespace",
+                f"the artifact; {prefix!r} is a reserved expansion namespace",
             )
         return value_id
 
 
-def _is_reserved_identifier(identifier: object) -> bool:
-    """Report whether *identifier* is spelled inside the reserved namespace."""
+def _reserved_prefixes(namespace: _ReservedNamespace) -> tuple[str, ...]:
+    """Every prefix reserved for expansion while *namespace* is in force.
+
+    The module defaults are always included, whatever the caller chose. A
+    caller-declared namespace *widens* what counts as reserved and never
+    narrows it: an artifact already carrying `exn…`/`exv…` is one a pass has
+    already rewritten, and that stays true no matter which prefix this
+    invocation mints from.
+    """
+    prefixes = [EXPANSION_NODE_ID_PREFIX, EXPANSION_VALUE_ID_PREFIX]
+    prefixes.extend(
+        prefix for prefix in namespace.prefixes() if prefix not in prefixes
+    )
+    return tuple(prefixes)
+
+
+def _is_reserved_identifier(
+    identifier: object,
+    namespace: _ReservedNamespace = _DEFAULT_RESERVED_NAMESPACE,
+) -> bool:
+    """Report whether *identifier* is spelled inside a reserved namespace."""
     return isinstance(identifier, str) and identifier.startswith(
-        (EXPANSION_NODE_ID_PREFIX, EXPANSION_VALUE_ID_PREFIX)
+        _reserved_prefixes(namespace)
     )
 
 
@@ -943,18 +1079,30 @@ def _mean_output_typespec(
     return {"dtype": declared_dtype, "shape": list(declared_shape)}
 
 
-def _check_mean_carries_no_reserved_construct(node: TensorNodeRecord) -> None:
-    """Reject reserved identifiers and fill descriptor keys on a mean node."""
+def _check_mean_carries_no_reserved_construct(
+    node: TensorNodeRecord,
+    namespace: _ReservedNamespace = _DEFAULT_RESERVED_NAMESPACE,
+) -> None:
+    """Reject reserved identifiers and fill descriptor keys on a mean node.
+
+    The guard applies to the namespace actually *in force*, not only to the
+    module default. If a caller declares a namespace reserved, an input already
+    carrying identifiers from it is exactly as suspect as one carrying the
+    default's -- letting a custom prefix through would mean choosing a prefix
+    quietly weakens a check the default enjoys, which is a worse outcome than
+    refusing a mean a caller had no business spelling that way.
+    """
+    reserved = _reserved_prefixes(namespace)
     for label, identifier in (
         ("node id", node.node_id),
         ("output value id", node.output_value_id),
     ):
-        if _is_reserved_identifier(identifier):
+        if _is_reserved_identifier(identifier, namespace):
             raise _mean_failure(
                 node.node_id,
                 "unsupported_reduction",
                 f"{label} {identifier!r} is spelled inside the reserved expansion namespace "
-                f"({EXPANSION_NODE_ID_PREFIX!r}/{EXPANSION_VALUE_ID_PREFIX!r})",
+                f"({'/'.join(repr(prefix) for prefix in reserved)})",
             )
     descriptor_keys = sorted(str(key) for key in node.op_params if key in _FILL_PARAM_KEYS)
     if descriptor_keys:
@@ -966,7 +1114,9 @@ def _check_mean_carries_no_reserved_construct(node: TensorNodeRecord) -> None:
 
 
 def _supported_mean(
-    node: TensorNodeRecord, typespecs: Mapping[str, object]
+    node: TensorNodeRecord,
+    typespecs: Mapping[str, object],
+    namespace: _ReservedNamespace = _DEFAULT_RESERVED_NAMESPACE,
 ) -> _SupportedMean:
     """Prove one `MeanOperator` node expandable, or raise its categorized failure.
 
@@ -989,7 +1139,7 @@ def _supported_mean(
     output_typespec = _mean_output_typespec(
         node, operand_shape, operand_dtype, axes, keepdims
     )
-    _check_mean_carries_no_reserved_construct(node)
+    _check_mean_carries_no_reserved_construct(node, namespace)
 
     return _SupportedMean(
         node_id=node.node_id,
@@ -1164,7 +1314,9 @@ def _emit_mean_region(
 # --------------------------------------------------------------------------
 
 
-def expand_mean_graph_detailed(graph: TensorGraph) -> MeanGraphExpansionResult:
+def expand_mean_graph_detailed(
+    graph: TensorGraph, *, reserved_id_prefix: str | None = None
+) -> MeanGraphExpansionResult:
     """Return *graph* with every supported all-axis rank-2 mean expanded,
     together with one `MeanExpansionRegion` per rewritten region.
 
@@ -1182,7 +1334,24 @@ def expand_mean_graph_detailed(graph: TensorGraph) -> MeanGraphExpansionResult:
     graph. `expand_mean_graph` is defined below as this pass followed by
     selecting the `graph` field -- there is no second implementation of the
     rewrite for the two forms to disagree about.
+
+    ``reserved_id_prefix`` chooses the namespace this invocation mints from:
+    ``None`` -- the default -- is the module's own ``exn…``/``exv…``, and a
+    string ``p`` mints ``pn…``/``pv…`` instead. It exists so two passes composed
+    in one compile can be namespaced apart; §17.7 requires composing this pass
+    and the gradient-path pass in a single compile, and with one shared
+    namespace both artifacts contain ``exv0``, which the §8.6 preservation
+    recomputation rejects as an ambiguous producer.
+
+    It is **keyword-only, with a default, and must stay that way.** An expansion
+    pass is a pure function from one artifact to a new artifact of the same
+    type, taking exactly one positional argument, and calling it is the only
+    opt-in mechanism -- so a caller must be able to hand this function over
+    unwrapped, as an expansion. A keyword-only defaulted argument preserves
+    that; promoting it to a positional parameter would silently break every
+    such caller, which is why the shape of this signature is pinned by a test.
     """
+    namespace = _reserved_namespace(reserved_id_prefix)
     nodes = graph.nodes
     existing_node_ids = _indexed_node_ids(nodes)
     existing_value_ids = _mentioned_value_ids(
@@ -1192,13 +1361,15 @@ def expand_mean_graph_detailed(graph: TensorGraph) -> MeanGraphExpansionResult:
 
     # Validate every candidate before emitting any replacement nodes.
     supported_means = {
-        node.node_id: _supported_mean(node, typespecs)
+        node.node_id: _supported_mean(node, typespecs, namespace)
         for node in nodes
         if isinstance(node.operator, MeanOperator)
     }
 
     minter = _IdentifierMinter(
-        existing_node_ids=existing_node_ids, existing_value_ids=existing_value_ids
+        existing_node_ids=existing_node_ids,
+        existing_value_ids=existing_value_ids,
+        namespace=namespace,
     )
     expanded_nodes: list[TensorNodeRecord] = []
     regions: list[MeanExpansionRegion] = []
@@ -1231,15 +1402,35 @@ def expand_mean_graph_detailed(graph: TensorGraph) -> MeanGraphExpansionResult:
     )
 
 
-def expand_mean_graph(graph: TensorGraph) -> TensorGraph:
+def expand_mean_graph(
+    graph: TensorGraph, *, reserved_id_prefix: str | None = None
+) -> TensorGraph:
     """Return *graph* with every supported all-axis rank-2 mean expanded.
 
     Defined as `expand_mean_graph_detailed` followed by selecting its `graph`
     field, so this composable form and the detailed form share one rewrite and
     cannot disagree. The single positional parameter is unchanged: it is what
     lets this pass be used directly as an expansion hook.
+
+    ``reserved_id_prefix`` chooses the namespace this invocation mints from:
+    ``None`` -- the default -- is the module's own ``exn…``/``exv…``, and a
+    string ``p`` mints ``pn…``/``pv…`` instead. It exists so two passes composed
+    in one compile can be namespaced apart; §17.7 requires composing this pass
+    and the gradient-path pass in a single compile, and with one shared
+    namespace both artifacts contain ``exv0``, which the §8.6 preservation
+    recomputation rejects as an ambiguous producer.
+
+    It is **keyword-only, with a default, and must stay that way.** An expansion
+    pass is a pure function from one artifact to a new artifact of the same
+    type, taking exactly one positional argument, and calling it is the only
+    opt-in mechanism -- so a caller must be able to hand this function over
+    unwrapped, as an expansion. A keyword-only defaulted argument preserves
+    that; promoting it to a positional parameter would silently break every
+    such caller, which is why the shape of this signature is pinned by a test.
     """
-    return expand_mean_graph_detailed(graph).graph
+    return expand_mean_graph_detailed(
+        graph, reserved_id_prefix=reserved_id_prefix
+    ).graph
 
 
 # --------------------------------------------------------------------------
@@ -1466,7 +1657,7 @@ def _emit_broadcast_scale_region(
 
 
 def expand_mean_derivative_program_detailed(
-    program: DerivativeProgram,
+    program: DerivativeProgram, *, reserved_id_prefix: str | None = None
 ) -> MeanDerivativeExpansionResult:
     """Return *program* with every rewritable broadcast-and-scale region
     expanded, together with one `MeanExpansionRegion` per rewritten region
@@ -1495,7 +1686,24 @@ def expand_mean_derivative_program_detailed(
     `expand_mean_derivative_program` is defined below as this pass followed by
     selecting the `program` field -- there is no second implementation of the
     rewrite for the two forms to disagree about.
+
+    ``reserved_id_prefix`` chooses the namespace this invocation mints from:
+    ``None`` -- the default -- is the module's own ``exn…``/``exv…``, and a
+    string ``p`` mints ``pn…``/``pv…`` instead. It exists so two passes composed
+    in one compile can be namespaced apart; §17.7 requires composing this pass
+    and the gradient-path pass in a single compile, and with one shared
+    namespace both artifacts contain ``exv0``, which the §8.6 preservation
+    recomputation rejects as an ambiguous producer.
+
+    It is **keyword-only, with a default, and must stay that way.** An expansion
+    pass is a pure function from one artifact to a new artifact of the same
+    type, taking exactly one positional argument, and calling it is the only
+    opt-in mechanism -- so a caller must be able to hand this function over
+    unwrapped, as an expansion. A keyword-only defaulted argument preserves
+    that; promoting it to a positional parameter would silently break every
+    such caller, which is why the shape of this signature is pinned by a test.
     """
+    namespace = _reserved_namespace(reserved_id_prefix)
     nodes = program.nodes
     existing_node_ids = _indexed_node_ids(nodes)
     existing_value_ids = _mentioned_value_ids(
@@ -1528,7 +1736,9 @@ def expand_mean_derivative_program_detailed(
     }
 
     minter = _IdentifierMinter(
-        existing_node_ids=existing_node_ids, existing_value_ids=existing_value_ids
+        existing_node_ids=existing_node_ids,
+        existing_value_ids=existing_value_ids,
+        namespace=namespace,
     )
     expanded_nodes: list[TensorNodeRecord] = []
     provenance_regions: list[MeanExpansionRegion] = []
@@ -1571,12 +1781,32 @@ def expand_mean_derivative_program_detailed(
     )
 
 
-def expand_mean_derivative_program(program: DerivativeProgram) -> DerivativeProgram:
+def expand_mean_derivative_program(
+    program: DerivativeProgram, *, reserved_id_prefix: str | None = None
+) -> DerivativeProgram:
     """Return *program* with every rewritable broadcast-and-scale region expanded.
 
     Defined as `expand_mean_derivative_program_detailed` followed by selecting
     its `program` field, so this composable form and the detailed form share
     one rewrite and cannot disagree. The single positional parameter is
     unchanged, allowing callers to use this pass directly as an expansion hook.
+
+    ``reserved_id_prefix`` chooses the namespace this invocation mints from:
+    ``None`` -- the default -- is the module's own ``exn…``/``exv…``, and a
+    string ``p`` mints ``pn…``/``pv…`` instead. It exists so two passes composed
+    in one compile can be namespaced apart; §17.7 requires composing this pass
+    and the gradient-path pass in a single compile, and with one shared
+    namespace both artifacts contain ``exv0``, which the §8.6 preservation
+    recomputation rejects as an ambiguous producer.
+
+    It is **keyword-only, with a default, and must stay that way.** An expansion
+    pass is a pure function from one artifact to a new artifact of the same
+    type, taking exactly one positional argument, and calling it is the only
+    opt-in mechanism -- so a caller must be able to hand this function over
+    unwrapped, as an expansion. A keyword-only defaulted argument preserves
+    that; promoting it to a positional parameter would silently break every
+    such caller, which is why the shape of this signature is pinned by a test.
     """
-    return expand_mean_derivative_program_detailed(program).program
+    return expand_mean_derivative_program_detailed(
+        program, reserved_id_prefix=reserved_id_prefix
+    ).program
