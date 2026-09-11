@@ -17,13 +17,12 @@ def _sorted_items(obj: Mapping[str, Any]) -> list[tuple[str, Any]]:
 def _json_of(form: object) -> object:
     from ..value import Value
 
-    runtime_op = OpRef.from_runtime(form)
-    if runtime_op is not None:
-        return runtime_op.to_json()
-
     if isinstance(form, (OpRef, OpDef, After, Cond, While, ForEach)):
         return form.to_json()
     if isinstance(form, Value):
+        op = getattr(form, "op", None)
+        if op is not None and not isinstance(op, OpRef):
+            raise TypeError("runtime requests must be lowered by the Library compiler")
         return form.to_json()
     if isinstance(form, IdRef):
         return {form.key(): []}
@@ -49,21 +48,13 @@ def autobox(obj: object) -> State:
     from ..value import Value
 
     if isinstance(obj, Value):
-        from ...opref import OpRef as RuntimeOpRef
-
         op = getattr(obj, "op", None)
         if isinstance(op, OpRef):
             return _scalar_like(obj, form=op)
-        runtime_op = OpRef.from_runtime(op)
-        if runtime_op is not None:
-            return _scalar_like(obj, form=runtime_op)
-        if isinstance(op, RuntimeOpRef):
-            raise TypeError(f"unsupported runtime OpRef type {type(op).__name__}")
+        if op is not None:
+            raise TypeError("runtime requests must be lowered by the Library compiler")
         return _scalar_like(obj, value=obj)
 
-    runtime_op = OpRef.from_runtime(obj)
-    if runtime_op is not None:
-        return _typed_from_op_ref(runtime_op)
     tensor = _tensor_from_native(obj)
     if tensor is not None:
         return tensor
@@ -166,13 +157,13 @@ def _is_string_scalar(obj: object) -> bool:
     )
 
 
-def _normalize_opdef_form(form: Sequence[tuple[str, object]]) -> list[tuple[str, "Scalar"]]:
+def _normalize_opdef_form(form: Sequence[tuple[str, object]]) -> tuple[tuple[str, "Scalar"], ...]:
     out: list[tuple[str, Scalar]] = []
     for name, value in form:
         if not isinstance(name, str):
             raise TypeError("OpDef form entries must use string ids")
         out.append((name, autobox(value)))
-    return out
+    return tuple(out)
 
 
 def _literal_number(form: object) -> int | float | bool | None:
@@ -193,16 +184,6 @@ def _literal_number(form: object) -> int | float | bool | None:
 
 
 def id(name: str) -> "Scalar":
-    from ..context import current_context
-
-    active_ctx = current_context()
-    if active_ctx is not None:
-        try:
-            return getattr(active_ctx, name)
-        except AttributeError:
-            pass
-
-    # Unbound ids are represented as a generic symbolic ref.
     return Symbol(IdRef(name))
 
 
@@ -892,10 +873,14 @@ def _reduce_scalar(
     subject: str,
     op: "OpDef | Scalar | object",
     value: "Scalar | Value | object",
+    item_name: str | None,
 ) -> Scalar:
     from .reduce import infer_reduce_item_name
+    from .refs import _validate_id
 
-    item_name = infer_reduce_item_name(op, value)
+    if item_name is None:
+        item_name = infer_reduce_item_name(op, value)
+    item_name = _validate_id(item_name)
     opref = PostOpRef(
         subject,
         {
@@ -968,8 +953,9 @@ class Tuple(Iterable):
         *,
         op: "OpDef | Scalar | object",
         value: "Scalar | Value | object",
+        item_name: str | None = None,
     ) -> Scalar:
-        return _reduce_scalar(_subject_method(self, "reduce"), op, value)
+        return _reduce_scalar(_subject_method(self, "reduce"), op, value, item_name)
 
 
 class Map(Comparable):
@@ -995,8 +981,9 @@ class Map(Comparable):
         *,
         op: "OpDef | Scalar | object",
         value: "Scalar | Value | object",
+        item_name: str | None = None,
     ) -> Scalar:
-        return _reduce_scalar(_subject_method(self, "reduce"), op, value)
+        return _reduce_scalar(_subject_method(self, "reduce"), op, value, item_name)
 
 
 class String(Comparable):

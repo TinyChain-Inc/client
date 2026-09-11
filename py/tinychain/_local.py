@@ -39,28 +39,13 @@ def state_handle(value: object) -> Any:
     return backend().StateHandle(value)
 
 
-def backend_handle(*args: object) -> Any:
-    return backend().Backend(*args)
+def backend_handle(*args: object, **kwargs: object) -> Any:
+    return backend().Backend(*args, **kwargs)
 
 
-def local_kernel(*, data_dir: str | None = None) -> Any:
+def local_kernel(*, data_dir: str | None = None, token: object | None = None) -> Any:
     handle = kernel_handle()
     if data_dir is None:
-        return handle.local()
-    return handle.local(data_dir=data_dir)
-
-
-def kernel_with_library_definition(
-    definition_json: str,
-    *,
-    routes: object = None,
-    token: object = None,
-    data_dir: str | None = None,
-    workspace: str | None = None,
-) -> Any:
-    kwargs = {"token": token, "data_dir": data_dir}
-    if workspace is not None:
-        kwargs["workspace"] = workspace
-    if routes is not None:
-        kwargs["routes"] = routes
-    return kernel_handle().with_library_definition(definition_json, **kwargs)
+        return handle.local(token=token)
+    workspace = f"{data_dir}-workspace"
+    return handle.local(data_dir=data_dir, workspace=workspace, token=token)

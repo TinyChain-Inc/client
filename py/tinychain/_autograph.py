@@ -108,6 +108,7 @@ class _AutographTransformer(ast.NodeTransformer):
     def __init__(self, params: set[str]) -> None:
         self._params = params
         self._locals: set[str] = set()
+        self._provider_ids: set[str] = set()
         self._temp_counter = 0
 
     def transform(self, fn: ast.FunctionDef) -> ast.FunctionDef:
@@ -154,8 +155,12 @@ class _AutographTransformer(ast.NodeTransformer):
             targets=[ast.Name(id="cxt", ctx=ast.Store())],
             value=ast.Call(
                 func=ast.Attribute(
-                    value=ast.Attribute(value=ast.Name(id="_tc_autograph", ctx=ast.Load()), attr="state", ctx=ast.Load()),
-                    attr="context",
+                    value=ast.Attribute(
+                        value=ast.Name(id="_tc_autograph", ctx=ast.Load()),
+                        attr="context",
+                        ctx=ast.Load(),
+                    ),
+                    attr="_require_context",
                     ctx=ast.Load(),
                 ),
                 args=[],
@@ -197,10 +202,11 @@ class _AutographTransformer(ast.NodeTransformer):
         if len(stmt.targets) != 1 or not isinstance(stmt.targets[0], ast.Name):
             raise AutographAssignmentError("only single-target assignments are supported")
         name = stmt.targets[0].id
-        self._check_name_binding(name)
+        if name not in self._locals:
+            self._check_name_binding(name)
         value = self._lower_expr(stmt.value)
         self._locals.add(name)
-        return [ast.Assign(targets=[self._cxt_attr(name, ast.Store())], value=value)]
+        return [self._bind_local(name, value)]
 
     def _lower_augassign(self, stmt: ast.AugAssign) -> list[ast.stmt]:
         if not isinstance(stmt.target, ast.Name):
@@ -212,7 +218,7 @@ class _AutographTransformer(ast.NodeTransformer):
         right = self._lower_expr(stmt.value)
         value = ast.BinOp(left=left, op=stmt.op, right=right)
         self._locals.add(name)
-        return [ast.Assign(targets=[self._cxt_attr(name, ast.Store())], value=value)]
+        return [self._bind_local(name, value)]
 
     def _lower_return(self, stmt: ast.Return) -> ast.Return:
         value = self._lower_expr(stmt.value) if stmt.value is not None else ast.Constant(value=None)
@@ -252,9 +258,9 @@ class _AutographTransformer(ast.NodeTransformer):
                 self._check_name_binding(name)
                 self._locals.add(name)
             out.append(
-                ast.Assign(
-                    targets=[self._cxt_attr(name, ast.Store())],
-                    value=ast.Subscript(
+                self._bind_local(
+                    name,
+                    ast.Subscript(
                         value=ast.Name(id=temp_name, ctx=ast.Load()),
                         slice=ast.Constant(value=name),
                         ctx=ast.Load(),
@@ -324,8 +330,12 @@ class _AutographTransformer(ast.NodeTransformer):
         if set(then_names) != set(else_names):
             raise AutographAssignmentError("if branches must assign the same set of names")
 
-        then_op = _opdef_post(then_form + [("result", _dict_expr(_id_map(then_names)))])
-        else_op = _opdef_post(else_form + [("result", _dict_expr(_id_map(then_names)))])
+        then_op = self._opdef_post(
+            then_form + [(self._temp_name("_result_"), _dict_expr(_id_map(then_names)))]
+        )
+        else_op = self._opdef_post(
+            else_form + [(self._temp_name("_result_"), _dict_expr(_id_map(then_names)))]
+        )
         map_expr = self._tc_cond_op(cond_expr, then_op, else_op)
         return map_expr, then_names
 
@@ -454,7 +464,7 @@ class _AutographTransformer(ast.NodeTransformer):
         next_state_name = self._temp_name(f"{state_name}_next_")
 
         cond_expr = _replace_names(stmt.test, {state_name}, "_tc_autograph")
-        cond_op = _opdef_post([("result", cond_expr)])
+        cond_op = self._opdef_post([(self._temp_name("_result_"), cond_expr)])
 
         temp_names: set[str] = set()
         step_form: list[tuple[str, ast.expr]] = []
@@ -488,8 +498,8 @@ class _AutographTransformer(ast.NodeTransformer):
                     temp_names.add(name)
                     step_form.append((name, expr))
 
-        step_form.append(("result", _id_call(next_state_name)))
-        step_op = _opdef_post(step_form)
+        step_form.append((self._temp_name("_result_"), _id_call(next_state_name)))
+        step_op = self._opdef_post(step_form)
         while_call = ast.Call(
             func=ast.Attribute(
                 value=ast.Attribute(value=ast.Name(id="_tc_autograph", ctx=ast.Load()), attr="state", ctx=ast.Load()),
@@ -499,7 +509,7 @@ class _AutographTransformer(ast.NodeTransformer):
             args=[cond_op, step_op, self._name_load(state_name)],
             keywords=[],
         )
-        return [ast.Assign(targets=[self._cxt_attr(state_name, ast.Store())], value=while_call)]
+        return [self._bind_local(state_name, while_call)]
 
     def _lower_for(self, stmt: ast.For) -> list[ast.stmt]:
         if stmt.orelse:
@@ -515,8 +525,8 @@ class _AutographTransformer(ast.NodeTransformer):
         if last_name is None:
             raise AutographAssignmentError("for loop body must assign at least one name")
 
-        form_items.append(("result", _id_call(last_name)))
-        op_def = _opdef_post(form_items)
+        form_items.append((self._temp_name("_result_"), _id_call(last_name)))
+        op_def = self._opdef_post(form_items)
 
         for_each_call = ast.Call(
             func=ast.Attribute(
@@ -536,7 +546,7 @@ class _AutographTransformer(ast.NodeTransformer):
         )
 
         tmp_name = self._temp_name("_tmp_for_each")
-        return [ast.Assign(targets=[self._cxt_attr(tmp_name, ast.Store())], value=for_each_call)]
+        return [self._bind_local(tmp_name, for_each_call)]
 
     def _check_name_binding(self, name: str) -> None:
         if name in _RESERVED_NAMES:
@@ -563,22 +573,33 @@ class _AutographTransformer(ast.NodeTransformer):
 
             def visit_Name(self, node: ast.Name) -> ast.AST:
                 if isinstance(node.ctx, ast.Load) and node.id in self._outer._locals:
-                    return self._outer._cxt_attr(node.id, ast.Load())
+                    return ast.Name(id=node.id, ctx=ast.Load())
                 return node
 
         return _NameRewriter(self).visit(expr)
 
     def _name_load(self, name: str) -> ast.expr:
         if name in self._locals:
-            return self._cxt_attr(name, ast.Load())
+            return ast.Name(id=name, ctx=ast.Load())
         return ast.Name(id=name, ctx=ast.Load())
 
-    def _cxt_attr(self, name: str, ctx: ast.expr_context) -> ast.Attribute:
-        return ast.Attribute(value=ast.Name(id="cxt", ctx=ast.Load()), attr=name, ctx=ctx)
+    def _bind_local(self, name: str, value: ast.expr) -> ast.Assign:
+        return ast.Assign(
+            targets=[ast.Name(id=name, ctx=ast.Store())],
+            value=ast.Call(
+                func=ast.Attribute(
+                    value=ast.Name(id="cxt", ctx=ast.Load()),
+                    attr="bind_auto",
+                    ctx=ast.Load(),
+                ),
+                args=[value],
+                keywords=[ast.keyword(arg="prefix", value=ast.Constant(value=f"_{name}"))],
+            ),
+        )
 
     def _tc_cond(self, cond: ast.expr, then_expr: ast.expr, else_expr: ast.expr) -> ast.expr:
-        then_op = _opdef_post([("result", then_expr)])
-        else_op = _opdef_post([("result", else_expr)])
+        then_op = self._opdef_post([(self._temp_name("_result_"), then_expr)])
+        else_op = self._opdef_post([(self._temp_name("_result_"), else_expr)])
         return self._tc_cond_op(cond, then_op, else_op)
 
     def _tc_cond_op(self, cond: ast.expr, then_op: ast.expr, else_op: ast.expr) -> ast.expr:
@@ -644,6 +665,25 @@ class _AutographTransformer(ast.NodeTransformer):
         if name in self._locals or name in self._params or name in _RESERVED_NAMES:
             return self._temp_name(prefix)
         return name
+
+    def _opdef_post(self, items: list[tuple[str, ast.expr]]) -> ast.Call:
+        # Python reassignment is converted to immutable SSA providers before
+        # these generated names become TinyChain IR.
+        rename: dict[str, str] = {}
+        for name, _ in items:
+            if name in rename:
+                raise AutographAssignmentError(f"duplicate provider {name} in operation")
+            actual = name
+            while actual in self._provider_ids:
+                actual = self._temp_name(f"_{name}_")
+            rename[name] = actual
+            self._provider_ids.add(actual)
+
+        rewritten = [
+            (rename[name], _rename_local_refs(expr, rename))
+            for name, expr in items
+        ]
+        return _opdef_post(rewritten)
 
     def _lower_while_if_assignments(
         self, stmt: ast.If, allowed: set[str]
@@ -747,6 +787,55 @@ def _id_call(name: str) -> ast.Call:
     )
 
 
+def _rename_local_refs(expr: ast.expr, rename: dict[str, str]) -> ast.expr:
+    """Rename this form's references without entering nested lexical forms."""
+
+    class _LocalRefRenamer(ast.NodeTransformer):
+        def visit_Call(self, node: ast.Call) -> ast.AST:
+            if isinstance(node.func, ast.Attribute) and node.func.attr == "_autograph_opdef_post":
+                if node.args and isinstance(node.args[0], ast.List):
+                    nested_names = {
+                        item.body.elts[0].value
+                        for item in node.args[0].elts
+                        if isinstance(item, ast.Lambda)
+                        and isinstance(item.body, ast.Tuple)
+                        and len(item.body.elts) == 2
+                        and isinstance(item.body.elts[0], ast.Constant)
+                        and isinstance(item.body.elts[0].value, str)
+                    }
+                    captured = {
+                        name: actual
+                        for name, actual in rename.items()
+                        if name not in nested_names
+                    }
+                    if captured:
+                        for item in node.args[0].elts:
+                            if (
+                                isinstance(item, ast.Lambda)
+                                and isinstance(item.body, ast.Tuple)
+                                and len(item.body.elts) == 2
+                            ):
+                                item.body.elts[1] = _rename_local_refs(
+                                    item.body.elts[1], captured
+                                )
+                return node
+
+            node = self.generic_visit(node)
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "id"
+                and len(node.args) == 1
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+                and node.args[0].value in rename
+            ):
+                node.args[0] = ast.Constant(value=rename[node.args[0].value])
+            return node
+
+    return _LocalRefRenamer().visit(expr)
+
+
 def _opdef_post(items: list[tuple[str, ast.expr]]) -> ast.Call:
     item_lambdas: list[ast.expr] = []
     for name, expr in items:
@@ -777,7 +866,8 @@ def _opdef_post(items: list[tuple[str, ast.expr]]) -> ast.Call:
 
 
 def _autograph_opdef_post(item_fns):
-    from .state import OpDef, scoped_context
+    from .context import scoped_context
+    from .state import OpDef
 
     with scoped_context() as cxt:
         form: list[tuple[str, object]] = []

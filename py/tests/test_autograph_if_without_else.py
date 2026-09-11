@@ -19,8 +19,8 @@ def test_if_without_else_allows_rebinding_existing_name() -> None:
             return out
 
     ir = compile_ir(A)
-    route = next(route for route in ir["routes"] if route["path"] == "/route")
-    assert "opdef" in route
+    route = ir[A.class_id().path]["route"]
+    assert tc.URI("state", "scalar", "op", "post").path in route
 
 
 def test_if_without_else_rejects_new_branch_local() -> None:
@@ -52,5 +52,5 @@ def test_if_return_with_immediate_fallback_return_compiles() -> None:
             return "other"
 
     ir = compile_ir(A)
-    route = next(route for route in ir["routes"] if route["path"] == "/route")
-    assert "opdef" in route
+    route = ir[A.class_id().path]["route"]
+    assert tc.URI("state", "scalar", "op", "post").path in route

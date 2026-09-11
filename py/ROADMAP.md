@@ -1,5 +1,8 @@
 # Python client roadmap
 
+> **Non-normative:** this file tracks unimplemented work and cannot override
+> this repository's implemented behavior or local contracts.
+
 ## Purpose
 
 The Python client should make the ordinary TinyChain workflow obvious enough to
@@ -31,7 +34,7 @@ explicitly asks for advanced control.
   implement payload/status wrappers or TinyChain state parsing.
 - Transaction lifecycle ownership stays inside the kernel/host. Client helpers may
   compose plans but never mint or manage transaction handles.
-- Symbolic state instances carry one canonical form only. `tc.state.Context` owns
+- Symbolic state instances carry one canonical form only. `tc.Context` owns
   local bindings and generated names, while `scoped_context()` is the standard graph
   binding scope; public state and collection APIs do not accept explicit contexts
   or alternate `ref=` constructors.

@@ -25,8 +25,8 @@ def require_tinychain_local(*, require_library_definition: bool = False):
     except (AttributeError, RuntimeError, TypeError) as err:
         pytest.fail(f"tinychain-local kernel runtime is unavailable: {err}")
 
-    if require_library_definition and not hasattr(handle, "with_library_definition"):
-        pytest.fail("tinychain-local does not support canonical library definitions")
+    if require_library_definition and not hasattr(handle, "dispatch"):
+        pytest.fail("tinychain-local does not support canonical request dispatch")
 
     return tc_local, handle
 

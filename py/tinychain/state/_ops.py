@@ -27,33 +27,15 @@ def _sorted_items(obj: Mapping[str, object]) -> list[tuple[str, object]]:
 
 
 def _stage_subject(owner: object) -> str | None:
-    from .context import current_context
+    from ..context import _bind_subject
 
-    active_ctx = current_context()
-    if active_ctx is None:
-        return None
-
-    bound = active_ctx.bind_auto(owner)
-
-    from .scalar import form_of
-
-    bound_form = form_of(bound)
-    if isinstance(bound_form, TCRef):
-        bound_ref_form = form_of(bound_form)
-        if isinstance(bound_ref_form, IdRef):
-            return bound_ref_form.key()
-
-    return None
+    return _bind_subject(owner)
 
 
 def _subject_from_candidate(candidate: object, owner: object) -> str | None:
-    if isinstance(candidate, OpRef):
-        subject = candidate.subject
-    else:
-        runtime_candidate = OpRef.from_runtime(candidate)
-        if runtime_candidate is None:
-            return None
-        subject = runtime_candidate.subject
+    if not isinstance(candidate, OpRef):
+        return None
+    subject = candidate.subject
 
     staged = _stage_subject(owner)
     return staged if staged is not None else subject

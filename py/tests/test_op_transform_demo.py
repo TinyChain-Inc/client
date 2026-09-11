@@ -48,7 +48,7 @@ class C(tc.Library):
             ("result", 2),
         ])
 
-        return tc.state.autobox([x]).reduce(op=grad_op, value={})
+        return tc.state.autobox([x]).reduce(op=grad_op, value={}, item_name="_item")
 
     @tc.post
     def autodiff_chain_demo(self, op: tc.state.OpDef, x: tc.Number) -> tc.Number:
@@ -60,7 +60,7 @@ class C(tc.Library):
             ("result", 3),
         ])
 
-        return tc.state.autobox([x]).reduce(op=grad_op, value={})
+        return tc.state.autobox([x]).reduce(op=grad_op, value={}, item_name="_item")
 
     @tc.post
     def autodiff_fanout_demo(self, op: tc.state.OpDef, x: tc.Number) -> tc.Number:
@@ -73,7 +73,7 @@ class C(tc.Library):
             ("result", tc.state.id("x2") + tc.state.id("x2")),
         ])
 
-        return tc.state.autobox([x]).reduce(op=grad_op, value={})
+        return tc.state.autobox([x]).reduce(op=grad_op, value={}, item_name="_item")
 
 def test_op_transform_autodiff_demo(tmp_path: pathlib.Path) -> None:
     require_cargo()

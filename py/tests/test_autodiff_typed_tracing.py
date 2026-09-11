@@ -50,7 +50,7 @@ def _assert_category(category: str, operation) -> None:
 
 def _trace_linear_mse(*, dtype: str = "f32"):
     trace = TensorGraphBuilder()
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         with trace:
             images = trace.input("images", dtype=dtype, shape=(2, 3))
             weights = trace.input("weights", dtype=dtype, shape=(3, 4))
@@ -223,7 +223,7 @@ def test_matmul_shares_symbol_bindings_between_inner_and_batch_dimensions() -> N
 
 
 def test_add_and_transpose_capture_with_metadata() -> None:
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         with TensorGraphBuilder() as trace:
             lhs = trace.input("lhs", dtype="f32", shape=(2, 3))
             rhs = trace.input("rhs", dtype="f32", shape=(1, 3))
@@ -369,7 +369,7 @@ def test_build_rejects_empty_explicit_outputs_and_infers_the_default_output() ->
 
 @pytest.mark.parametrize("reduce", [False, True])
 def test_vjp_seed_metadata_exactly_matches_selected_output(reduce: bool) -> None:
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         with TensorGraphBuilder() as trace:
             x = trace.input("x", dtype="f64", shape=(2, 3))
             y = trace.input("y", dtype="f64", shape=(2, 3))
@@ -538,7 +538,7 @@ def test_untyped_matmul_defers_metadata_inference_to_typed_finalization() -> Non
 
 
 def test_unsupported_intermediate_fails_typed_finalization() -> None:
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         with TensorGraphBuilder() as trace:
             lhs = trace.input("lhs", dtype="f32", shape=(2, 3))
             rhs = trace.input("rhs", dtype="f32", shape=(2, 3))
@@ -604,7 +604,7 @@ def test_independent_sequential_traces_and_repeated_vjp_do_not_mutate_graph() ->
 
 
 def test_gc_of_unassigned_intermediate_cannot_corrupt_dataflow_identity() -> None:
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         with TensorGraphBuilder() as trace:
             images = trace.input("images", dtype="f32", shape=(2, 3))
             weights = trace.input("weights", dtype="f32", shape=(3, 4))

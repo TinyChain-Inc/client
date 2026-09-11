@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import inspect
 
-from . import opref as runtime_opref
-from .state import IdRef, OpDef, Scalar, State, TCRef, autobox
-from .state.scalar.refs import GetOpRef, PostOpRef
-from .uri import URI, _segment, validate_resource_name
+from .state import OpDef, Scalar, State, TCRef, autobox, form_of, id as state_id
+from .uri import URI, uri, validate_publisher, validate_resource_path, validate_version
 
 
 _CLASS_ROOT_URI = URI("class")
@@ -30,7 +28,7 @@ class UnsupportedClassOverride(ClassError):
 
 def _native_parent_id(parent: type[State]) -> URI:
     parent_uri = getattr(parent, "__uri__", None)
-    if not isinstance(parent_uri, URI) or not str(parent_uri).startswith("/state/"):
+    if not isinstance(parent_uri, URI) or not str(parent_uri).startswith(f"{uri(State)}/"):
         raise InvalidClassParent(
             "Class parent must be a user-defined Class or a native State type"
         )
@@ -98,15 +96,15 @@ class Class(State):
         if not publisher or not resource_name or not version:
             raise TypeError("Class requires class publisher, resource_name, and version")
         return (
-            _segment("publisher", publisher),
-            validate_resource_name(resource_name),
-            _segment("version", version),
+            validate_publisher(publisher),
+            "/".join(validate_resource_path(resource_name)),
+            validate_version(version),
         )
 
     @classmethod
     def class_id(cls) -> URI:
         publisher, resource_name, version = cls._validate_identity()
-        return URI(_CLASS_ROOT_URI, publisher, resource_name, version)
+        return URI(_CLASS_ROOT_URI, publisher, *resource_name.split("/"), version)
 
     @classmethod
     def parent_id(cls) -> URI:
@@ -159,19 +157,18 @@ class Class(State):
 
     @classmethod
     def definition(cls) -> dict[str, object]:
-        return {
-            "id": str(cls.class_id()),
+        return {str(cls.class_id()): {
             "parent": str(cls.parent_id()),
             "prototype": {
                 name: value.to_json() if hasattr(value, "to_json") else value
                 for name, value in cls.prototype().items()
             },
-        }
+        }}
 
     @classmethod
     def _self_placeholder(cls) -> "Class":
         instance = object.__new__(cls)
-        State.__init__(instance, TCRef(IdRef("self")))
+        State.__init__(instance, form_of(state_id("self")))
         return instance
 
     def __init__(self, parent: object = None, /, **members: object) -> None:
@@ -181,9 +178,9 @@ class Class(State):
         if parent is not None and members:
             raise TypeError("Class construction accepts a native parent or member keywords, not both")
         if parent is not None:
-            State.__init__(self, TCRef(GetOpRef(type(self).class_id(), parent)))
+            State.__init__(self, form_of(Scalar._get_ref(type(self).class_id(), parent)))
         else:
-            State.__init__(self, TCRef(PostOpRef(type(self).class_id(), members)))
+            State.__init__(self, form_of(Scalar._post_ref(type(self).class_id(), members)))
 
     def id(self) -> URI:
         return type(self).class_id()
@@ -216,21 +213,19 @@ class Class(State):
 
         def bound(*args, **kwargs):
             body = _route_body_from_call(route, args, kwargs)
-            path = URI(type(self).class_id(), route.name)
+            rtype = route._return_type() or Scalar
             if route.method == "GET":
-                opref = runtime_opref.get(path)
+                result = self._get(route.name, body, rtype=rtype)
             elif route.method == "POST":
-                opref = runtime_opref.post(path)
+                result = self._post(route.name, body, rtype=rtype)
             elif route.method == "PUT":
-                opref = runtime_opref.put(path)
+                if not isinstance(body, (list, tuple)) or len(body) != 2:
+                    raise TypeError("TinyChain PUT Class methods require body=[key, value]")
+                result = self._put(body[1], route.name, body[0], rtype=rtype)
             elif route.method == "DELETE":
-                opref = runtime_opref.delete(path)
+                result = self._delete(route.name, body, rtype=rtype)
             else:
                 raise ValueError(f"unsupported route method {route.method}")
-            if body is not None:
-                opref = opref.with_body(body)
-            rtype = route._return_type() or Scalar
-            result = rtype(opref)
             return _execute_route_result_if_needed(result, body)
 
         bound.__name__ = route.name or route.form.__name__
@@ -265,19 +260,22 @@ def class_definition(cls: type[Class]) -> dict[str, object]:
 
 def validate_class_definition(value: object) -> dict[str, object]:
     """Validate and normalize a canonical language-neutral Class definition."""
-    if not isinstance(value, dict) or set(value) != {"id", "parent", "prototype"}:
-        raise ClassError("malformed Class definition: expected id, parent, and prototype")
-    identity, parent, prototype = value["id"], value["parent"], value["prototype"]
+    if not isinstance(value, dict) or len(value) != 1:
+        raise ClassError("malformed Class definition: expected one /class URI entry")
+    identity, body = next(iter(value.items()))
+    if not isinstance(body, dict) or set(body) != {"parent", "prototype"}:
+        raise ClassError("malformed Class body: expected parent and prototype")
+    parent, prototype = body["parent"], body["prototype"]
     if not isinstance(identity, str) or not identity.startswith(f"{_CLASS_ROOT_URI}/"):
         raise ClassError("malformed Class definition: expected a canonical /class identity")
-    if len(identity.strip("/").split("/")) != 4:
+    if len(identity.strip("/").split("/")) < 4:
         raise ClassError("malformed Class definition: Class identity must be versioned")
     if not isinstance(parent, str) or not (
-        parent.startswith(f"{_CLASS_ROOT_URI}/") or parent.startswith("/state/")
+        parent.startswith(f"{_CLASS_ROOT_URI}/") or parent.startswith(f"{uri(State)}/")
     ):
         raise InvalidClassParent("invalid Class parent identity")
     if not isinstance(prototype, dict) or not all(
         isinstance(name, str) and name and "/" not in name for name in prototype
     ):
         raise ClassError("malformed Class definition: invalid prototype")
-    return {"id": identity, "parent": parent, "prototype": dict(prototype)}
+    return {identity: {"parent": parent, "prototype": dict(prototype)}}

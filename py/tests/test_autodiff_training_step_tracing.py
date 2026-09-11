@@ -70,7 +70,7 @@ def _symbolic_tensor(name: str) -> tc.Tensor:
 
 
 def test_trace_loss_records_declared_inputs_in_declaration_order() -> None:
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         traced = trace_loss(
             inputs=LINEAR_INPUTS, input_names=LINEAR_INPUT_NAMES, loss=_linear_loss
         )
@@ -96,7 +96,7 @@ def test_trace_loss_records_declared_inputs_in_declaration_order() -> None:
 
 
 def test_trace_loss_graph_outputs_is_exactly_the_one_loss_value_id() -> None:
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         traced = trace_loss(
             inputs=LINEAR_INPUTS, input_names=LINEAR_INPUT_NAMES, loss=_linear_loss
         )
@@ -106,7 +106,7 @@ def test_trace_loss_graph_outputs_is_exactly_the_one_loss_value_id() -> None:
 
 def test_trace_loss_node_set_matches_traced_expression() -> None:
     """`d = x @ w - y`, `d * d`, `mean(...)` traces matmul, sub, mul, mean."""
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         traced = trace_loss(
             inputs=LINEAR_INPUTS, input_names=LINEAR_INPUT_NAMES, loss=_linear_loss
         )
@@ -125,7 +125,7 @@ def test_trace_loss_node_set_matches_traced_expression() -> None:
 def test_trace_loss_invokes_loss_exactly_once() -> None:
     recorder = _RecordingLoss(_linear_loss)
 
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         trace_loss(inputs=LINEAR_INPUTS, input_names=LINEAR_INPUT_NAMES, loss=recorder)
 
     assert recorder.calls == 1
@@ -134,7 +134,7 @@ def test_trace_loss_invokes_loss_exactly_once() -> None:
 def test_trace_loss_invokes_loss_by_keyword_with_no_positional_arguments() -> None:
     recorder = _RecordingLoss(_linear_loss)
 
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         trace_loss(inputs=LINEAR_INPUTS, input_names=LINEAR_INPUT_NAMES, loss=recorder)
 
     assert recorder.received_args == ()
@@ -144,7 +144,7 @@ def test_trace_loss_invokes_loss_by_keyword_with_no_positional_arguments() -> No
 def test_trace_loss_invokes_loss_with_one_tensor_per_declared_input() -> None:
     recorder = _RecordingLoss(_linear_loss)
 
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         trace_loss(inputs=LINEAR_INPUTS, input_names=LINEAR_INPUT_NAMES, loss=recorder)
 
     for name in LINEAR_INPUT_NAMES:
@@ -196,7 +196,7 @@ def _returns_a_non_tensor_object(*, x: object, w: object, y: object) -> object:
 def test_trace_loss_rejects_non_tensor_return_naming_what_it_returned(
     loss, expected_type_name: str
 ) -> None:
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         with pytest.raises(AutodiffError) as error:
             trace_loss(inputs=LINEAR_INPUTS, input_names=LINEAR_INPUT_NAMES, loss=loss)
 
@@ -228,7 +228,7 @@ def test_trace_loss_rejects_a_foreign_scalar_this_trace_never_produced() -> None
     contract is `invalid_loss_output`, naming that the loss returned a
     scalar this trace never produced.
     """
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         with pytest.raises(AutodiffError) as error:
             trace_loss(
                 inputs=LINEAR_INPUTS,
@@ -246,7 +246,7 @@ def test_trace_loss_rejects_a_foreign_scalar_this_trace_never_produced() -> None
 
 
 def test_trace_loss_input_value_ids_covers_every_declared_name_exactly_once() -> None:
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         traced = trace_loss(
             inputs=LINEAR_INPUTS, input_names=LINEAR_INPUT_NAMES, loss=_linear_loss
         )
@@ -256,7 +256,7 @@ def test_trace_loss_input_value_ids_covers_every_declared_name_exactly_once() ->
 
 
 def test_trace_loss_input_value_ids_match_the_graph_input_value_ids() -> None:
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         traced = trace_loss(
             inputs=LINEAR_INPUTS, input_names=LINEAR_INPUT_NAMES, loss=_linear_loss
         )
@@ -300,7 +300,7 @@ def test_trace_loss_rejects_reachable_untyped_value_with_finalizations_own_categ
         d = (x @ w - y) + untyped
         return (d * d).mean([0, 1])
 
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         with pytest.raises(AutodiffError) as error:
             trace_loss(
                 inputs=LINEAR_INPUTS,
@@ -338,7 +338,7 @@ def _raises_keyboard_interrupt(*, x: object, w: object, y: object) -> object:
 
 
 def test_trace_loss_propagates_autodiff_error_from_loss_body_unchanged() -> None:
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         with pytest.raises(AutodiffError) as error:
             trace_loss(
                 inputs=LINEAR_INPUTS,
@@ -351,7 +351,7 @@ def test_trace_loss_propagates_autodiff_error_from_loss_body_unchanged() -> None
 
 
 def test_trace_loss_propagates_custom_exception_from_loss_body_unchanged() -> None:
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         with pytest.raises(_CustomLossError, match="deliberate failure from the loss body"):
             trace_loss(
                 inputs=LINEAR_INPUTS,
@@ -361,7 +361,7 @@ def test_trace_loss_propagates_custom_exception_from_loss_body_unchanged() -> No
 
 
 def test_trace_loss_propagates_keyboard_interrupt_from_loss_body_unchanged() -> None:
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         with pytest.raises(KeyboardInterrupt):
             trace_loss(
                 inputs=LINEAR_INPUTS,
@@ -377,11 +377,11 @@ def test_trace_loss_propagates_keyboard_interrupt_from_loss_body_unchanged() -> 
 
 
 def test_trace_loss_tracing_same_declarations_twice_produces_equal_graphs() -> None:
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         first = trace_loss(
             inputs=LINEAR_INPUTS, input_names=LINEAR_INPUT_NAMES, loss=_linear_loss
         )
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         second = trace_loss(
             inputs=LINEAR_INPUTS, input_names=LINEAR_INPUT_NAMES, loss=_linear_loss
         )
@@ -407,7 +407,7 @@ def test_trace_loss_with_a_single_declared_input() -> None:
     def square(*, x: object) -> object:
         return (x * x).mean([0, 1])
 
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         traced = trace_loss(
             inputs={"x": X_SPEC}, input_names=("x",), loss=square
         )
@@ -420,7 +420,7 @@ def test_trace_loss_with_a_declared_input_the_loss_ignores() -> None:
     def loss_ignoring_y(*, x: object, w: object, y: object) -> object:
         return (x @ w).mean([0, 1])
 
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         traced = trace_loss(
             inputs=LINEAR_INPUTS, input_names=LINEAR_INPUT_NAMES, loss=loss_ignoring_y
         )
@@ -439,7 +439,7 @@ def test_trace_loss_returning_a_declared_input_unchanged() -> None:
     def identity_loss(*, x: object, w: object, y: object) -> object:
         return x
 
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         traced = trace_loss(
             inputs=LINEAR_INPUTS, input_names=LINEAR_INPUT_NAMES, loss=identity_loss
         )
@@ -463,7 +463,7 @@ def test_trace_loss_with_symbolic_shape_in_declared_input() -> None:
     def square(*, x: object) -> object:
         return (x * x).mean([1])
 
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         traced = trace_loss(
             inputs={"x": {"dtype": "f32", "shape": ("N", 3)}},
             input_names=("x",),
@@ -491,7 +491,7 @@ def test_trace_loss_returning_an_intermediate_also_consumed_elsewhere() -> None:
         _also_uses_d = scaled + d
         return d
 
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         traced = trace_loss(
             inputs=LINEAR_INPUTS, input_names=LINEAR_INPUT_NAMES, loss=loss
         )
@@ -524,7 +524,7 @@ def test_trace_loss_opening_a_nested_builder_raises_without_a_second_builder() -
             pass
         return x @ w - y
 
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         with pytest.raises(RuntimeError, match="Nested TensorGraphBuilder"):
             trace_loss(
                 inputs=LINEAR_INPUTS,

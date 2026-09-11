@@ -148,7 +148,7 @@ def compile_step(
     fusion: object = None,
 ) -> object:
     """Compile one training step with the shared reference registry."""
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         return training_step.compile_training_step(
             loss,
             inputs=inputs,

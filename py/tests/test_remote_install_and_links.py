@@ -16,6 +16,16 @@ class Greeter(tc.Library):
         return tc.String("Hello, {{name}}!").render(name=name)
 
 
+class AuthContextLibrary(tc.Library):
+    publisher = "example-devco"
+    resource_name = "auth-context"
+    version = "0.1.0"
+
+    @tc.get
+    def context(self) -> tc.Ref:
+        return tc.auth.context()
+
+
 class _Response:
     status_code = 204
     text = ""
@@ -44,6 +54,7 @@ def test_host_carries_default_auth_and_builds_route_url(monkeypatch):
     token = tc.auth.SignedBearerToken(
         host="https://tokens.example",
         actor_id="demo",
+        alg="falcon512",
         public_key_b64="pub",
         bearer_token="token-123",
     )
@@ -81,6 +92,7 @@ def test_install_python_library_to_remote_uses_canonical_payload_and_auth(monkey
     token = tc.auth.SignedBearerToken(
         host="https://tokens.example",
         actor_id="demo",
+        alg="falcon512",
         public_key_b64="pub",
         bearer_token="token-123",
     )
@@ -100,6 +112,29 @@ def test_install_python_library_to_remote_uses_canonical_payload_and_auth(monkey
     assert "/render" in encoded_ir
     assert "schema" not in payload
     assert "artifacts" not in payload
+
+
+def test_remote_install_lowers_runtime_request_to_canonical_ir(monkeypatch):
+    calls = []
+
+    def fake_request(method, url, *, data=None, headers=None):
+        calls.append((method, url, data, headers))
+        return _Response()
+
+    monkeypatch.setattr("tinychain.host.requests.request", fake_request)
+
+    host = tc.Host("https://testnet.example")
+    assert tc.install(AuthContextLibrary, remote=host, token="token-123") is None
+
+    _, _, data, _ = calls[0]
+    payload = json.loads(data.decode("utf-8"))
+    route = payload[AuthContextLibrary.class_id().path]["context"]
+    assert route == {
+        "/state/scalar/op/get": [
+            "key",
+            [["result", {"/host/auth/context": [None]}]],
+        ]
+    }
 
 
 def test_host_accepts_successful_empty_response(monkeypatch):

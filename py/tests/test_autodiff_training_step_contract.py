@@ -218,7 +218,7 @@ def _compile(**overrides: object) -> object:
     }
     kwargs.update(overrides)
     loss = kwargs.pop("loss")
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         return compile_training_step(loss, **kwargs)
 
 

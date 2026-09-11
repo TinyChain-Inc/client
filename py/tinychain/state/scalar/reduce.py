@@ -19,14 +19,17 @@ def infer_reduce_item_name(
         raise TypeError("reduce requires a concrete OpDef to infer item binding")
 
     state_keys = _reduce_state_keys(value)
-    defined_ids = {name for name, _ in resolved_op.form}
     referenced_ids: set[str] = set()
+    resolved_op.requires(referenced_ids)
     subject_ids: set[str] = set()
     for _, scalar in resolved_op.form:
-        _collect_ref_ids_from_form(form_of(scalar), referenced_ids, subject_ids)
+        _collect_subject_ids(form_of(scalar), subject_ids)
 
     subject_candidates = sorted(
-        name for name in subject_ids if name not in defined_ids and name not in state_keys
+        name
+        for name in subject_ids
+        if name in referenced_ids
+        and name not in state_keys
     )
     if len(subject_candidates) == 1:
         return subject_candidates[0]
@@ -36,21 +39,14 @@ def infer_reduce_item_name(
             + ", ".join(subject_candidates)
         )
 
-    external_ids = sorted(name for name in referenced_ids if name not in defined_ids)
-    candidates = [name for name in external_ids if name not in state_keys]
-
-    if len(candidates) == 1:
-        return candidates[0]
-
-    if not candidates:
-        raise TypeError(
-            "reduce could not infer item binding: reducer must reference exactly one external input not present in state"
-        )
-
-    raise TypeError(
-        "reduce item binding is ambiguous; reducer references multiple external inputs: "
-        + ", ".join(candidates)
-    )
+    # A reducer which ignores its item still needs a collision-free callback
+    # binder. Captures remain ordinary unresolved requirements and are never
+    # reverse-resolved through an ambient authoring Context.
+    used = referenced_ids | state_keys | {name for name, _ in resolved_op.form}
+    index = 0
+    while f"_item{index}" in used:
+        index += 1
+    return f"_item{index}"
 
 
 def _reduce_state_keys(value: "Scalar | object") -> set[str]:
@@ -96,35 +92,18 @@ def _resolve_reduce_opdef(op: "OpDef | Scalar | object") -> "OpDef | None":
     if not isinstance(op, Scalar):
         return None
 
-    op_form = form_of(op)
-    if isinstance(op_form, OpDef):
-        return op_form
-
-    if not isinstance(op_form, TCRef):
-        return None
-    op_ref_form = form_of(op_form)
-    if not isinstance(op_ref_form, IdRef):
-        return None
-
-    from ..context import current_context
-
-    active_ctx = current_context()
-    if active_ctx is None:
-        return None
-
-    target = op_ref_form.name
-    for name, scalar in active_ctx.form():
-        if name != target:
-            continue
-        scalar_form = form_of(scalar)
-        if isinstance(scalar_form, OpDef):
-            return scalar_form
-        return _resolve_reduce_opdef(scalar)
+    node: object = op
+    seen: set[int] = set()
+    while isinstance(node, Scalar) and id(node) not in seen:
+        seen.add(id(node))
+        node = form_of(node)
+        if isinstance(node, OpDef):
+            return node
 
     return None
 
 
-def _record_subject_token(subject: str, out: set[str], subject_ids: set[str]) -> None:
+def _record_subject_token(subject: str, subject_ids: set[str]) -> None:
     if not subject.startswith("$"):
         return
 
@@ -132,51 +111,44 @@ def _record_subject_token(subject: str, out: set[str], subject_ids: set[str]) ->
     if not head:
         return
 
-    out.add(head)
     if sep:
         subject_ids.add(head)
 
 
-def _collect_ref_ids_from_form(node: object, out: set[str], subject_ids: set[str]) -> None:
+def _collect_subject_ids(node: object, subject_ids: set[str]) -> None:
     from . import OpDef, Scalar, form_of
 
     if isinstance(node, OpRef):
-        _record_subject_token(node.subject, out, subject_ids)
-        _collect_ref_ids_from_form(node.args, out, subject_ids)
+        _record_subject_token(node.subject, subject_ids)
+        _collect_subject_ids(node.args, subject_ids)
         return
 
     if isinstance(node, IdRef):
-        out.add(node.name)
         return
 
     if isinstance(node, TCRef):
         ref_form = form_of(node)
         if ref_form is node:
             return
-        _collect_ref_ids_from_form(ref_form, out, subject_ids)
+        _collect_subject_ids(ref_form, subject_ids)
         return
 
     if isinstance(node, Scalar):
-        _collect_ref_ids_from_form(form_of(node), out, subject_ids)
-        return
-
-    runtime_op = OpRef.from_runtime(node)
-    if runtime_op is not None:
-        _collect_ref_ids_from_form(runtime_op, out, subject_ids)
+        _collect_subject_ids(form_of(node), subject_ids)
         return
 
     if isinstance(node, OpDef):
         for _name, scalar in node.form:
-            _collect_ref_ids_from_form(form_of(scalar), out, subject_ids)
+            _collect_subject_ids(form_of(scalar), subject_ids)
         return
 
     if isinstance(node, Mapping):
         for key, value in node.items():
             if isinstance(key, str):
-                _record_subject_token(key, out, subject_ids)
-            _collect_ref_ids_from_form(value, out, subject_ids)
+                _record_subject_token(key, subject_ids)
+            _collect_subject_ids(value, subject_ids)
         return
 
     if isinstance(node, Sequence) and not isinstance(node, (str, bytes, bytearray)):
         for item in node:
-            _collect_ref_ids_from_form(item, out, subject_ids)
+            _collect_subject_ids(item, subject_ids)

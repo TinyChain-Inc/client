@@ -2,25 +2,44 @@ from __future__ import annotations
 
 import inspect
 import json
-import logging
 import pathlib
-import base64
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Callable, Mapping, Optional, get_args, get_origin, get_type_hints
+from typing import Any, Callable, Optional, get_args, get_origin, get_type_hints
 
 from .auth import bearer_token as _bearer_token
 from . import opref as runtime_opref
 from .opref import OpRef
 from .ref import Ref
 from . import _autograph
-from .state import Collection, ContextResult, DeleteOpDef, DeleteOpRef, GetOpDef, GetOpRef, IdRef, OpDef, OpRef as StateOpRef, PostOpDef, PostOpRef, PutOpDef, PutOpRef, Scalar, TCRef, autobox, context, current_context, form_of, map_of as scalar_map_of, scalar_for_hint, scoped_context, tuple_of as scalar_tuple_of
-from .state.value import Bool, Map, Number, String, Tuple, Value
-from .uri import URI, _segment, validate_resource_name
+from .context import ContextResult, _scoped_context
+from .state import (
+    Collection,
+    DeleteOpDef,
+    DeleteOpRef,
+    GetOpDef,
+    GetOpRef,
+    IdRef,
+    OpDef,
+    OpRef as StateOpRef,
+    PostOpDef,
+    PostOpRef,
+    PutOpDef,
+    PutOpRef,
+    Scalar,
+    TCRef,
+    autobox,
+    form_of,
+    map_of as scalar_map_of,
+    scalar_for_hint,
+    tuple_of as scalar_tuple_of,
+)
+from .state.value import Bool, Link as ValueLink, Map, Number, String, Tuple, Value
+from .uri import URI, _segment, validate_publisher, validate_resource_path, validate_version
 
 
 _INJECTED_ROUTE_PARAM_NAMES = {"cxt", "ctx", "txn"}
 _LIB_ROOT_URI = URI("lib")
-_LIB_WASM_URI = URI("lib", "wasm")
 
 def _is_method(form: Callable[..., Any]) -> bool:
     names = list(getattr(form, "__code__", None).co_varnames or ())
@@ -100,9 +119,9 @@ def _route_path(subject: object, route_name: str) -> str:
         "/" + "/".join(
             [
                 "lib",
-                _segment("publisher", publisher),
-                _segment("resource_name", resource_name),
-                _segment("version", version),
+                validate_publisher(publisher),
+                *resource_name.split("/"),
+                validate_version(version),
                 _segment("path", route_name),
             ]
         )
@@ -195,20 +214,74 @@ def _execute_route_result_if_needed(result: object, body: object) -> object:
     return tc.execute(result)
 
 
-def _append_context_result_form(route: "Route", form: list[tuple[str, Scalar]], raw_result: object) -> None:
-    # Contract: mapping return values become named OpDef entries unless the route
-    # is explicitly typed as generic Ref, in which case we preserve the mapping
-    # as a single value under "result".
-    if isinstance(raw_result, Mapping):
-        declared_rtype = route._return_type()
-        if declared_rtype is Ref:
-            form.append(("result", autobox(raw_result)))
-            return
+def _append_provider(
+    form: list[tuple[str, Scalar]],
+    preferred: str,
+    value: object,
+    reserved: set[str],
+) -> None:
+    from ._lexical import bindings
 
-        form.extend((key, autobox(value)) for key, value in raw_result.items())
-        return
+    boxed = autobox(_lower_route_value(value))
+    used = reserved | {name for name, _ in form}
+    for _, existing in form:
+        bindings(existing, used)
+    bindings(boxed, used)
+    name = preferred
+    index = 0
+    while name in used:
+        name = f"_{preferred}{index}"
+        index += 1
+    form.append((name, boxed))
 
-    form.append(("result", autobox(raw_result)))
+
+def _lower_route_value(value: object) -> object:
+    """Lower runtime requests at the Library authoring boundary."""
+    if isinstance(value, Ref):
+        value = value.op
+
+    if isinstance(value, OpRef):
+        if value.headers:
+            raise TypeError("runtime request headers cannot be encoded in TinyChain IR")
+        if isinstance(value, runtime_opref.GetOpRef):
+            return GetOpRef(value.path, _lower_route_value(value.body))
+        if isinstance(value, runtime_opref.PutOpRef):
+            body = value.body
+            if not isinstance(body, (list, tuple)) or len(body) != 2:
+                raise TypeError("runtime PUT op requires [key, value] body for IR conversion")
+            return PutOpRef(
+                value.path,
+                _lower_route_value(body[0]),
+                _lower_route_value(body[1]),
+            )
+        if isinstance(value, runtime_opref.PostOpRef):
+            body = {} if value.body is None else value.body
+            if not isinstance(body, Mapping):
+                raise TypeError("runtime POST op requires object body for IR conversion")
+            return PostOpRef(
+                value.path,
+                {name: _lower_route_value(item) for name, item in body.items()},
+            )
+        if isinstance(value, runtime_opref.DeleteOpRef):
+            return DeleteOpRef(value.path, _lower_route_value(value.body))
+        raise TypeError(f"unsupported runtime OpRef type {type(value).__name__}")
+
+    runtime_value = getattr(value, "op", None)
+    if isinstance(runtime_value, OpRef):
+        return type(value)(_lower_route_value(runtime_value))
+
+    from .state.base import State
+
+    if isinstance(value, State):
+        state_form = form_of(value)
+        if isinstance(state_form, OpRef):
+            return type(value)(_lower_route_value(state_form))
+
+    if isinstance(value, Mapping):
+        return {name: _lower_route_value(item) for name, item in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return type(value)(_lower_route_value(item) for item in value)
+    return value
 
 
 def _library_class(library: "Library | type[Library]") -> type["Library"]:
@@ -249,9 +322,9 @@ def _class_identity(cls: type["Library"]) -> tuple[str, str, str]:
     if not publisher or not resource_name or not version:
         raise TypeError("Library requires class publisher, resource_name, and version")
     return (
-        _segment("publisher", publisher),
-        validate_resource_name(resource_name),
-        _segment("version", version),
+        validate_publisher(publisher),
+        "/".join(validate_resource_path(resource_name)),
+        validate_version(version),
     )
 
 
@@ -454,7 +527,7 @@ def _compile_opdef_callable(form: Callable[..., Any], *, method: str) -> OpDef:
 
     injected_names = _INJECTED_ROUTE_PARAM_NAMES
     arg_names = []
-    with scoped_context() as cxt:
+    with _scoped_context(_lower_route_value) as cxt:
         args: list[Scalar] = []
         kwargs: dict[str, Scalar] = {}
         for param in params:
@@ -470,40 +543,12 @@ def _compile_opdef_callable(form: Callable[..., Any], *, method: str) -> OpDef:
             else:
                 args.append(placeholder)
 
+        cxt._reserve(arg_names)
         result = form(*args, **kwargs)
         if cxt.form() and not isinstance(result, ContextResult):
             result = cxt.result(result)
 
-    if isinstance(result, OpDef):
-        _validate_opdef_method(method, result)
-        _validate_opdef(result, set(arg_names))
-        return result
-
-    if isinstance(result, ContextResult):
-        form_items = list(result.form)
-        scalar = autobox(result.result)
-        form_items.append(("result", scalar))
-        opdef = _opdef_from_method(method, arg_names, form_items)
-        _validate_opdef(opdef, set(arg_names))
-        return opdef
-
-    if isinstance(result, dict):
-        form_items: list[tuple[str, Scalar]] = []
-        for key, value in result.items():
-            if not isinstance(key, str):
-                raise TypeError("opdef form keys must be strings")
-            form_items.append((key, autobox(value)))
-        opdef = _opdef_from_method(method, arg_names, form_items)
-        _validate_opdef(opdef, set(arg_names))
-        return opdef
-
-    if _to_opref(result) is not None:
-        raise TypeError("opdef callables must return an OpDef or Scalar, not an OpRef")
-
-    scalar = autobox(result)
-    opdef = _opdef_from_method(method, arg_names, [("result", scalar)])
-    _validate_opdef(opdef, set(arg_names))
-    return opdef
+    return _finish_opdef(method, arg_names, result, set(arg_names), inline=False)
 
 
 def _opdef_from_method(method: str, arg_names: list[str], form: list[tuple[str, Scalar]]) -> OpDef:
@@ -520,6 +565,29 @@ def _opdef_from_method(method: str, arg_names: list[str], form: list[tuple[str, 
         key_name = arg_names[0] if arg_names else "key"
         return DeleteOpDef(key_name, form)
     raise ValueError(f"unsupported opdef method {method}")
+
+
+def _finish_opdef(
+    method: str,
+    arg_names: list[str],
+    result: object,
+    allowed_inputs: set[str],
+    *,
+    inline: bool,
+) -> OpDef:
+    if isinstance(result, OpDef):
+        _validate_opdef_method(method, result)
+        opdef = _inline_opref_refs(result) if inline else result
+    else:
+        form = list(result.form) if isinstance(result, ContextResult) else []
+        value = result.result if isinstance(result, ContextResult) else result
+        _append_provider(form, "result", value, set(arg_names))
+        opdef = _opdef_from_method(method, arg_names, form)
+        if inline:
+            opdef = _inline_opref_refs(opdef)
+
+    _validate_opdef(opdef, allowed_inputs)
+    return opdef
 
 
 def _class_dependencies(cls: type) -> tuple[URI, ...]:
@@ -610,7 +678,7 @@ class Library:
     @classmethod
     def class_id(cls) -> URI:
         publisher, resource_name, version = _class_identity(cls)
-        return URI("/" + "/".join(["lib", publisher, resource_name, version]))
+        return URI("/" + "/".join(["lib", publisher, *resource_name.split("/"), version]))
 
 def _to_opref(value: object) -> Optional[OpRef[Any]]:
     if hasattr(value, "op"):
@@ -620,63 +688,41 @@ def _to_opref(value: object) -> Optional[OpRef[Any]]:
     return None
 
 
-def _class_schema(cls: type["Library"]) -> dict:
-    _, _, version = _class_identity(cls)
-    deps = _class_dependencies(cls)
-    return {
-        "id": cls.class_id().path,
-        "version": version,
-        "dependencies": [dep.path for dep in deps],
-    }
-
-
-def _library_schema(library: "Library") -> dict:
-    _, _, version = _class_identity(type(library))
-    return {
-        "id": library.id().path,
-        "version": version,
-        "dependencies": [dep.path for dep in library.dependencies],
-    }
-
-
 def compile_ir(library: Library | type[Library]) -> dict:
+    """Compile a Library directly into its canonical one-entry literal."""
+
     library_cls = _library_class(library)
     _validate_library_class(library_cls)
-    from .classdef import Class, class_definition
+    from .classdef import Class
 
     declared_classes = getattr(library_cls, "classes", ()) or ()
-    classes: list[dict[str, object]] = []
+    members: dict[str, object] = {}
     for declared in declared_classes:
         if not isinstance(declared, type) or not issubclass(declared, Class):
             raise TypeError("Library classes must contain tc.Class subclasses")
-        classes.append(class_definition(declared))
-    routes: list[dict] = []
+        name = declared.class_id().path.strip("/").split("/")[-2]
+        if name in members:
+            raise ValueError(f"duplicate Library member {name!r}")
+        members[name] = {str(declared.class_id()): []}
+
     for name, attr in list(library_cls.__dict__.items()):
         if not isinstance(attr, Route):
             continue
+        if name in members:
+            raise ValueError(f"Library route {name!r} conflicts with a Class member")
 
-        result = _compile_route(attr, library_cls)
-        op = _to_opref(result)
-        if op is not None:
-            routes.append(
-                {
-                    "path": f"/{name}",
-                    "op": {"method": op.method, "path": op.path},
-                }
-            )
-            continue
-
+        result = _compile_route(attr, library)
         if isinstance(result, OpDef):
-            routes.append({"path": f"/{name}", "opdef": result.to_json()})
+            members[name] = result.to_json()
             continue
 
-        routes.append({"path": f"/{name}", "value": result})
+        members[name] = result
 
-    return {"schema": _class_schema(library_cls), "classes": classes, "routes": routes}
+    return {str(library_cls.class_id()): members}
 
 
-def _compile_route(route: Route, library: type[Library]) -> object:
-    compile_subject = _compile_self_instance(library)
+def _compile_route(route: Route, library: Library | type[Library]) -> object:
+    compile_subject = library if isinstance(library, Library) else _compile_self_instance(library)
     sig = inspect.signature(route.form)
     params = list(sig.parameters.values())
     if not params or params[0].name != "self":
@@ -686,7 +732,7 @@ def _compile_route(route: Route, library: type[Library]) -> object:
         return _compile_opdef_route(route, compile_subject, params)
 
     result = route.form(compile_subject)
-    if isinstance(result, (OpDef, Scalar, Collection)):
+    if isinstance(result, (OpDef, Scalar, Collection)) or _to_opref(result) is not None:
         return _compile_opdef_route(route, compile_subject, params)
 
     return result
@@ -711,7 +757,7 @@ def _compile_opdef_route(
 
     arg_names = _route_arg_param_names(params, skip_first_self=True)
 
-    with scoped_context() as cxt:
+    with _scoped_context(_lower_route_value) as cxt:
         args: list[Scalar] = []
         kwargs: dict[str, Scalar] = {}
         for idx, param in enumerate(params[1:], start=1):
@@ -734,44 +780,18 @@ def _compile_opdef_route(
                 kwargs[param.name] = placeholder
             else:
                 args.append(placeholder)
+        cxt._reserve(arg_names)
         result = form(library, *args, **kwargs)
         if cxt.form() and not isinstance(result, ContextResult):
             result = cxt.result(result)
 
-    if isinstance(result, OpDef):
-        result = _inline_opref_refs(result)
-        _validate_opdef_method(route.method, result)
-        _validate_opdef(result, _allowed_inputs_from_params(route, params))
-        return result
-
-    if isinstance(result, ContextResult):
-        form = list(result.form)
-        _append_context_result_form(route, form, result.result)
-        opdef = _opdef_from_method(route.method, arg_names, form)
-        opdef = _inline_opref_refs(opdef)
-        _validate_opdef(opdef, set(arg_names))
-        return opdef
-
-    if isinstance(result, dict):
-        form: list[tuple[str, Scalar]] = []
-        for key, value in result.items():
-            if not isinstance(key, str):
-                raise TypeError("opdef form keys must be strings")
-            form.append((key, autobox(value)))
-        opdef = _opdef_from_method(route.method, arg_names, form)
-        opdef = _inline_opref_refs(opdef)
-        _validate_opdef(opdef, set(arg_names))
-        return opdef
-
-    if _to_opref(result) is not None:
-        raise TypeError("opdef routes must return an OpDef or Scalar, not an OpRef")
-
-    scalar = autobox(result)
-    form = [("result", scalar)]
-    opdef = _opdef_from_method(route.method, arg_names, form)
-    opdef = _inline_opref_refs(opdef)
-    _validate_opdef(opdef, set(arg_names))
-    return opdef
+    return _finish_opdef(
+        route.method,
+        arg_names,
+        result,
+        _allowed_inputs_from_params(route, params),
+        inline=True,
+    )
 
 
 def _validate_opdef_method(method: str, opdef: OpDef) -> None:
@@ -799,21 +819,17 @@ def _allowed_inputs_from_params(route: Route, params: list[inspect.Parameter]) -
 
 
 def _validate_opdef(opdef: OpDef, allowed_inputs: set[str]) -> None:
-    defined = set()
-    for name, _ in opdef.form:
-        if name in defined:
-            raise ValueError(f"duplicate OpDef id {name}")
-        defined.add(name)
-    allowed = set(allowed_inputs)
-    allowed.add("self")
-    allowed |= defined
-    form_map = {name: scalar for name, scalar in opdef.form}
-
-    for _, scalar in opdef.form:
-        for node in _walk_scalars_with_opdef(scalar):
-            node_form = form_of(node)
-            if isinstance(node_form, TCRef):
-                _validate_tcref(node_form, allowed, form_map)
+    opdef.validate()
+    collisions = sorted({name for name, _ in opdef.form} & allowed_inputs)
+    if collisions:
+        names = ", ".join(f"${name}" for name in collisions)
+        raise ValueError(f"OpDef provider(s) collide with invocation input(s): {names}")
+    required: set[str] = set()
+    opdef.requires(required)
+    undefined = sorted(required - allowed_inputs)
+    if undefined:
+        refs = ", ".join(f"${name}" for name in undefined)
+        raise ValueError(f"OpDef depends on undefined input(s): {refs}")
 
 
 def _inline_opref_refs(opdef: OpDef) -> OpDef:
@@ -860,59 +876,6 @@ def _inline_opref_refs(opdef: OpDef) -> OpDef:
     raise TypeError(f"unsupported OpDef type {type(opdef).__name__}")
 
 
-def _validate_tcref(tcref, allowed: set[str], form_map: dict[str, Scalar]) -> None:
-    ref_form = form_of(tcref)
-    if isinstance(ref_form, IdRef):
-        name = ref_form.name
-        if name not in allowed:
-            logging.info("OpDef depends on undefined id $%s", name)
-
-    if isinstance(ref_form, StateOpRef):
-        _validate_opref(ref_form)
-    elif isinstance(ref_form, Scalar):
-        resolved = _resolve_opref_ref(ref_form, form_map)
-        if resolved is not None:
-            _validate_opref(resolved)
-
-
-def _validate_opref(opref: StateOpRef) -> None:
-    if isinstance(opref, (GetOpRef, PutOpRef, PostOpRef, DeleteOpRef)):
-        return
-
-    raise ValueError(f"unsupported OpRef type {type(opref).__name__}")
-
-
-def _resolve_opref_ref(value: Scalar, form_map: dict[str, Scalar]) -> StateOpRef | None:
-    value_form = form_of(value)
-    if isinstance(value_form, TCRef):
-        ref_form = form_of(value_form)
-        if isinstance(ref_form, StateOpRef):
-            return ref_form
-        if isinstance(ref_form, IdRef):
-            target = form_map.get(ref_form.name)
-            if target is not None and target is not value:
-                return _resolve_opref_ref(target, form_map)
-    return None
-
-
-def _walk_scalars_with_opdef(root: Scalar):
-    stack = [root]
-    while stack:
-        node = stack.pop()
-        yield node
-
-        node_form = form_of(node)
-        if isinstance(node_form, OpDef):
-            for _, inner in node_form.form:
-                stack.append(inner)
-        if isinstance(node_form, dict):
-            for value in reversed(list(node_form.values())):
-                stack.append(value)
-        if isinstance(node_form, (list, tuple)):
-            for value in reversed(list(node_form)):
-                stack.append(value)
-
-
 def install(
     library: Library | type[Library],
     *,
@@ -929,9 +892,22 @@ def install(
 
     if wasm is not None:
         if remote is not None:
-            raise ValueError("remote WASM installs are not supported by the canonical /lib install path")
-        return _install_compiled_wasm_library(
-            library,
+            from .host import Host
+
+            module = wasm.read_bytes()
+            if not module:
+                raise RuntimeError(f"WASM binary {wasm} is empty")
+            if isinstance(remote, Host):
+                host = remote if token is None else Host(remote.__uri__.absolute(), token=token)
+            else:
+                host = Host(str(remote), token=token)
+            return host.request(
+                "PUT",
+                _LIB_ROOT_URI.path,
+                body=module,
+                headers=(("content-type", "application/wasm"),),
+            )
+        return _install_wasm_library(
             wasm,
             kernel=kernel,
             data_dir=data_dir,
@@ -941,38 +917,36 @@ def install(
     if _bearer_token(token) is None and remote is None:
         raise ValueError("expected `token` for library installs")
 
-    ir = compile_ir(library_cls)
-    definition = ir if ir["classes"] else library_definition(library_cls)
+    definition = library_definition(library)
+    from .classdef import _CLASS_ROOT_URI, class_definition
+    classes = [class_definition(cls) for cls in (getattr(library_cls, "classes", ()) or ())]
 
     if remote is not None:
-        return _submit_remote_library_definition(remote, definition, token=token)
+        for class_body in classes:
+            _submit_remote_definition(remote, _CLASS_ROOT_URI.path, class_body, token=token)
+        return _submit_remote_definition(remote, _LIB_ROOT_URI.path, definition, token=token)
 
-    kernel = _kernel_for_library_install(kernel=kernel, data_dir=data_dir)
+    kernel = _kernel_for_library_install(kernel=kernel, data_dir=data_dir, token=token)
     bearer_token = _bearer_token(token)
     if bearer_token is None:
         raise ValueError("expected `token` for library installs")
-    return _submit_local_library_definition(kernel, definition, bearer_token=bearer_token)
+    for class_body in classes:
+        _submit_local_definition(
+            kernel,
+            _CLASS_ROOT_URI.path,
+            class_body,
+            bearer_token=bearer_token,
+        )
+    return _submit_local_definition(kernel, _LIB_ROOT_URI.path, definition, bearer_token=bearer_token)
 
 
 def library_definition(library: Library | type[Library]) -> dict:
     """Return the canonical v1-style JSON definition of a Library."""
-
-    library_cls = _library_class(library)
-    ir = compile_ir(library_cls)
-    return {
-        library_cls.class_id().path: {
-            route["path"].strip("/"): route["opdef"]
-            if "opdef" in route
-            else route["op"]
-            if "op" in route
-            else route["value"]
-            for route in ir["routes"]
-        }
-    }
+    return compile_ir(library)
 
 
-def _submit_remote_library_definition(
-    remote: object, definition: dict, *, token: object | None
+def _submit_remote_definition(
+    remote: object, root: str, definition: dict, *, token: object | None
 ) -> object:
     from .host import Host
 
@@ -980,15 +954,14 @@ def _submit_remote_library_definition(
         host = remote if token is None else Host(remote.__uri__.absolute(), token=token)
     else:
         host = Host(str(remote), token=token)
-    return host.request("PUT", _LIB_ROOT_URI.path, body=definition)
+    return host.request("PUT", root, body=definition)
 
 
 def _kernel_for_library_install(
     *,
     kernel: object | None,
     data_dir: pathlib.Path | None,
-    library: Library | type[Library] | None = None,
-    token: object | None = None,
+    token: object | None,
 ) -> object:
     if kernel is not None:
         return kernel
@@ -996,23 +969,9 @@ def _kernel_for_library_install(
     if data_dir is None:
         raise ValueError("expected either `kernel` or `data_dir`")
 
-    if library is not None:
-        library_id = (
-            library.id().path
-            if isinstance(library, Library)
-            else _library_class(library).class_id().path
-        )
-        from . import _local
-
-        return _local.kernel_with_library_definition(
-            json.dumps({library_id: {}}, separators=(",", ":")),
-            token=token,
-            data_dir=str(data_dir),
-        )
-
     from . import _local
 
-    return _local.local_kernel(data_dir=str(data_dir))
+    return _local.local_kernel(data_dir=str(data_dir), token=token)
 
 
 def _header_value(response: object, name: str) -> str | None:
@@ -1027,45 +986,23 @@ def _header_value(response: object, name: str) -> str | None:
     return None
 
 
-def _submit_local_library_definition(kernel: object, definition: dict, *, bearer_token: str) -> object:
+def _submit_local_definition(kernel: object, root: str, definition: dict, *, bearer_token: str) -> object:
     from . import _local
 
-    install_path = _LIB_ROOT_URI.path
-    body = json.dumps(definition, separators=(",", ":"))
-    headers = [("authorization", f"Bearer {bearer_token}")]
-    request = _local.kernel_request("PUT", install_path, headers, _local.state_handle(body))
+    if len(definition) != 1:
+        raise ValueError("an application definition must contain exactly one URI")
+    identity, body = next(iter(definition.items()))
+    body = json.dumps([ValueLink(identity).to_json(), body], separators=(",", ":"))
+    request = _local.kernel_request(
+        "PUT",
+        root,
+        [("authorization", f"Bearer {bearer_token}"), ("content-type", "application/json")],
+        _local.state_handle(body),
+    )
     return kernel.dispatch(request)
 
 
-def _read_wasm_b64(path: pathlib.Path) -> str:
-    data = path.read_bytes()
-    if not data:
-        raise RuntimeError(f"WASM binary {path} is empty")
-    return base64.b64encode(data).decode("ascii")
-
-
-def _compiled_library_package_for_wasm(
-    library: Library | type[Library], wasm_path: pathlib.Path
-) -> dict:
-    schema = (
-        _library_schema(library)
-        if isinstance(library, Library)
-        else _class_schema(_library_class(library))
-    )
-    return {
-        "schema": schema,
-        "artifacts": [
-            {
-                "path": _LIB_WASM_URI.path,
-                "content_type": "application/wasm",
-                "bytes": _read_wasm_b64(wasm_path),
-            }
-        ],
-    }
-
-
-def _install_compiled_wasm_library(
-    library: Library | type[Library],
+def _install_wasm_library(
     wasm_path: pathlib.Path,
     *,
     kernel: Optional[object] = None,
@@ -1079,11 +1016,17 @@ def _install_compiled_wasm_library(
     kernel = _kernel_for_library_install(
         kernel=kernel,
         data_dir=data_dir,
-        library=library,
         token=token,
     )
-    package = _compiled_library_package_for_wasm(library, wasm_path)
-    return kernel.install_compiled_package(
-        json.dumps(package, separators=(",", ":")),
-        bearer_token,
+    module = wasm_path.read_bytes()
+    if not module:
+        raise RuntimeError(f"WASM binary {wasm_path} is empty")
+    from . import _local
+
+    request = _local.kernel_request(
+        "PUT",
+        _LIB_ROOT_URI.path,
+        [("authorization", f"Bearer {bearer_token}"), ("content-type", "application/wasm")],
+        _local.state_handle(module),
     )
+    return kernel.dispatch(request)

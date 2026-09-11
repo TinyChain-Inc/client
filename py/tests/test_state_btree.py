@@ -9,26 +9,24 @@ def test_btree_is_collection_not_scalar():
     assert not isinstance(btree, tc.state.Scalar)
 
 
-def test_btree_to_json_bridges_runtime_get_opref_via_shared_ref_layer():
+def test_btree_does_not_encode_a_runtime_get_as_canonical_state():
     runtime_get = tc.opref.get("$btree/count").with_body(None)
     btree = tc.collection.BTree(runtime_get)
 
-    assert btree.to_json() == {
-        "$btree/count": [None]
-    }
+    with pytest.raises(TypeError, match="cannot encode form"):
+        btree.to_json()
 
 
-def test_btree_to_json_bridges_runtime_delete_opref_via_shared_ref_layer():
+def test_btree_does_not_encode_a_runtime_delete_as_canonical_state():
     runtime_delete = tc.opref.delete("$btree", body=["a"])
     btree = tc.collection.BTree(runtime_delete)
 
-    assert btree.to_json() == {
-        "/state/scalar/ref/op/delete": ["$btree", ["a"]]
-    }
+    with pytest.raises(TypeError, match="cannot encode form"):
+        btree.to_json()
 
 
 def test_btree_stages_anonymous_subject_in_active_context():
-    with tc.state.scoped_context() as ctx:
+    with tc.scoped_context() as ctx:
         btree = tc.collection.BTree([
             ("key", "/state/scalar/value/string"),
         ])

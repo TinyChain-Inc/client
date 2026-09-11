@@ -76,11 +76,9 @@ def test_table_routes_compile_in_deferred_mode():
         table = tc.collection.Table(tc.state.IdRef("table"))
         result = library.update_range_then_read(table=table)
         assert isinstance(result, tc.state.scalar.Tuple)
-        assert result.to_json() == {
-            "/lib/example-devco/table_route_harness/0.1.0/update_range_then_read": {
-                "table": {"$table": []}
-            }
-        }
+        op = tc.state.form_of(result)
+        assert op.path == "/lib/example-devco/table_route_harness/0.1.0/update_range_then_read"
+        assert tc.state.form_of(op.body["table"]) == tc.state.IdRef("table")
 
 
 def test_table_routes_execute_natively(tmp_path: pathlib.Path):

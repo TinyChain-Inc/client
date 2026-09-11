@@ -51,7 +51,7 @@ def _typespec(dtype: str, shape: list[int]) -> dict[str, object]:
 def _trace_linear_mse(dtype: str = "f32"):
     """Trace a small linear-regression loss and return the builder and values."""
     trace = TensorGraphBuilder()
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         with trace:
             images = trace.input("images", dtype=dtype, shape=(2, 3))
             weights = trace.input("weights", dtype=dtype, shape=(3, 4))

@@ -20,13 +20,30 @@ class OpDef:
         return type(self).METHOD
 
     @property
-    def form(self) -> list[tuple[str, "Scalar"]]:
+    def form(self) -> tuple[tuple[str, "Scalar"], ...]:
         raise NotImplementedError()
 
     def last_id(self) -> str | None:
         if not self.form:
             return None
         return self.form[-1][0]
+
+    def _parameters(self) -> tuple[str, ...]:
+        if isinstance(self, (GetOpDef, DeleteOpDef)):
+            return (self.key,)
+        if isinstance(self, PutOpDef):
+            return (self.key, self.value)
+        return ()
+
+    def requires(self, required: set[str]) -> None:
+        from ..._lexical import requires
+
+        requires(self, required)
+
+    def validate(self) -> None:
+        from ..._lexical import validate
+
+        validate(self)
 
     def walk_scalars(self) -> Iterator["Scalar"]:
         from . import _iter_scalar_nodes
@@ -110,9 +127,10 @@ class GetOpDef(OpDef):
 
         self.key = key
         self._form = _normalize_opdef_form(form)
+        self.validate()
 
     @property
-    def form(self) -> list[tuple[str, "Scalar"]]:
+    def form(self) -> tuple[tuple[str, "Scalar"], ...]:
         return self._form
 
     def to_json(self) -> dict[str, object]:
@@ -135,9 +153,10 @@ class PutOpDef(OpDef):
         self.key = key
         self.value = value
         self._form = _normalize_opdef_form(form)
+        self.validate()
 
     @property
-    def form(self) -> list[tuple[str, "Scalar"]]:
+    def form(self) -> tuple[tuple[str, "Scalar"], ...]:
         return self._form
 
     def to_json(self) -> dict[str, object]:
@@ -155,9 +174,10 @@ class PostOpDef(OpDef):
         from . import _normalize_opdef_form
 
         self._form = _normalize_opdef_form(form)
+        self.validate()
 
     @property
-    def form(self) -> list[tuple[str, "Scalar"]]:
+    def form(self) -> tuple[tuple[str, "Scalar"], ...]:
         return self._form
 
     def to_json(self) -> dict[str, object]:
@@ -179,9 +199,10 @@ class DeleteOpDef(OpDef):
 
         self.key = key
         self._form = _normalize_opdef_form(form)
+        self.validate()
 
     @property
-    def form(self) -> list[tuple[str, "Scalar"]]:
+    def form(self) -> tuple[tuple[str, "Scalar"], ...]:
         return self._form
 
     def to_json(self) -> dict[str, object]:

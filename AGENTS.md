@@ -25,3 +25,14 @@
 * Preserve lazy transport and collection iteration across every client. Request
   concurrency, prefetch, and retries must be finite and explicit; surface
   structured saturation rather than buffering or retrying without a bound.
+
+## Lexical IR
+
+* Every client must reject rebinding, shadowing, reserved binders, and duplicate
+  providers before emitting an `OpDef`; authoritative host validation remains
+  mandatory.
+* Top-level `Context` is explicit, lexical, and single-assignment. Only
+  `bind_auto` may generate unique temporary names. Do not restore an ambient
+  `context()` helper, silently repoint bindings, or place lexical policy on
+  `State` subclasses. One private syntax traversal owns validation, requirements,
+  and binder discovery; public `OpDef` queries delegate to it.

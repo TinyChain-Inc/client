@@ -1,64 +1,22 @@
 # Contributing to the Python client
 
-TinyChain’s Python package combines generated PyO3 bindings with a small layer
-of hand-authored stubs. Those stubs keep the public API indexable by Sphinx and
-discoverable in IDEs even though the runtime logic lives in Rust. When you add
-new `State` variants, handlers, or `/lib` routes, update the stubs alongside the
-Rust change so the documentation stays accurate.
+Read the repository-local [Python ownership rules](AGENTS.md). The TinyChain
+[workspace contributor guide](https://github.com/TinyChain-Inc/tcv2/blob/main/CONTRIBUTING.md)
+is non-normative integration context.
 
-## When to touch the stubs
+From the client repository root:
 
-Create or refresh Python stubs whenever you:
+```bash
+python -m pytest py/tests
+```
 
-- Expose a new `State`/`Collection` variant (e.g., tensors) through PyO3.
-- Add a handler or endpoint that should be callable from Python (`/lib/...`,
-  `/service/...`, queue helpers, etc.).
-- Change the request/response shape of an existing handler or value type.
+When changing the local backend, also build and import the `tinychain_local`
+extension owned by `client/rust`. When changing a public Python signature,
+update its annotation/docstring and the concise user-facing example in
+[README.md](README.md). Do not maintain a separate stub architecture unless the
+package actually ships generated stubs.
 
-## Where the stubs live
-
-Add stub modules under `py/tinychain/` (create the package if it does not
-exist yet). Mirror the structure of the Rust API (e.g., `tinychain/state.py`,
-`tinychain/kernel.py`, `tinychain/handlers.py`) and keep the following in mind:
-
-- Each stub should define the public class/function with the correct signature
-  and docstring. The body can be `...`/`raise NotImplementedError` because the
-  real implementation is provided by PyO3 at runtime.
-- Include any constants/enums that PyO3 exposes so type checkers can import
-  them without talking to a running host.
-- Reference the canonical URI helpers (`tc.uri.*`) instead of string-building to
-  keep docs aligned with the kernel contract.
-
-## Update checklist
-
-1. **Add or edit the stub** file that corresponds to the new API surface.
-2. **Document the change** inside `py/README.md` so users know how to
-   call the endpoint/variant.
-3. **Regenerate or adjust Sphinx docs** if you maintain API references.
-4. **Run the Python tests** (`python -m pytest py/tests`) and the PyO3
-   integration tests to ensure stubs and bindings agree.
-
-## Ergonomic usage expectations
-
-- Do not hand-roll request/response wrappers (for example custom `Request`,
-  `Response`, `Body`, or payload parser classes) in usage guides or examples.
-- Use framework-native execution surfaces:
-  - `with tc.backend(...):` for contextual execution control
-  - direct route method calls for default auto-execution
-  - `tc.execute(ref)` only when explicit deferred execution is intended
-  - `tc.Host` for explicit HTTP/RPC transport calls
-- If a guide needs decoded response content from a kernel response object,
-  use `tc.testing.decode_json_body` instead of custom status/body parsing.
-
-Keeping the stubs current is what lets the Python package advertise every Rust
-capability without re-implementing it. If you are unsure where a stub should go
-or how to describe a new endpoint, mention it in your PR so reviewers can
-double-check the Python surface.
-
-## Rights and licensing
-
-By contributing to this package you represent that (a) you authored the work (or
-have the right to contribute it) and (b) you transfer and assign all right,
-title, and interest in the contribution to the TinyChain Open-Source Project for
-distribution under the TinyChain open-source license (Apache 2.0, see the root
-`LICENSE`). Contributions must be free of third-party claims or encumbrances.
+Changes to symbolic forms require round-trip and structural tests. Changes to
+Autograph require both accepted-form and fail-closed rejection tests. Changes to
+HTTP or PyO3 projection require parity tests demonstrating one native semantic
+path and serialization only at the real boundary.

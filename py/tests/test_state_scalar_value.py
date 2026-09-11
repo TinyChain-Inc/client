@@ -224,7 +224,7 @@ def test_value_from_json_delegates_by_uri_to_concrete_subclass():
 
 
 def test_number_deferred_arithmetic_builds_oprefs():
-    with tc.state.scoped_context() as cxt:
+    with tc.scoped_context() as cxt:
         x = tc.state.id("x")
         deferred_form = tc.state.form_of(x.add(1))
         assert isinstance(deferred_form, tc.state.TCRef)
@@ -258,7 +258,7 @@ def test_number_deferred_arithmetic_builds_oprefs():
 
 def test_state_rejects_context_instance_state() -> None:
     with pytest.raises(AttributeError, match="Context"):
-        tc.state.Scalar()._ctx = tc.state.Context()
+        tc.state.Scalar()._ctx = tc.Context()
 
 
 def test_reduce_infers_item_binding_name_from_reducer_inputs():
@@ -267,7 +267,7 @@ def test_reduce_infers_item_binding_name_from_reducer_inputs():
         ("result", tc.state.id("x2") + tc.state.id("x2")),
     ])
 
-    with tc.state.scoped_context() as cxt:
+    with tc.scoped_context() as cxt:
         items = tc.state.autobox([1])
         cxt.bind("items", items)
         reduced = items.reduce(op=op, value={})
@@ -278,6 +278,20 @@ def test_reduce_infers_item_binding_name_from_reducer_inputs():
     assert params["item_name"] == "x"
 
 
+@pytest.mark.parametrize("item_name", ["", "bad name", "bad/name"])
+def test_reduce_rejects_invalid_explicit_item_name(item_name):
+    op = tc.state.PostOpDef([
+        ("result", tc.state.id("x")),
+    ])
+
+    with tc.scoped_context() as cxt:
+        items = tc.state.autobox([1])
+        cxt.bind("items", items)
+
+        with pytest.raises((TypeError, ValueError)):
+            items.reduce(op=op, value={}, item_name=item_name)
+
+
 def test_reduce_rejects_ambiguous_item_binding():
     op = tc.state.PostOpDef([
         ("xa", tc.state.id("x").add(1)),
@@ -285,7 +299,7 @@ def test_reduce_rejects_ambiguous_item_binding():
         ("result", tc.state.id("xa") + tc.state.id("ya")),
     ])
 
-    with tc.state.scoped_context() as cxt:
+    with tc.scoped_context() as cxt:
         items = tc.state.autobox([1])
         cxt.bind("items", items)
 

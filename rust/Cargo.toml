@@ -11,4 +11,14 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = { version = "0.29", features = ["macros", "extension-module"] }
-tinychain = { path = "../../tc-server", default-features = false, features = ["pyo3", "wasm"] }
+tinychain = { path = "../../tc-server", default-features = false, features = ["http-client", "wasm"] }
+base64 = "0.22"
+destream_json = { path = "../../deps/destream_json", default-features = false }
+futures = "0.3"
+pathlink = { path = "../../deps/pathlink" }
+rjwt = { package = "rjwt", path = "../../deps/rjwt/rjwt-core" }
+tc-error = { path = "../../tc-error" }
+tc-ir = { path = "../../tc-ir" }
+tc-value = { path = "../../tc-value" }
+tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
+umask = "2.1"

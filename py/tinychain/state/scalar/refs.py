@@ -10,6 +10,27 @@ if TYPE_CHECKING:
     from ..value import Value
 
 
+_RESERVED_ID_PATTERNS = (
+    "/", "..", "~", "$", "`", "&", "|", "=", "^", "{", "}", "<", ">",
+    "'", '"', "?", ":", "@", "#", "(", ")",
+)
+
+
+def _validate_id(name: str) -> str:
+    if not isinstance(name, str):
+        raise TypeError("TinyChain IDs must be strings")
+    if not name:
+        raise ValueError("TinyChain IDs cannot be empty")
+    if any(ord(char) < 0x20 for char in name):
+        raise ValueError("TinyChain IDs cannot contain ASCII control characters")
+    if any(char.isspace() for char in name):
+        raise ValueError("TinyChain IDs cannot contain whitespace")
+    for pattern in _RESERVED_ID_PATTERNS:
+        if pattern in name:
+            raise ValueError(f"TinyChain ID {name!r} contains reserved pattern {pattern!r}")
+    return name
+
+
 def _sorted_items(obj: Mapping[str, Any]) -> list[tuple[str, Any]]:
     return sorted(obj.items(), key=lambda kv: kv[0])
 
@@ -58,6 +79,11 @@ class TCRef(Scalar):
         if not isinstance(raw, dict):
             raise TypeError("TCRef form must encode to a map")
         return raw
+
+    def requires(self, required: set[str]) -> None:
+        from ..._lexical import requires
+
+        requires(self, required)
 
     @staticmethod
     def from_json(obj: Any) -> "TCRef":
@@ -149,33 +175,19 @@ class OpRef(TCRef):
     def to_json(self) -> dict[str, object]:
         raise NotImplementedError()
 
-    @staticmethod
-    def from_runtime(obj: Any) -> "OpRef | None":
-        from ...opref import DeleteOpRef as RuntimeDeleteOpRef
-        from ...opref import GetOpRef as RuntimeGetOpRef
-        from ...opref import PostOpRef as RuntimePostOpRef
-        from ...opref import PutOpRef as RuntimePutOpRef
+    def requires(self, required: set[str]) -> None:
+        from ..._lexical import requires
 
-        if isinstance(obj, RuntimeGetOpRef):
-            return GetOpRef(obj.path, obj.body)
+        requires(self, required)
 
-        if isinstance(obj, RuntimePutOpRef):
-            body = obj.body
-            if isinstance(body, (list, tuple)) and len(body) == 2:
-                return PutOpRef(obj.path, body[0], body[1])
-            raise TypeError("runtime PUT op requires [key, value] body for IR conversion")
-
-        if isinstance(obj, RuntimePostOpRef):
-            if obj.body is None:
-                return PostOpRef(obj.path, {})
-            if not isinstance(obj.body, dict):
-                raise TypeError("runtime POST op requires object body for IR conversion")
-            return PostOpRef(obj.path, obj.body)
-
-        if isinstance(obj, RuntimeDeleteOpRef):
-            return DeleteOpRef(obj.path, obj.body)
-
-        return None
+    def _argument_form(self) -> object:
+        if isinstance(self, (GetOpRef, DeleteOpRef)):
+            return self._key
+        if isinstance(self, PutOpRef):
+            return (self._key, self._value)
+        if isinstance(self, PostOpRef):
+            return self._params
+        raise TypeError(f"unsupported OpRef type {type(self).__name__}")
 
     @staticmethod
     def from_json(obj: Any) -> "OpRef":
@@ -320,7 +332,7 @@ class DeleteOpRef(OpRef):
 class IdRef(TCRef):
     def __init__(self, name: str):
         super().__init__(self)
-        self.name = name
+        self.name = _validate_id(name)
 
     def __eq__(self, other: object) -> bool:
         return isinstance(other, IdRef) and self.name == other.name
@@ -330,6 +342,11 @@ class IdRef(TCRef):
 
     def key(self) -> str:
         return f"${self.name}"
+
+    def requires(self, required: set[str]) -> None:
+        from ..._lexical import requires
+
+        requires(self, required)
 
 
 class ControlRef(TCRef):
@@ -356,6 +373,11 @@ class After(ControlRef):
                 self.then.to_json(),
             ]
         }
+
+    def requires(self, required: set[str]) -> None:
+        from ..._lexical import requires
+
+        requires(self, required)
 
 
 class While(ControlRef):
@@ -385,6 +407,11 @@ class While(ControlRef):
             ]
         }
 
+    def requires(self, required: set[str]) -> None:
+        from ..._lexical import requires
+
+        requires(self, required)
+
 
 class Cond(ControlRef):
     def __init__(self, cond: "TCRef", then: "Scalar", or_else: "Scalar"):
@@ -413,13 +440,18 @@ class Cond(ControlRef):
             ]
         }
 
+    def requires(self, required: set[str]) -> None:
+        from ..._lexical import requires
+
+        requires(self, required)
+
 
 class ForEach(ControlRef):
     def __init__(self, items: "Scalar", op: "Scalar", item_name: str):
         super().__init__()
         self.items = items
         self.op = op
-        self.item_name = item_name
+        self.item_name = _validate_id(item_name)
 
     def __eq__(self, other: object) -> bool:
         return (
@@ -440,6 +472,11 @@ class ForEach(ControlRef):
                 self.item_name,
             ]
         }
+
+    def requires(self, required: set[str]) -> None:
+        from ..._lexical import requires
+
+        requires(self, required)
 
 
 def tcref_form_of(value: "TCRef | object") -> object:

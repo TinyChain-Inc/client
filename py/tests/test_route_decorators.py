@@ -18,3 +18,16 @@ def test_route_decorators_return_typed_refs():
         ref = a.hello()
     assert isinstance(ref, tc.String)
     assert ref.op.method == "GET"
+
+
+def test_standalone_decorator_lowers_runtime_ref_to_canonical_ir():
+    @tc.get
+    def auth_context() -> tc.Ref:
+        return tc.auth.context()
+
+    assert auth_context.to_json() == {
+        "/state/scalar/op/get": [
+            "key",
+            [["result", {"/host/auth/context": [None]}]],
+        ]
+    }

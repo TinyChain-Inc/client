@@ -36,12 +36,14 @@ class NamedPoint(Point):
 def test_class_definition_encodes_native_and_user_parents_canonically():
     base = tc.class_definition(Point)
     derived = tc.class_definition(NamedPoint)
-    assert base["id"] == "/class/example-devco/point/1.0.0"
-    assert base["parent"] == str(tc.Map.__uri__)
+    base_id, base_body = next(iter(base.items()))
+    _, derived_body = next(iter(derived.items()))
+    assert base_id == "/class/example-devco/point/1.0.0"
+    assert base_body["parent"] == str(tc.Map.__uri__)
     assert "extends" not in Point.__dict__
-    assert set(base["prototype"]) == {"dimensions", "label", "translate"}
-    assert derived["parent"] == base["id"]
-    assert set(derived["prototype"]) == {"name", "label"}
+    assert set(base_body["prototype"]) == {"dimensions", "label", "translate"}
+    assert derived_body["parent"] == base_id
+    assert set(derived_body["prototype"]) == {"name", "label"}
     assert tc.validate_class_definition(derived) == derived
 
 
@@ -49,10 +51,10 @@ def test_class_construction_and_bound_methods_are_one_deferred_plan():
     point = NamedPoint(name="home")
     assert point.to_json() == {NamedPoint.class_id().path: {"name": "home"}}
     with tc.backend(mode="deferred"):
-        translated = point.translate(dx=1, dy=2)
+        with tc.scoped_context():
+            translated = point.translate(dx=1, dy=2)
     assert isinstance(translated, tc.Map)
-    assert translated.op.path == f"{NamedPoint.class_id().path}/translate"
-    assert translated.op.body == {"dx": 1, "dy": 2}
+    assert translated.op.to_json() == {"$_tmp0/translate": {"dx": 1, "dy": 2}}
     with tc.backend(mode="deferred"):
         assert isinstance(point.label(), tc.String)
 
@@ -81,7 +83,7 @@ def test_class_rejects_invalid_parent_and_method_data_kind_override():
             label = "not a method"
 
 
-def test_library_manifest_owns_class_installation_lifecycle():
+def test_library_manifest_links_separately_installed_classes():
     from tinychain.library import compile_ir
 
     class Geometry(tc.Library):
@@ -91,10 +93,10 @@ def test_library_manifest_owns_class_installation_lifecycle():
         classes = (Point, NamedPoint)
 
     manifest = compile_ir(Geometry)
-    assert [definition["id"] for definition in manifest["classes"]] == [
-        Point.class_id().path,
-        NamedPoint.class_id().path,
-    ]
+    members = manifest[Geometry.class_id().path]
+    assert set(members) == {"point", "named-point"}
+    assert next(iter(members["point"])) == Point.class_id().path
+    assert next(iter(members["named-point"])) == NamedPoint.class_id().path
 
 
 def test_class_definitions_match_language_neutral_golden_fixture():

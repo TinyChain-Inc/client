@@ -208,7 +208,7 @@ def compile_composed(
     derivative_expansions: object = (DERIVATIVE_PASS,),
 ) -> object:
     """Compile one training step against the reduction-free registry."""
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         return compile_training_step(
             loss,
             inputs=inputs,
