@@ -136,7 +136,7 @@ class _Source:
 
 
 def _build_source(parameters: Sequence[str]) -> _Source:
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         traced = trace_loss(
             inputs=RESIDUAL_INPUTS, input_names=("x", "w", "y"), loss=_residual_loss
         )

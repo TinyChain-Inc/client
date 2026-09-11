@@ -114,11 +114,11 @@ def test_library_routes_compile_opdef_routes():
     a = A()
     ir = compile_ir(a)
 
-    route = next(route for route in ir["routes"] if route["path"] == "/echo")
-    assert "opdef" in route
+    route = ir[A.class_id().path]["echo"]
+    assert tc.URI("state", "scalar", "op", "post").path in route
 
 
-def test_library_routes_preserve_all_dict_return_keys():
+def test_library_routes_preserve_dict_as_one_result_value():
     class A(tc.Library):
         publisher = "example-devco"
         resource_name = "a"
@@ -129,13 +129,14 @@ def test_library_routes_preserve_all_dict_return_keys():
             return {"min": x, "max": x}
 
     ir = compile_ir(A)
-    route = next(route for route in ir["routes"] if route["path"] == "/stats")
-    opdef = route["opdef"][tc.URI("state", "scalar", "op", "post").path]
+    route = ir[A.class_id().path]["stats"]
+    opdef = route[tc.URI("state", "scalar", "op", "post").path]
 
-    assert [name for name, _ in opdef] == ["min", "max"]
+    assert [name for name, _ in opdef] == ["result"]
+    assert set(opdef[0][1]) == {"min", "max"}
 
 
-def test_library_routes_ref_typed_mapping_return_is_result_value():
+def test_library_route_return_annotations_do_not_change_compiled_mapping():
     class A(tc.Library):
         publisher = "example-devco"
         resource_name = "a"
@@ -146,13 +147,104 @@ def test_library_routes_ref_typed_mapping_return_is_result_value():
             stats_map = {"max": x}
             return stats_map
 
-    ir = compile_ir(A)
-    route = next(route for route in ir["routes"] if route["path"] == "/stats")
-    opdef = route["opdef"][tc.URI("state", "scalar", "op", "post").path]
+        @tc.post
+        def untyped_stats(self, x: tc.Number):
+            stats_map = {"max": x}
+            return stats_map
 
-    names = [name for name, _ in opdef]
-    assert "result" in names
-    assert "max" not in names
+    ir = compile_ir(A)
+    routes = ir[A.class_id().path]
+    assert routes["stats"] == routes["untyped_stats"]
+
+
+def test_library_routes_lower_runtime_refs_to_canonical_ir():
+    class A(tc.Library):
+        publisher = "example-devco"
+        resource_name = "a"
+        version = "0.1.0"
+
+        @tc.get
+        def auth_context(self) -> tc.Ref:
+            return tc.auth.context()
+
+    route = compile_ir(A)[A.class_id().path]["auth_context"]
+
+    assert route == {
+        "/state/scalar/op/get": [
+            "key",
+            [["result", {"/host/auth/context": [None]}]],
+        ]
+    }
+
+
+def test_library_routes_lower_parameterized_runtime_refs_for_every_verb():
+    class A(tc.Library):
+        publisher = "example-devco"
+        resource_name = "a"
+        version = "0.1.0"
+
+        @tc.get
+        def get_ref(self, cxt, key: tc.String) -> tc.Ref:
+            return tc.Ref(tc.opref.get("/state/scalar/value", body=key))
+
+        @tc.put
+        def put_ref(self, cxt, key: tc.String, value: tc.String) -> tc.Ref:
+            return tc.Ref(
+                tc.opref.put("/state/scalar/value", body=[key, value])
+            )
+
+        @tc.post
+        def post_ref(self, cxt, value: tc.String) -> tc.Ref:
+            return tc.Ref(
+                tc.opref.post("/state/scalar/value", body={"value": value})
+            )
+
+        @tc.delete
+        def delete_ref(self, cxt, key: tc.String) -> tc.Ref:
+            return tc.Ref(tc.opref.delete("/state/scalar/value", body=key))
+
+    routes = compile_ir(A)[A.class_id().path]
+
+    for name, method in (
+        ("get_ref", "get"),
+        ("put_ref", "put"),
+        ("post_ref", "post"),
+        ("delete_ref", "delete"),
+    ):
+        route = routes[name]
+        assert list(route) == [f"/state/scalar/op/{method}"]
+        assert set(route) != {"method", "path"}
+        assert "/state/scalar/value" in repr(route)
+
+
+def test_autobox_rejects_runtime_requests_outside_route_compilation():
+    runtime_ref = tc.auth.context()
+
+    with pytest.raises(TypeError):
+        tc.state.autobox(runtime_ref)
+    with pytest.raises(TypeError):
+        tc.state.autobox(runtime_ref.op)
+    with pytest.raises(TypeError, match="Library compiler"):
+        tc.state.autobox(tc.String(runtime_ref.op))
+
+
+def test_library_routes_reject_transport_headers_in_ir():
+    class A(tc.Library):
+        publisher = "example-devco"
+        resource_name = "a"
+        version = "0.1.0"
+
+        @tc.get
+        def invalid(self) -> tc.Ref:
+            return tc.Ref(
+                tc.opref.get(
+                    "/host/auth/context",
+                    headers=(("x-request-metadata", "not-ir"),),
+                )
+            )
+
+    with pytest.raises(TypeError, match="headers cannot be encoded"):
+        compile_ir(A)
 
 
 def test_library_route_symbolic_post_body_skips_eager_execute(monkeypatch):
@@ -170,7 +262,7 @@ def test_library_route_symbolic_post_body_skips_eager_execute(monkeypatch):
 
     monkeypatch.setattr("tinychain.execute", fail_execute)
 
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         symbolic = tc.state.id("x")
     with tc.backend(mode="eager"):
         result = A().echo(x=symbolic)
@@ -188,9 +280,9 @@ def test_grad_is_call_site_transform_stub_not_route_decorator():
         def identity(self, x: tc.Number) -> tc.Number:
             return x
 
-    routes = {route["path"]: route for route in compile_ir(A)["routes"]}
+    routes = compile_ir(A)[A.class_id().path]
 
-    assert "grad" not in routes["/identity"]
+    assert "grad" not in routes["identity"]
     with pytest.raises(AutodiffError) as exc:
         tc.grad(A().identity, wrt=("v0",))
 
@@ -258,8 +350,8 @@ def test_library_routes_use_decorator_time_source_capture(monkeypatch):
     monkeypatch.setattr("tinychain._autograph.inspect.getsource", missing_source)
 
     ir = compile_ir(A)
-    route = next(route for route in ir["routes"] if route["path"] == "/echo")
-    assert "opdef" in route
+    route = ir[A.class_id().path]["echo"]
+    assert tc.URI("state", "scalar", "op", "post").path in route
 
 
 def test_library_routes_accept_uri_subjects_for_oprefs():
@@ -276,7 +368,7 @@ def test_library_routes_accept_uri_subjects_for_oprefs():
 
     a = A()
     ir = compile_ir(a)
-    assert any(route["path"] == "/bad" for route in ir["routes"])
+    assert "bad" in ir[A.class_id().path]
 
 
 def test_route_decorators_do_not_accept_name_override():
@@ -384,8 +476,7 @@ def test_route_method_named_name_remains_valid():
     assert RouteName.class_id().path == "/lib/example-devco/route-name/0.1.0"
     assert RouteName().id().path == "/lib/example-devco/route-name/0.1.0"
 
-    ir_paths = [route["path"] for route in compile_ir(RouteName)["routes"]]
-    assert "/name" in ir_paths
+    assert "name" in compile_ir(RouteName)[RouteName.class_id().path]
 
 
 @pytest.mark.parametrize("field", ("publisher", "resource_name", "name", "version"))
@@ -514,7 +605,6 @@ def test_identity_fields_are_read_only_on_instances(field):
 
 def test_identity_consumers_are_class_authoritative():
     from tinychain.autodiff.routes import extract_route_identity
-    from tinychain.library import _class_schema, _library_schema
 
     class Canonical(tc.Library):
         publisher = "applied-physics"
@@ -531,12 +621,9 @@ def test_identity_consumers_are_class_authoritative():
     assert instance.id().path == expected
     assert instance.link().path == expected
     assert Canonical.class_id().path == expected
-    assert _class_schema(Canonical)["id"] == expected
-    assert _library_schema(instance)["id"] == expected
     assert list(library_definition(instance).keys()) == [expected]
 
-    ir_paths = [route["path"] for route in compile_ir(instance)["routes"]]
-    assert "/ping" in ir_paths
+    assert "ping" in compile_ir(instance)[expected]
 
     with tc.backend(mode="deferred"):
         op = instance.ping()

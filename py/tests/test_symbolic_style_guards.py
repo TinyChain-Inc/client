@@ -225,6 +225,25 @@ def test_symbolic_state_ownership_has_one_construction_path() -> None:
     )
 
 
+def test_lexical_authoring_has_one_owner() -> None:
+    state_init = (_SRC_ROOT / "state" / "__init__.py").read_text(encoding="utf-8")
+    scalar_source = (_SRC_ROOT / "state" / "scalar" / "__init__.py").read_text(
+        encoding="utf-8"
+    )
+    refs_source = (_SRC_ROOT / "state" / "scalar" / "refs.py").read_text(
+        encoding="utf-8"
+    )
+    opdef_source = (_SRC_ROOT / "state" / "scalar" / "opdef.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Context" not in state_init
+    assert "_active_context" not in scalar_source
+    assert "from_runtime" not in refs_source
+    assert "def requires" not in scalar_source
+    assert "-> list[tuple[str" not in opdef_source
+
+
 def test_runtime_paths_use_uri_helpers() -> None:
     violations: list[str] = []
 

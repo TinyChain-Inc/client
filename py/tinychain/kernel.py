@@ -1,17 +1,11 @@
 from __future__ import annotations
 
 import pathlib
-import json
-from collections.abc import Iterable
 
-from .library import Library
-from .uri import URI
+from .library import Library, _LIB_ROOT_URI, _library_class, _submit_local_definition, library_definition
 
 
-def _token_parts(token: object | None) -> tuple[str | None, str | None, str | None]:
-    if token is None:
-        return None, None, None
-
+def _token_parts(token: object) -> tuple[str, str, str]:
     host = getattr(token, "host", None)
     actor = getattr(token, "actor_id", None)
     pub = getattr(token, "public_key_b64", None)
@@ -23,134 +17,43 @@ def _token_parts(token: object | None) -> tuple[str | None, str | None, str | No
     return host, actor, pub
 
 
-def _as_uri(value: object) -> URI:
-    if isinstance(value, URI):
-        return value
-    if isinstance(value, str):
-        return URI.parse(value)
-    if hasattr(value, "link") and callable(getattr(value, "link")):
-        linked = value.link()
-        if isinstance(linked, URI):
-            return linked
-        if isinstance(linked, str):
-            return URI.parse(linked)
-        return URI(linked)
-    if hasattr(value, "id") and callable(getattr(value, "id")):
-        base = value.id()
-        if isinstance(base, URI):
-            base_uri = base
-        elif isinstance(base, str):
-            base_uri = URI.parse(base)
-        else:
-            base_uri = URI(base)
-        authority = getattr(value, "authority", None)
-        if isinstance(authority, URI):
-            return base_uri.with_authority(authority) if authority.host is not None else base_uri
-        if isinstance(authority, str):
-            authority_uri = URI.parse(authority)
-            return base_uri.with_authority(authority_uri) if authority_uri.host is not None else base_uri
-        return base_uri
-    raise TypeError(f"unsupported dependency type: {type(value).__name__}")
-
-
-def _runtime_dependency_bindings(library: Library) -> list[object]:
-    bindings: list[object] = []
-    seen: set[int] = set()
-
-    def collect(values: Iterable[object]) -> None:
-        for value in values:
-            marker = id(value)
-            if marker in seen:
-                continue
-            seen.add(marker)
-            bindings.append(value)
-
-    library_cls = type(library)
-    collect(vars(library_cls).values())
-
-    try:
-        collect(vars(library).values())
-    except TypeError:
-        pass
-
-    return bindings
-
-
-def _dependency_routes_for_library(library: Library) -> list[tuple[str, str]]:
-    declared = list(getattr(library, "dependencies", ()) or ())
-    if not declared:
-        return []
-
-    authorities_by_path: dict[str, set[str]] = {}
-    for candidate in [*declared, *_runtime_dependency_bindings(library)]:
-        try:
-            parsed = _as_uri(candidate)
-        except (TypeError, ValueError):
-            continue
-        authority = parsed.authority()
-        if not parsed.path or authority is None:
-            continue
-        authorities_by_path.setdefault(parsed.path, set()).add(authority)
-
-    routes: list[tuple[str, str]] = []
-    for dep in declared:
-        parsed = _as_uri(dep)
-        if not parsed.path:
-            raise ValueError(f"dependency route requires a canonical path, got: {dep!r}")
-
-        authority = parsed.authority()
-        if authority is None:
-            candidates = authorities_by_path.get(parsed.path, set())
-            if not candidates:
-                raise ValueError(
-                    "missing dependency authority for "
-                    f"{parsed.path}; bind an authority-qualified dependency URI on the library "
-                    "or bind a dependency instance with `authority` on the library class/instance"
-                )
-            if len(candidates) > 1:
-                choices = ", ".join(sorted(candidates))
-                raise ValueError(
-                    "ambiguous dependency authority for "
-                    f"{parsed.path}: {choices}; keep exactly one bound authority per dependency path"
-                )
-            authority = next(iter(candidates))
-
-        route = (parsed.path, authority)
-        if route not in routes:
-            routes.append(route)
-
-    return routes
-
-
 def with_library(
     library: Library,
     *,
     data_dir: pathlib.Path,
     workspace: pathlib.Path | None = None,
-    token: object | None = None,
+    token: object,
 ) -> "object":
     """
-    Create a local kernel handle configured to route declared library dependencies by authority.
+    Create a local kernel and install the Library's canonical literal definition.
 
-    Routes are inferred from `library.dependencies` plus any authority-qualified runtime bindings
-    on the library instance/class.
+    Dependency authorities are part of the references compiled into that
+    definition; no adapter-local routing table is constructed.
     """
     from . import _local
 
-    routes = _dependency_routes_for_library(library)
-
     _token_parts(token)
 
-    if not callable(getattr(_local.kernel_handle(), "with_library_definition", None)):
-        raise RuntimeError(
-            "tinychain-local backend does not support canonical library definitions; "
-            "expected `KernelHandle.with_library_definition`"
-        )
+    if workspace is None:
+        workspace = data_dir.with_name(f"{data_dir.name}-workspace")
 
-    return _local.kernel_with_library_definition(
-        json.dumps({library.id().path: {}}, separators=(",", ":")),
-        routes=routes,
-        token=token,
-        data_dir=str(data_dir),
-        workspace=str(workspace) if workspace is not None else None,
+    kernel = _local.kernel_handle().local(
+        data_dir=str(data_dir), workspace=str(workspace), token=token
     )
+    bearer = getattr(token, "bearer_token")
+    from .classdef import _CLASS_ROOT_URI, class_definition
+
+    for cls in (getattr(_library_class(library), "classes", ()) or ()):
+        _submit_local_definition(
+            kernel,
+            _CLASS_ROOT_URI.path,
+            class_definition(cls),
+            bearer_token=bearer,
+        )
+    _submit_local_definition(
+        kernel,
+        _LIB_ROOT_URI.path,
+        library_definition(library),
+        bearer_token=bearer,
+    )
+    return kernel

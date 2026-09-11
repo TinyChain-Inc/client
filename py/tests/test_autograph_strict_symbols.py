@@ -63,5 +63,5 @@ def test_autograph_allows_tinychain_expression_graphs() -> None:
             return tc.state.cond(x.eq(1), y, x)
 
     ir = compile_ir(A)
-    route = next(route for route in ir["routes"] if route["path"] == "/route")
-    assert "opdef" in route
+    route = ir[A.class_id().path]["route"]
+    assert tc.URI("state", "scalar", "op", "post").path in route

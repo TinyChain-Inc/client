@@ -100,7 +100,7 @@ def _linear_loss(*, x: object, w: object, y: object) -> object:
 
 
 def _trace_linear() -> TracedLoss:
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         return trace_loss(
             inputs=LINEAR_INPUTS, input_names=LINEAR_INPUT_NAMES, loss=_linear_loss
         )

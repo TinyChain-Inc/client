@@ -126,7 +126,7 @@ def _compile_source(
     parameters: Sequence[str],
 ) -> _SourceArtifacts:
     """Trace, differentiate, and analyze one loss through the real stages."""
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         traced = trace_loss(inputs=inputs, input_names=tuple(input_names), loss=loss)
     derivative = differentiate_loss(traced=traced, parameters=tuple(parameters))
     return _SourceArtifacts(

@@ -1,5 +1,8 @@
 # Node.js client roadmap
 
+> **Non-normative:** this file tracks unimplemented work and cannot override
+> this repository's implemented behavior or local contracts.
+
 ## Scope
 
 This roadmap delivers JavaScript/TypeScript feature parity with the completed

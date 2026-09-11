@@ -1,5 +1,8 @@
 # TinyChain web client roadmap
 
+> **Non-normative:** this file tracks unimplemented work and cannot override
+> this repository's implemented behavior or local contracts.
+
 This roadmap evolves `client/web` from the current Express + React Native Web
 integration into a production UI toolkit for TinyChain applications.
 

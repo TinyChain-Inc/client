@@ -19,6 +19,7 @@ from . import kernel
 from . import auth
 from . import std
 from .cond import cond
+from .context import Context, ContextResult, scoped_context
 from .state import after
 from .host import Host
 
@@ -71,6 +72,9 @@ __all__ = [
     "delete",
     "cond",
     "after",
+    "Context",
+    "ContextResult",
+    "scoped_context",
     "uri",
     "authority",
     "origin",

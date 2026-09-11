@@ -166,6 +166,11 @@ def _segment(label: str, value: str) -> str:
 # components joined by single ``-`` or ``_`` separators (e.g. ``ilc``,
 # ``ilc-client``, ``ordinary_client``, ``v2``, ``library2-client``).
 _RESOURCE_NAME_RE = re.compile(r"[a-z0-9]+(?:[-_][a-z0-9]+)*")
+_SEMVER_RE = re.compile(
+    r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+    r"(?:-(?:[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?"
+    r"(?:\+(?:[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?"
+)
 
 
 def validate_resource_name(value: object) -> str:
@@ -182,6 +187,39 @@ def validate_resource_name(value: object) -> str:
             "(lowercase alphanumerics with single '-' or '_' separators): "
             f"{value!r}"
         )
+    return value
+
+
+def validate_resource_path(value: object) -> tuple[str, ...]:
+    """Validate one or more canonical application resource segments."""
+    if isinstance(value, str):
+        segments = value.split("/")
+    elif isinstance(value, (tuple, list)):
+        segments = list(value)
+    else:
+        raise ValueError("resource_name must be a path string or sequence of segments")
+    if not segments or any(not segment for segment in segments):
+        raise ValueError("resource_name must contain one or more non-empty segments")
+    return tuple(validate_resource_name(segment) for segment in segments)
+
+
+def validate_publisher(value: object) -> str:
+    """Validate the publisher segment with the canonical application ID grammar."""
+    return validate_resource_name(value)
+
+
+def validate_version(value: object) -> str:
+    """Validate a terminal semantic-version application segment."""
+    if not isinstance(value, str) or _SEMVER_RE.fullmatch(value) is None:
+        raise ValueError(f"version must be a semantic version: {value!r}")
+    core_and_pre = value.split("+", 1)[0]
+    if "-" in core_and_pre:
+        prerelease = core_and_pre.split("-", 1)[1]
+        if any(
+            part.isdigit() and len(part) > 1 and part.startswith("0")
+            for part in prerelease.split(".")
+        ):
+            raise ValueError(f"version must be a semantic version: {value!r}")
     return value
 
 

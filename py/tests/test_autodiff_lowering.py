@@ -313,7 +313,7 @@ def _assert_category(category: str, operation) -> None:
 
 def _trace_linear_mse(dtype: str = "f32"):
     trace = TensorGraphBuilder()
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         with trace:
             images = trace.input("images", dtype=dtype, shape=(2, 3))
             weights = trace.input("weights", dtype=dtype, shape=(3, 4))
@@ -1114,7 +1114,7 @@ def _trace_transposed_product():
     """mean(transpose(a) @ (b + b)) — a transpose feeding a matmul whose other
     operand arrives from an independent chain."""
     trace = TensorGraphBuilder()
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         with trace:
             alpha = trace.input("alpha", dtype="f32", shape=(2, 3))
             beta = trace.input("beta", dtype="f32", shape=(2, 4))

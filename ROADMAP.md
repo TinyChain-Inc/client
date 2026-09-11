@@ -1,5 +1,8 @@
 # Client repo roadmap
 
+> **Non-normative:** this file tracks unimplemented work and cannot override
+> this repository's implemented behavior or local contracts.
+
 This directory is intended to become the standalone TinyChain client repository.
 
 Today, parts of the client tree (especially the optional PyO3 backend) assume a

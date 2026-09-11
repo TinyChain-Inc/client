@@ -60,6 +60,7 @@ def _token(value: str) -> tc.auth.SignedBearerToken:
     return tc.auth.SignedBearerToken(
         host="http://127.0.0.1:8702",
         actor_id="test",
+        alg="falcon512",
         public_key_b64="pub",
         bearer_token=value,
     )

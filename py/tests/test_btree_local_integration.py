@@ -76,13 +76,9 @@ def test_btree_library_installs_via_local_python_client(tmp_path: pathlib.Path):
         symbolic_tree = tc.collection.BTree(tc.state.IdRef("tree"))
         result = route(tree=symbolic_tree)
         assert isinstance(result, tc.collection.BTree)
-        assert result.to_json() == {
-            "/lib/example-devco/b_tree_route_harness/0.1.0/slice_tree": {
-                "tree": {
-                    "$tree": []
-                }
-            }
-        }
+        op = tc.state.form_of(result)
+        assert op.path == "/lib/example-devco/b_tree_route_harness/0.1.0/slice_tree"
+        assert tc.state.form_of(op.body["tree"]) == tc.state.IdRef("tree")
 
 
 def test_btree_symbolic_methods_execute_via_local_python_client(tmp_path: pathlib.Path):
@@ -138,7 +134,7 @@ def test_state_collection_btree_constructor_is_symbolic_in_deferred_mode():
             ]
         }
 
-        with tc.state.scoped_context() as cxt:
+        with tc.scoped_context() as cxt:
             contains = btree.contains(["a"])
             contains_json = contains.to_json()
             assert len(contains_json) == 1

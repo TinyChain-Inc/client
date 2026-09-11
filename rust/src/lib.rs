@@ -4,7 +4,10 @@
 
 use pyo3::prelude::*;
 
+pub(crate) use tinychain::*;
+mod runtime;
+
 #[pymodule]
 fn tinychain_local(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
-    tinychain::pyo3_runtime::register_python_api(module)
+    runtime::register_python_api(module)
 }

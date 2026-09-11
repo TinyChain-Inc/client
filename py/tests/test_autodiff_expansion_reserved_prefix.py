@@ -650,7 +650,7 @@ def _expansion_capable_registry() -> OperationHandlerRegistry:
 
 
 def _compile_with(forward_expansions, derivative_expansions):
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         return training_step.compile_training_step(
             e2e.residual_loss,
             inputs=e2e.ONE_PARAMETER_INPUTS,

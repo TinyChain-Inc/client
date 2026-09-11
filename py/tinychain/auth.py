@@ -17,7 +17,7 @@ class SignedBearerToken:
     actor_id: str
     public_key_b64: str
     bearer_token: str
-    alg: str = "falcon512"
+    alg: str
     secret_key_b64: str = ""
 
 

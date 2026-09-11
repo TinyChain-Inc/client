@@ -274,7 +274,7 @@ class TestMultiNodeGraph:
             features = builder.input("features", dtype="f32", shape=[2, 3])
             weights = builder.input("weights", dtype="f32", shape=[3, 1])
             targets = builder.input("targets", dtype="f32", shape=[2, 1])
-            with tc.state.scoped_context():
+            with tc.scoped_context():
                 prediction = features @ weights
                 error = prediction - targets
                 loss = (error * error).mean(axes=[0], keepdims=False)
@@ -300,7 +300,7 @@ class TestMultiNodeGraph:
         assert isinstance(graph.nodes[1].operator, MatmulOperator)
 
     def test_chained_matmul_then_transpose_records_data_flow(self, lhs, rhs):
-        with tc.state.scoped_context():
+        with tc.scoped_context():
             with TensorGraphBuilder() as builder:
                 result = (lhs @ rhs).transpose([1, 0])
 
@@ -341,7 +341,7 @@ def test_add_and_transpose_are_recorded_by_the_active_builder():
     with TensorGraphBuilder() as builder:
         x = builder.input("x", dtype="f32", shape=[2, 3])
         y = builder.input("y", dtype="f32", shape=[2, 3])
-        with tc.state.scoped_context():
+        with tc.scoped_context():
             result = (x + y).transpose([1, 0])
         builder.mark_output(result)
 

@@ -1,4 +1,7 @@
 import tinychain as tc
+import pytest
+
+from tinychain.uri import validate_publisher, validate_resource_path, validate_version
 
 
 def test_uri_library_builder():
@@ -53,3 +56,15 @@ def test_uri_composition_explicit_authority_override_wins():
     overridden = tc.URI(base, "add", scheme="http", host="localhost", port=8702)
     assert overridden.path == "/lib/example-devco/math/1.2.3/add"
     assert str(overridden) == "http://localhost:8702/lib/example-devco/math/1.2.3/add"
+
+
+def test_application_identity_segments_match_the_rust_contract():
+    assert validate_publisher("example-devco") == "example-devco"
+    assert validate_resource_path("models/llama") == ("models", "llama")
+    assert validate_version("1.2.3-alpha.1+build.5") == "1.2.3-alpha.1+build.5"
+    for invalid in (".txfs", "Example", "1.2.3"):
+        with pytest.raises(ValueError):
+            validate_resource_path(invalid)
+    for invalid in ("1.2", "01.2.3", "1.2.3-01"):
+        with pytest.raises(ValueError):
+            validate_version(invalid)

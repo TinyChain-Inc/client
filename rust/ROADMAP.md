@@ -1,5 +1,8 @@
 # Rust client roadmap
 
+> **Non-normative:** this file tracks unimplemented work and cannot override
+> this repository's implemented behavior or local contracts.
+
 ## Active deliverables
 
 1. **Standalone `tinychain-local` build path**

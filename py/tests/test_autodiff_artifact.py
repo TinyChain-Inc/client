@@ -596,16 +596,11 @@ def test_build_derivative_artifact_library_compile_ir_emits_static_get_value_rou
 
     result = compile_ir(artifact_library)
 
-    assert result["schema"] == {
-        "id": "/lib/tester/example_derivative/1.2.3",
-        "version": "1.2.3",
-        "dependencies": ["/lib/source_pub/source_library/0.1.0"],
+    assert result == {
+        "/lib/tester/example_derivative/1.2.3": {
+            "artifact": artifact_payload(expected_manifest, program)
+        }
     }
-    assert len(result["routes"]) == 1
-    route = result["routes"][0]
-    assert route["path"] == "/artifact"
-    assert set(route) == {"path", "value"}
-    assert route["value"] == artifact_payload(expected_manifest, program)
 
 
 def test_build_derivative_artifact_library_library_definition_is_v1_style_payload() -> None:
@@ -639,7 +634,9 @@ def test_build_derivative_artifact_library_omits_dependencies_for_graph_only_art
         program=_program(),
     )
 
-    assert compile_ir(artifact_library)["schema"]["dependencies"] == []
+    definition = compile_ir(artifact_library)
+    assert list(definition) == ["/lib/tester/example_derivative/1.2.3"]
+    assert "schema" not in definition
 
 
 def test_build_derivative_artifact_library_rejects_invalid_public_identity() -> None:

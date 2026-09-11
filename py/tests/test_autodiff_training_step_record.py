@@ -201,7 +201,7 @@ def _compile_one_parameter(**overrides: object) -> object:
     }
     loss = overrides.pop("loss", _residual_loss)
     kwargs.update(overrides)
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         return _compile(loss, **kwargs)
 
 
@@ -216,7 +216,7 @@ def _compile_two_parameters(**overrides: object) -> object:
     }
     loss = overrides.pop("loss", _two_parameter_loss)
     kwargs.update(overrides)
-    with tc.state.scoped_context():
+    with tc.scoped_context():
         return _compile(loss, **kwargs)
 
 
