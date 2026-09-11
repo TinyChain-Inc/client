@@ -6,7 +6,7 @@ from typing import Callable, Iterable
 
 from .state.base import State
 from .state.scalar import IdRef, autobox, form_of
-from .state.scalar.refs import TCRef
+from .state.scalar.refs import TCRef, _validate_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,22 +18,31 @@ class ContextResult:
 class Context:
     """A lexical, single-assignment operation-authoring context."""
 
+    __slots__ = (
+        "_form",
+        "_names",
+        "_bound",
+        "_values",
+        "_by_identity",
+        "_counter",
+        "_parent",
+        "_normalize",
+    )
+
     def __init__(
         self,
         parent: "Context | None" = None,
         normalize: Callable[[object], object] | None = None,
     ) -> None:
-        object.__setattr__(self, "_form", [])
-        object.__setattr__(self, "_names", set())
-        object.__setattr__(self, "_bound", {})
-        object.__setattr__(self, "_values", {})
-        object.__setattr__(self, "_by_identity", {})
-        object.__setattr__(self, "_counter", 0)
-        object.__setattr__(self, "_parent", parent)
-        object.__setattr__(
-            self,
-            "_normalize",
-            normalize if normalize is not None else (parent._normalize if parent else None),
+        self._form: list[tuple[str, State]] = []
+        self._names: set[str] = set()
+        self._bound: dict[str, State] = {}
+        self._values: dict[str, State] = {}
+        self._by_identity: dict[int, tuple[object, str]] = {}
+        self._counter = 0
+        self._parent = parent
+        self._normalize = (
+            normalize if normalize is not None else (parent._normalize if parent else None)
         )
 
     def _contains_visible(self, name: str) -> bool:
@@ -49,7 +58,7 @@ class Context:
     def _reserve(self, names: Iterable[str]) -> None:
         """Reserve invocation bindings supplied outside the operation form."""
         for name in names:
-            IdRef(name)
+            name = _validate_id(name)
             if name == "self":
                 raise ValueError("$self is reserved and cannot be bound")
             if self._contains_visible(name):
@@ -67,9 +76,7 @@ class Context:
         return None
 
     def bind(self, name: str, value: object) -> State:
-        if not isinstance(name, str):
-            raise TypeError("Context binding names must be strings")
-        IdRef(name)
+        name = _validate_id(name)
         if name == "self":
             raise ValueError("$self is reserved and cannot be bound")
         if self._contains_visible(name):
@@ -95,16 +102,18 @@ class Context:
         bound = self._bound_identity(value)
         if bound is not None:
             return bound
-        IdRef(prefix)
+        prefix = _validate_id(prefix)
         while True:
             name = f"{prefix}{self._counter}"
-            object.__setattr__(self, "_counter", self._counter + 1)
+            self._counter += 1
             if not self._contains_visible(name):
                 return self.bind(name, value)
 
     def __setattr__(self, name: str, value: object) -> None:
+        # Public assignment declares a lexical binding; underscore-prefixed
+        # attributes are Context's own implementation state.
         if name.startswith("_"):
-            object.__setattr__(self, name, value)
+            super().__setattr__(name, value)
             return
         self.bind(name, value)
 

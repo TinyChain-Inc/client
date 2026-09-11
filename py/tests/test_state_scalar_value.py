@@ -278,6 +278,20 @@ def test_reduce_infers_item_binding_name_from_reducer_inputs():
     assert params["item_name"] == "x"
 
 
+@pytest.mark.parametrize("item_name", ["", "bad name", "bad/name"])
+def test_reduce_rejects_invalid_explicit_item_name(item_name):
+    op = tc.state.PostOpDef([
+        ("result", tc.state.id("x")),
+    ])
+
+    with tc.scoped_context() as cxt:
+        items = tc.state.autobox([1])
+        cxt.bind("items", items)
+
+        with pytest.raises((TypeError, ValueError)):
+            items.reduce(op=op, value={}, item_name=item_name)
+
+
 def test_reduce_rejects_ambiguous_item_binding():
     op = tc.state.PostOpDef([
         ("xa", tc.state.id("x").add(1)),

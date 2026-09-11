@@ -876,9 +876,11 @@ def _reduce_scalar(
     item_name: str | None,
 ) -> Scalar:
     from .reduce import infer_reduce_item_name
+    from .refs import _validate_id
 
-    item_name = item_name or infer_reduce_item_name(op, value)
-    IdRef(item_name)
+    if item_name is None:
+        item_name = infer_reduce_item_name(op, value)
+    item_name = _validate_id(item_name)
     opref = PostOpRef(
         subject,
         {

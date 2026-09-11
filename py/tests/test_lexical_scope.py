@@ -27,6 +27,19 @@ def test_context_is_single_assignment_and_auto_binding_is_idempotent() -> None:
     assert tc.state.form_of(generated) == tc.state.IdRef("_value0")
 
 
+def test_context_private_state_is_slotted_and_not_a_binding() -> None:
+    cxt = tc.Context()
+
+    assert not hasattr(cxt, "__dict__")
+    assert cxt.form() == ()
+
+    cxt._counter = 7
+    assert cxt.form() == ()
+
+    cxt.total = 1
+    assert [name for name, _value in cxt.form()] == ["total"]
+
+
 def test_context_result_is_an_immutable_snapshot() -> None:
     cxt = tc.Context()
     cxt.bind("first", 1)
