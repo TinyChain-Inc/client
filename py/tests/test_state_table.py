@@ -93,7 +93,7 @@ def test_table_slice_bounds_are_tagged_and_half_open():
 def test_table_mutations_use_native_verb_refs():
     table = tc.collection.Table(tc.state.IdRef("table"))
     assert table.insert([1], ["one"]).to_json() == {
-        "$table/insert": {"key": [1], "values": ["one"]}
+        "$table/insert": [[1], ["one"]]
     }
     assert table.upsert([1], ["one"]).to_json() == {"$table": [[1], ["one"]]}
     assert table.update(name="updated").to_json() == {
