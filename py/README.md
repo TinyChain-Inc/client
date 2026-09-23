@@ -49,6 +49,11 @@ Service execution, standalone named collection hosting, Chain replay/repair,
 and persistent Tensor storage are not implemented. Client code must not emulate
 them with alternate endpoints or registries.
 
+Collection inserts are write operations: `tree.insert(row)` and
+`table.insert(key, values)` emit PUT and return a `Scalar` effect. Table insertion
+rejects an existing key; use `table.upsert(key, values)` to replace one. Sequence
+a write before a read with `tc.after(tree.insert(["key"]), tree.count())`.
+
 ## URI construction
 
 Use `tc.uri` and `tc.URI` rather than string concatenation. Application

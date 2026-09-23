@@ -104,9 +104,10 @@ class Table(Collection):
         return self._post(params={name: _bound(bound) for name, bound in bounds.items()}, rtype=Table)
 
     def insert(self, key: object, values: object = ()) -> Scalar:
-        return self._post(
+        return self._put(
+            autobox(values),
             "insert",
-            {"key": autobox(key), "values": autobox(values)},
+            key=autobox(key),
             rtype=Scalar,
         )
 

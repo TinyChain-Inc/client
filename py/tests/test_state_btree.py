@@ -147,20 +147,18 @@ def test_btree_count_and_is_empty_emit_symbolic_get_oprefs():
     assert isinstance(tc.state.form_of(empty_form), tc.state.GetOpRef)
 
 
-def test_btree_insert_and_delete_emit_symbolic_post_oprefs():
+def test_btree_insert_and_delete_emit_symbolic_write_oprefs():
     btree = tc.collection.BTree(tc.state.IdRef("btree"))
 
     insert = btree.insert(["a"])
-    assert isinstance(insert, tc.state.scalar.Tuple)
+    assert isinstance(insert, tc.state.Scalar)
     assert insert.to_json() == {
-        "$btree/insert": {
-            "row": ["a"],
-        }
+        "$btree/insert": [None, ["a"]]
     }
 
     insert_form = tc.state.form_of(insert)
     assert isinstance(insert_form, tc.state.TCRef)
-    assert isinstance(tc.state.form_of(insert_form), tc.state.PostOpRef)
+    assert isinstance(tc.state.form_of(insert_form), tc.state.PutOpRef)
 
     delete = btree.delete(["a"])
     assert isinstance(delete, tc.state.Scalar)

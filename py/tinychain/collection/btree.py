@@ -61,8 +61,8 @@ class BTree(Collection):
     def is_empty(self, key: object = None) -> Bool:
         return self._get("is_empty", autobox(key), rtype=Bool)
 
-    def insert(self, row: object) -> Tuple:
-        return self._post("insert", {"row": autobox(row)}, rtype=Tuple)
+    def insert(self, row: object) -> Scalar:
+        return self._put(autobox(row), "insert", rtype=Scalar)
 
     def delete(self, row: object) -> Scalar:
         return self._delete(key=autobox(row), rtype=Scalar)
