@@ -98,6 +98,20 @@ def test_library_manifest_links_separately_installed_classes():
     assert next(iter(members["point"])) == Point.class_id().path
     assert next(iter(members["named-point"])) == NamedPoint.class_id().path
 
+    class Collision(Geometry):
+        @tc.get
+        def point(self):
+            return "conflict"
+
+    with pytest.raises(ValueError, match="conflicts with a Class member"):
+        compile_ir(Collision)
+
+    class Duplicate(Geometry):
+        classes = (Point, Point)
+
+    with pytest.raises(ValueError, match="duplicate Library member"):
+        compile_ir(Duplicate)
+
 
 def test_class_definitions_match_language_neutral_golden_fixture():
     fixture = Path(__file__).with_name("fixtures") / "class_definitions.json"

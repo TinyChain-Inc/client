@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pathlib
 
-from .library import Library, _LIB_ROOT_URI, _library_class, _submit_local_definition, library_definition
+from .library import Library, install
 
 
 def _token_parts(token: object) -> tuple[str, str, str]:
@@ -25,7 +25,7 @@ def with_library(
     token: object,
 ) -> "object":
     """
-    Create a local kernel and install the Library's canonical literal definition.
+    Create a local kernel and install a Library or Service definition.
 
     Dependency authorities are part of the references compiled into that
     definition; no adapter-local routing table is constructed.
@@ -40,20 +40,5 @@ def with_library(
     kernel = _local.kernel_handle().local(
         data_dir=str(data_dir), workspace=str(workspace), token=token
     )
-    bearer = getattr(token, "bearer_token")
-    from .classdef import _CLASS_ROOT_URI, class_definition
-
-    for cls in (getattr(_library_class(library), "classes", ()) or ()):
-        _submit_local_definition(
-            kernel,
-            _CLASS_ROOT_URI.path,
-            class_definition(cls),
-            bearer_token=bearer,
-        )
-    _submit_local_definition(
-        kernel,
-        _LIB_ROOT_URI.path,
-        library_definition(library),
-        bearer_token=bearer,
-    )
+    install(library, kernel=kernel, token=token)
     return kernel

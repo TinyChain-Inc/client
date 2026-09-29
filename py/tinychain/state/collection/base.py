@@ -7,6 +7,19 @@ from ...uri import URI
 class Collection(State):
     """A native TinyChain collection literal, reference, or lazy view."""
 
+    def _declaration(self):
+        from ..scalar import form_of
+        from ..scalar.refs import GetOpRef
+
+        form = form_of(self)
+        path = str(URI(type(self)))
+        if not isinstance(form, dict) or set(form) != {path}:
+            raise TypeError("a persistent collection declaration requires a native schema")
+        schema, rows = type(self)._normalize_payload(form[path])
+        if rows:
+            raise ValueError("a persistent collection declaration must have no initial rows")
+        return GetOpRef(path, schema)
+
     @classmethod
     def _from_payload(cls, payload: object) -> "Collection":
         return cls({str(URI(cls)): cls._normalize_payload(payload)})

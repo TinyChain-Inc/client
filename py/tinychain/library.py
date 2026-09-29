@@ -106,48 +106,6 @@ def self_subject(*path: str) -> str:
     return "$self/" + "/".join(path)
 
 
-def _compile_self_instance(library: type["Library"]) -> "Library":
-    return library()
-
-
-def _route_path(subject: object, route_name: str) -> str:
-    # Identity is always resolved from the class, never from (possibly mutated)
-    # instance attributes.
-    cls = subject if isinstance(subject, type) else type(subject)
-    publisher, resource_name, version = _class_identity(cls)
-    route_uri = URI(
-        "/" + "/".join(
-            [
-                "lib",
-                validate_publisher(publisher),
-                *resource_name.split("/"),
-                validate_version(version),
-                _segment("path", route_name),
-            ]
-        )
-    )
-    if not isinstance(route_uri, URI):
-        raise TypeError("expected URI route path")
-
-    authority = getattr(subject, "authority", None)
-    authority_uri: URI | None = None
-    if isinstance(authority, URI):
-        authority_uri = authority
-    elif isinstance(authority, str):
-        authority_uri = URI.parse(authority)
-
-    if authority_uri is not None and authority_uri.host is not None:
-        route_uri = URI(
-            path=route_uri.path,
-            scheme=authority_uri.scheme,
-            host=authority_uri.host,
-            port=authority_uri.port,
-        )
-        return route_uri.absolute()
-
-    return route_uri.path
-
-
 def _contains_symbolic(value: object) -> bool:
     if isinstance(value, (Scalar, Collection)):
         return isinstance(form_of(value), TCRef)
@@ -404,7 +362,7 @@ class Route:
 
     def _opref(self, instance: object) -> OpRef[Any]:
         route_name = self.name or self.form.__name__
-        path = _route_path(instance, route_name)
+        path = instance._route_subject(route_name)
         method = self.method.upper()
         if method == "GET":
             return runtime_opref.get(path)
@@ -427,7 +385,8 @@ class Route:
         _validate_library_class(library_cls)
         # Identity is class-authoritative: route compilation always uses a fresh
         # class-derived instance, so instance-level mutation cannot affect it.
-        return _compile_opdef_route(self, _compile_self_instance(library_cls), params)
+        subject = library_cls._compile_subject(None)
+        return _compile_opdef_route(self, subject, params)
 
     def __get__(self, instance: object, owner: type | None = None):
         if instance is None:
@@ -590,12 +549,12 @@ def _finish_opdef(
     return opdef
 
 
-def _class_dependencies(cls: type) -> tuple[URI, ...]:
+def _class_dependencies(cls: type, attributes) -> tuple[URI, ...]:
     deps: list[URI] = []
     class_deps = getattr(cls, "dependencies", ())
     if class_deps:
         deps.extend(class_deps)
-    for value in vars(cls).values():
+    for value in attributes.values():
         if hasattr(value, "id") and callable(getattr(value, "id")):
             try:
                 dep = value.id()
@@ -616,6 +575,7 @@ class Library:
     publisher: str
     resource_name: str
     version: str
+    _root = _LIB_ROOT_URI
 
     # Canonical identity metadata is class-authoritative and read-only on
     # instances: assigning it on an instance would create a misleading shadow
@@ -658,8 +618,53 @@ class Library:
         # instance: ``publisher``/``resource_name``/``version`` remain
         # class-authoritative and are always resolved via ``_class_identity``.
         _class_identity(cls)
-        self.dependencies = _class_dependencies(cls)
-        self.authority = authority or getattr(cls, "authority", None)
+        self._initialize(None, authority)
+
+    def _initialize(self, members, authority=None):
+        # Construction and compilation entrypoints validate identity first.
+        self.dependencies = self._dependencies(members)
+        self.authority = authority or getattr(type(self), "authority", None)
+
+    @classmethod
+    def _dependencies(cls, members):
+        return _class_dependencies(cls, vars(cls))
+
+    @classmethod
+    def _compile_subject(cls, original, members=None):
+        return cls() if original is None else original
+
+    def _route_subject(self, name):
+        route = type(self).class_id().child(_segment("path", name))
+        authority = self.authority
+        if isinstance(authority, str):
+            authority = URI.parse(authority)
+        if isinstance(authority, URI) and authority.host is not None:
+            route = URI(path=route.path, scheme=authority.scheme,
+                        host=authority.host, port=authority.port)
+        return route.absolute()
+
+    @staticmethod
+    def _encode_member(value):
+        return value.to_json() if isinstance(value, OpDef) else value
+
+    @classmethod
+    def _members(cls):
+        from .classdef import Class
+
+        members = {}
+        for declared in getattr(cls, "classes", ()) or ():
+            if not isinstance(declared, type) or not issubclass(declared, Class):
+                raise TypeError("Library classes must contain tc.Class subclasses")
+            name = declared.class_id().path.strip("/").split("/")[-2]
+            if name in members:
+                raise ValueError(f"duplicate Library member {name!r}")
+            members[name] = {str(declared.class_id()): []}
+        for name, attr in vars(cls).items():
+            if isinstance(attr, Route):
+                if name in members:
+                    raise ValueError(f"Library route {name!r} conflicts with a Class member")
+                members[name] = attr
+        return members
 
     def id(self) -> URI:
         return type(self).class_id()
@@ -678,7 +683,7 @@ class Library:
     @classmethod
     def class_id(cls) -> URI:
         publisher, resource_name, version = _class_identity(cls)
-        return URI("/" + "/".join(["lib", publisher, *resource_name.split("/"), version]))
+        return cls._root.child(publisher, *resource_name.split("/"), version)
 
 def _to_opref(value: object) -> Optional[OpRef[Any]]:
     if hasattr(value, "op"):
@@ -693,36 +698,18 @@ def compile_ir(library: Library | type[Library]) -> dict:
 
     library_cls = _library_class(library)
     _validate_library_class(library_cls)
-    from .classdef import Class
-
-    declared_classes = getattr(library_cls, "classes", ()) or ()
+    declarations = library_cls._members()
+    subject = library_cls._compile_subject(library, declarations)
     members: dict[str, object] = {}
-    for declared in declared_classes:
-        if not isinstance(declared, type) or not issubclass(declared, Class):
-            raise TypeError("Library classes must contain tc.Class subclasses")
-        name = declared.class_id().path.strip("/").split("/")[-2]
-        if name in members:
-            raise ValueError(f"duplicate Library member {name!r}")
-        members[name] = {str(declared.class_id()): []}
-
-    for name, attr in list(library_cls.__dict__.items()):
-        if not isinstance(attr, Route):
-            continue
-        if name in members:
-            raise ValueError(f"Library route {name!r} conflicts with a Class member")
-
-        result = _compile_route(attr, library)
-        if isinstance(result, OpDef):
-            members[name] = result.to_json()
-            continue
-
-        members[name] = result
+    for name, attr in declarations.items():
+        result = _compile_route(attr, subject) if isinstance(attr, Route) else attr
+        members[name] = library_cls._encode_member(result)
 
     return {str(library_cls.class_id()): members}
 
 
 def _compile_route(route: Route, library: Library | type[Library]) -> object:
-    compile_subject = library if isinstance(library, Library) else _compile_self_instance(library)
+    compile_subject = library if isinstance(library, Library) else library._compile_subject(None)
     sig = inspect.signature(route.form)
     params = list(sig.parameters.values())
     if not params or params[0].name != "self":
@@ -891,6 +878,8 @@ def install(
     # the class, so instance-level mutation cannot change what is installed.
 
     if wasm is not None:
+        if library_cls._root != _LIB_ROOT_URI:
+            raise TypeError("WASM installation is supported only for Library")
         if remote is not None:
             from .host import Host
 
@@ -924,7 +913,7 @@ def install(
     if remote is not None:
         for class_body in classes:
             _submit_remote_definition(remote, _CLASS_ROOT_URI.path, class_body, token=token)
-        return _submit_remote_definition(remote, _LIB_ROOT_URI.path, definition, token=token)
+        return _submit_remote_definition(remote, library_cls._root.path, definition, token=token)
 
     kernel = _kernel_for_library_install(kernel=kernel, data_dir=data_dir, token=token)
     bearer_token = _bearer_token(token)
@@ -937,7 +926,7 @@ def install(
             class_body,
             bearer_token=bearer_token,
         )
-    return _submit_local_definition(kernel, _LIB_ROOT_URI.path, definition, bearer_token=bearer_token)
+    return _submit_local_definition(kernel, library_cls._root.path, definition, bearer_token=bearer_token)
 
 
 def library_definition(library: Library | type[Library]) -> dict:
