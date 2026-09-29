@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from .autodiff.callsite import grad
 from .library import Library, delete, get, install, post, put
+from .service import Service
+from . import chain, service
 from .classdef import Class, ClassError, InvalidClassParent, MissingClassMember, UnsupportedClassOverride, class_definition, validate_class_definition
 from .codec import decode_response_body
 from .executor import Executor, backend
@@ -25,6 +27,9 @@ from .host import Host
 
 __all__ = [
     "Library",
+    "Service",
+    "service",
+    "chain",
     "Class",
     "ClassError",
     "InvalidClassParent",
@@ -87,12 +92,20 @@ globals().pop("wasm", None)
 
 
 def execute(op: "OpRef | Ref") -> object:
+    from .state import OpRef as NativeOpRef
+
     if hasattr(op, "op"):
         op = op.op
     elif hasattr(op, "_form"):
         form = getattr(op, "_form")
-        if isinstance(form, (OpRef, Ref)):
+        if isinstance(form, (OpRef, Ref, NativeOpRef)):
             op = form
+    if isinstance(op, NativeOpRef):
+        required = set()
+        op.requires(required)
+        if required:
+            raise ValueError("cannot execute an unbound symbolic operation")
+        op = getattr(opref, op.method.lower())(op.subject, body=op._argument_form())
     if not isinstance(op, (OpRef, Ref)):
         raise TypeError(f"expected OpRef or Ref, got {type(op).__name__}")
 

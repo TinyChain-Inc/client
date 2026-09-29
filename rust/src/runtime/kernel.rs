@@ -279,11 +279,15 @@ impl KernelHandle {
                             .wait(guard.admit_application_memory(bytes.len()))
                             .map_err(super::tc_error)?;
                         let input = futures::stream::iter([Ok::<_, std::io::Error>(bytes.into())]);
-                        let txn = guard.txn().clone();
-                        let state = self
-                            .wait(async move { destream_json::try_decode(txn, input).await })
+                        // Installation carries a scalar definition, not a live
+                        // State: collection/Chain declarations must remain refs.
+                        let (key, definition): (tc_value::Value, tc_ir::Scalar) = self
+                            .wait(async move { destream_json::try_decode((), input).await })
                             .map_err(|error| PyValueError::new_err(error.to_string()))?;
-                        (Some(state), Some(permit))
+                        (
+                            Some(crate::State::Tuple(vec![key.into(), definition.into()])),
+                            Some(permit),
+                        )
                     }
                 }
                 _ => (

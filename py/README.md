@@ -42,12 +42,13 @@ The implemented top-level namespaces are:
 - `state` for native values, references, and collection types;
 - `class` for immutable Class definitions;
 - `lib` for JSON and WASM Libraries;
-- `service` for persisted Service definitions and discovery;
+- `service` for executable Services and Sync-backed BTree/Table members;
 - `host` for host capabilities and health.
 
-Service execution, standalone named collection hosting, Chain replay/repair,
-and persistent Tensor storage are not implemented. Client code must not emulate
-them with alternate endpoints or registries.
+See the [Service example](examples/service.md) and
+[Service behavior](SERVICE_PARITY.md) for authoring and local/HTTP persistence.
+Standalone named collection hosting, damaged-storage repair, and persistent
+Tensor storage are not implemented.
 
 Collection inserts are write operations: `tree.insert(row)` and
 `table.insert(key, values)` emit PUT and return a `Scalar` effect. Table insertion
