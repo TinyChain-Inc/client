@@ -15,12 +15,43 @@ from .scalar import (
 )
 from .scalar.opdef import DeleteOpDef, GetOpDef, OpDef, PostOpDef, PutOpDef
 from .scalar.ops import Delete, Get, Op, Post, Put
-from .scalar.refs import After, Cond, DeleteOpRef, ForEach, GetOpRef, IdRef, OpRef, PostOpRef, PutOpRef, TCRef, While
+from .scalar.refs import (
+    After,
+    Cond,
+    DeleteOpRef,
+    ForEach,
+    GetOpRef,
+    IdRef,
+    OpRef,
+    PostOpRef,
+    PutOpRef,
+    TCRef,
+    While,
+)
 from ._ops import subject_of
 from . import collection
 from .collection import Collection
 from ..collection.tensor import Tensor as _Tensor
-from .value import Bool, C64, C128, Complex, F32, F64, Float, I64, Integer, Link, Map, Null, Number, String, Tuple, U64, Value
+from .value import (
+    Bool,
+    Bytes,
+    C64,
+    C128,
+    Complex,
+    F32,
+    F64,
+    Float,
+    I64,
+    Integer,
+    Link,
+    Map,
+    Null,
+    Number,
+    String,
+    Tuple,
+    U64,
+    Value,
+)
 from .base import State
 
 Numeric: TypeAlias = Scalar | _Tensor
@@ -54,6 +85,7 @@ __all__ = [
     "Null",
     "Link",
     "Bool",
+    "Bytes",
     "Number",
     "Integer",
     "I64",

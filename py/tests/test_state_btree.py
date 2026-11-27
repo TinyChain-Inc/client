@@ -1,5 +1,8 @@
-import tinychain as tc
+from contextlib import nullcontext
+
 import pytest
+
+import tinychain as tc
 
 
 def test_btree_is_collection_not_scalar():
@@ -13,7 +16,7 @@ def test_btree_does_not_encode_a_runtime_get_as_canonical_state():
     runtime_get = tc.opref.get("$btree/count").with_body(None)
     btree = tc.collection.BTree(runtime_get)
 
-    with pytest.raises(TypeError, match="cannot encode form"):
+    with pytest.raises(ValueError, match="cannot encode form"):
         btree.to_json()
 
 
@@ -21,7 +24,7 @@ def test_btree_does_not_encode_a_runtime_delete_as_canonical_state():
     runtime_delete = tc.opref.delete("$btree", body=["a"])
     btree = tc.collection.BTree(runtime_delete)
 
-    with pytest.raises(TypeError, match="cannot encode form"):
+    with pytest.raises(ValueError, match="cannot encode form"):
         btree.to_json()
 
 
@@ -95,18 +98,34 @@ def test_btree_collection_payload_round_trip():
     assert btree.to_json() == payload
 
 
-def test_btree_collection_module_exports_btree():
-    btree = tc.collection.BTree(tc.state.IdRef("btree"))
+@pytest.mark.parametrize("deferred", [False, True])
+def test_btree_literal_and_context_staging(deferred):
+    with tc.backend(mode="deferred") if deferred else nullcontext():
+        btree = tc.collection.BTree([
+            ("key", "/state/scalar/value/string"),
+        ])
+        assert btree.to_json() == {
+            "/state/collection/btree": [
+                [["key", "/state/scalar/value/string"]],
+                [],
+            ]
+        }
 
-    sliced = btree.slice("a", "d")
-    assert isinstance(sliced, tc.collection.BTree)
-    assert sliced.to_json() == {
-        "$btree/slice": [{
-            "end": "d",
-            "reverse": False,
-            "start": "a",
-        }]
-    }
+        with tc.scoped_context() as ctx:
+            contains_json = btree.contains(["a"]).to_json()
+            assert len(contains_json) == 1
+            (subject, key_payload), = contains_json.items()
+            assert subject.endswith("/contains")
+            assert subject.startswith("$_")
+            assert key_payload == [["a"]]
+            assert len(list(ctx.form())) == 1
+
+
+def test_btree_rejects_invalid_schema_column_shape():
+    with pytest.raises(TypeError, match="must have 2 or 3 elements"):
+        tc.collection.BTree([
+            ("key",),
+        ])
 
 
 def test_btree_contains_emits_symbolic_get_opref():

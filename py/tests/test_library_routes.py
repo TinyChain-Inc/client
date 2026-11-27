@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 
 import pytest
+
 import tinychain as tc
 from tinychain.autodiff import AutodiffError
 from tinychain.library import compile_ir, library_definition
@@ -317,16 +318,8 @@ def test_grad_cannot_be_used_as_route_metadata_decorator():
 
 
 def test_grad_tensor_target_fails_until_route_tracing_is_implemented():
-    class NativeTensor:
-        def __init__(self, shape):
-            self.shape = shape
-            self.dtype = "f32"
-            self.values = []
-
-        def transpose(self, permutation):
-            return NativeTensor([self.shape[i] for i in permutation])
-
-    target = tc.Tensor(native=NativeTensor([2, 3])).transpose([1, 0])
+    with tc.scoped_context():
+        target = tc.Tensor.dense("f32", [2, 3], list(range(6))).transpose([1, 0])
 
     with pytest.raises(AutodiffError) as exc:
         tc.grad(target, wrt=("v0",))

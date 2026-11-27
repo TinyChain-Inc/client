@@ -7,6 +7,10 @@ transaction lifecycle, storage, replication, or application compatibility.
 - Keep one canonical in-memory form per symbolic `State`, `Scalar`, `TCRef`, and
   operation wrapper. Use `form_of(...)` for structural inspection; never use a
   JSON round trip for equality, cloning, validation, or dispatch.
+- Delegate scalar wire interpretation to the required native core. Python keeps
+  authoring wrappers and lowers them at boundaries; do not duplicate type-tag,
+  literal-Link inference, or invocation grammar in Python. Local execution passes
+  native scalar handles and delegates collection leaves with the active request.
 - Build references through shared typed builders and preserve concrete
   GET/PUT/POST/DELETE forms. Do not add adapter-local method enums or handwritten
   URI concatenation.
@@ -36,9 +40,13 @@ transaction lifecycle, storage, replication, or application compatibility.
 - Autograph and autodiff compile to shared IR. Unsupported syntax or operations
   fail explicitly; experimental work does not alter route metadata or host
   protocols.
-- Persistent collection hosting is not a client concern. Service and Chain will
-  own naming and durable history; do not add client-side registries or sharding
-  policy as a substitute.
+- Persistent collection hosting is not a client concern. Service and Chain own
+  naming and durable history; do not add client-side registries or sharding
+  policy as a substitute. Python wrappers construct requests, not mutation
+  authority. A single selection-write convenience targets the original owner
+  with explicit bounds; further selection or transformation targets a read-only
+  result and is rejected by the runtime. Never restore owner forwarding through
+  another view.
 - Preserve request deadlines and downstream backpressure. Retries, prefetch,
   buffering, and concurrency are finite and explicit.
 
@@ -49,4 +57,6 @@ not skip by falling back to another transport.
 Keep [README.md](README.md) user-focused,
 [DESIGN_AUTOGRAPH.md](DESIGN_AUTOGRAPH.md) limited to implemented lowering, and
 [CLASS_PARITY.md](CLASS_PARITY.md) limited to the stable Class authoring
-contract. Future work belongs in a roadmap.
+contract. [SERVICE_PARITY.md](SERVICE_PARITY.md) owns Service declarations,
+selection-write behavior, supported members, and their validation fixtures.
+Future work belongs in a roadmap.

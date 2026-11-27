@@ -1,18 +1,9 @@
 from __future__ import annotations
 
-import json
-
 import pytest
+
 import tinychain as tc
 import tinychain.executor as tc_executor
-
-
-class _Value:
-    def __init__(self, payload: object):
-        self._payload = payload
-
-    def to_json(self) -> str:
-        return json.dumps(self._payload)
 
 
 class _Body:
@@ -20,7 +11,7 @@ class _Body:
         self._payload = payload
 
     def value(self):
-        return _Value(self._payload)
+        return self._payload
 
 
 class _Response:

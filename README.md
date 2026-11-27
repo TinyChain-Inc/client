@@ -10,9 +10,9 @@ TinyChain runtime workspace as the `client/` Git submodule.
 - `py/` – Python client (`tinychain`) plus tests and tooling.
 - `js/` – Node.js client package (`@tinychain/js`) plus documentation.
 - `web/` – web integration layer (Express + SSR/hydration examples).
-- `rust/` – Rust-side client tooling, including the PyO3 local backend (`tinychain-local`).
+- `rust/` – required Python native scalar core and optional embedded host (`tinychain-local`).
 
-See [`CONTRIBUTING.md`](/home/haydn/Documents/tcv2/client/CONTRIBUTING.md) for
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for
 client contribution guidelines and legal terms.
 
 ## Version alignment

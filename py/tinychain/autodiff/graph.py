@@ -216,9 +216,13 @@ class TensorGraphBuilder:
 
     def _describe_value_role(self, value: object) -> str:
         """Best-effort human-readable role for an untraced *value*, for error messages."""
-        subject_root = getattr(value, "_subject_root", None)
-        if isinstance(subject_root, str) and subject_root.startswith("$"):
-            return f" (named {subject_root[1:]!r})"
+        from ..state.scalar import IdRef, TCRef, form_of
+
+        form = form_of(value)
+        if isinstance(form, TCRef):
+            form = form_of(form)
+        if isinstance(form, IdRef):
+            return f" (named {form.key()[1:]!r})"
         return ""
 
     def value_id(self, value: object) -> str:
@@ -299,6 +303,7 @@ class TensorGraphBuilder:
             raise ValueError(f"TensorGraphBuilder.input(...) duplicate input name {name!r}")
         check_differentiable_dtype(dtype)
         normalized_shape = self._normalize_input_shape(shape)
+        self._lexical_context._reserve([name])
 
         # Importing state/tensor at module scope would initialize Tensor, whose
         # recorder imports this module for concrete operator identities.
@@ -504,6 +509,10 @@ class TensorGraphBuilder:
             raise RuntimeError("TensorGraphBuilder instances are single-trace; this builder already completed a trace")
         if _active_builder.get() is not None:
             raise RuntimeError("Nested TensorGraphBuilder contexts are not supported")
+        from ..context import _scoped_context
+
+        self._lexical_scope = _scoped_context()
+        self._lexical_context = self._lexical_scope.__enter__()
         self._token = _active_builder.set(self)
         return self
 
@@ -511,6 +520,7 @@ class TensorGraphBuilder:
         if self._token is not None:
             _active_builder.reset(self._token)
             self._token = None
+            self._lexical_scope.__exit__(*args)
         # Retention and metadata persist after exit; only discarding the builder
         # instance releases them.
         self._completed = True

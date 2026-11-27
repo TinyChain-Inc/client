@@ -1,6 +1,6 @@
-import tinychain as tc
 import pytest
 
+import tinychain as tc
 from tinychain.uri import validate_publisher, validate_resource_path, validate_version
 
 
@@ -68,3 +68,16 @@ def test_application_identity_segments_match_the_rust_contract():
     for invalid in ("1.2", "01.2.3", "1.2.3-01"):
         with pytest.raises(ValueError):
             validate_version(invalid)
+
+
+def test_literal_segment_escaping_round_trips_once():
+    for name in ("λ", "名字", "literal%name", "%2f", "release+build"):
+        value = tc.URI("state", name)
+        assert tc.URI.parse(str(value)) == value
+        assert tc.URI(value, name).path.startswith(value.path + "/")
+        if "%" in name:
+            assert "%25" in value.path
+    with pytest.raises(ValueError):
+        tc.URI.parse("/state/%2f")
+    with pytest.raises(ValueError):
+        tc.URI.parse("/state/%2e%2e")

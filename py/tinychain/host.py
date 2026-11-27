@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import Iterable, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
@@ -23,6 +22,7 @@ class Host:
         address: str,
         *,
         token: object | None = None,
+        max_materialization_bytes: int = 64 * 1024 * 1024,
     ):
         if "://" not in address:
             raise ValueError(f"host address missing protocol: {address}")
@@ -32,6 +32,9 @@ class Host:
                 f"Host address should not include a path: {self.__uri__.path}"
             )
         self._bearer_token = _bearer_token(token)
+        from . import _native
+
+        self._codec = _native.Codec(max_bytes=max_materialization_bytes)
 
     def __repr__(self) -> str:
         return f"host at {self.__uri__}"
@@ -40,6 +43,8 @@ class Host:
         if isinstance(path, URI):
             target = path
         else:
+            if isinstance(path, str):
+                _reject_transaction_control(path)
             target = uri(path)
             if not isinstance(target, URI):
                 raise TypeError("expected a URI path for HTTP host link")
@@ -70,7 +75,7 @@ class Host:
         _reject_transaction_control(target)
         if not query:
             return target
-        encoded = urlencode(_url_query(query), doseq=True)
+        encoded = urlencode(_url_query(query, self._codec), doseq=True)
         return f"{target}?{encoded}"
 
     def request(
@@ -83,7 +88,7 @@ class Host:
     ) -> object:
         target = self.link(path)
         _reject_transaction_control(target.absolute())
-        payload = None if body is None else _encode_body(body)
+        payload = None if body is None else _encode_body(body, self._codec)
         merged_headers = _merge_headers(headers, self._bearer_token, payload is not None)
         response = requests.request(
             method.upper(),
@@ -91,7 +96,7 @@ class Host:
             data=payload,
             headers=merged_headers,
         )
-        return _handle_response(response)
+        return _handle_response(response, self._codec)
 
 
 def _reject_transaction_query(query: dict[str, object]) -> None:
@@ -113,20 +118,19 @@ def _encode_payload(value: object) -> object:
     return _executor_encode(value)
 
 
-def _encode_body(value: object) -> bytes:
+def _encode_body(value: object, codec=None) -> bytes:
     if isinstance(value, (bytes, bytearray)):
         return bytes(value)
-    return json.dumps(_encode_payload(value), separators=(",", ":")).encode("utf-8")
+    from . import _native
+
+    return _native.encode(value, codec)
 
 
-def _url_query(query: dict[str, object]) -> dict[str, object]:
+def _url_query(query: dict[str, object], codec=None) -> dict[str, object]:
     if len(query) == 1 and "key" in query:
         return {"key": _url_value(query["key"])}
     return {
-        "key": json.dumps(
-            {key: _encode_payload(value) for key, value in query.items()},
-            separators=(",", ":"),
-        )
+        "key": _encode_body(query, codec).decode("utf-8")
     }
 
 
@@ -155,7 +159,7 @@ def _merge_headers(
     return merged
 
 
-def _handle_response(response: requests.Response) -> object:
+def _handle_response(response: requests.Response, codec=None) -> object:
     status = response.status_code
     if 200 <= status < 300 and (
         not getattr(response, "content", b"") or not response.text.strip()
@@ -166,5 +170,5 @@ def _handle_response(response: requests.Response) -> object:
     except ValueError as exc:
         raise RuntimeError(f"invalid JSON response: {response.text}") from exc
     if status == 200:
-        return decode_payload(payload)
+        return decode_payload(payload, codec)
     raise RuntimeError(f"unexpected HTTP {status}: {payload}")

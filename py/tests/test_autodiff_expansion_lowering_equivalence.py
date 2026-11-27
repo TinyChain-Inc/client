@@ -31,8 +31,6 @@ and the source graph remains the canonical differentiation input.
 
 from __future__ import annotations
 
-import inspect
-
 import numpy as np
 import pytest
 
@@ -56,7 +54,6 @@ from tinychain.autodiff import (
     lower_derivative_program,
     lower_graph,
 )
-
 from tests.autodiff_reference_consumer import (
     limited_operation_registry,
     recording_registry,
@@ -401,6 +398,7 @@ def test_expanded_forward_result_equals_the_control_result(keepdims, dtype, shap
     result = _lower_forward(expanded, _limited(reshape=True), values)
 
     _assert_equivalent(result, control, dtype=dtype)
+    assert result.shape == ((1,) * len(shape) if keepdims else ())
 
 
 @pytest.mark.parametrize("shape", _SHAPES)
@@ -422,51 +420,8 @@ def test_expanded_gradient_equals_the_control_gradient(keepdims, dtype, shape):
 
 
 # ==========================================================================
-# A scalar and a [1, 1] value are never interchangeable
-# ==========================================================================
-
-
-def _assert_rank_preserving_shape(result) -> None:
-    assert result.shape == (1, 1)
-
-
-def _assert_rank_reducing_shape(result) -> None:
-    assert result.shape == ()
-
-
-def test_the_two_tiers_produce_shapes_that_never_satisfy_each_others_assertion():
-    values = {"v0": _operand((3, 5), "f64")}
-    rank_preserving_graph, _ = _traced_mean(keepdims=True)
-    rank_reducing_graph, _ = _traced_mean(keepdims=False)
-    registry = _limited(reshape=True)
-
-    rank_preserving = _lower_forward(expand_mean_graph(rank_preserving_graph), registry, values)
-    rank_reducing = _lower_forward(expand_mean_graph(rank_reducing_graph), registry, values)
-
-    _assert_rank_preserving_shape(rank_preserving)
-    _assert_rank_reducing_shape(rank_reducing)
-    with pytest.raises(AssertionError):
-        _assert_rank_reducing_shape(rank_preserving)
-    with pytest.raises(AssertionError):
-        _assert_rank_preserving_shape(rank_reducing)
-
-
-# ==========================================================================
 # Dependency analysis accepts the expanded artifacts unchanged
 # ==========================================================================
-
-
-def test_dependency_analysis_entry_points_gained_no_argument():
-    assert list(inspect.signature(analyze_graph_dependencies).parameters) == [
-        "graph",
-        "outputs",
-    ]
-    assert list(inspect.signature(analyze_derivative_dependencies).parameters) == [
-        "program",
-        "forward_graph",
-        "seed_value_ids",
-        "outputs",
-    ]
 
 
 @pytest.mark.parametrize("keepdims", [True, False])

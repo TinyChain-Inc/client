@@ -71,10 +71,7 @@ def _actor(rjwt, actor_id: str, secret_key_b64: str | None, alg: str):
         key = base64.b64decode(secret_key_b64)
         return rjwt.Actor.with_keypair(actor_id, key, alg)
 
-    if alg == "falcon512" and hasattr(rjwt.Actor, "new_falcon512"):
-        return rjwt.Actor.new_falcon512(actor_id)
-
-    return rjwt.Actor(actor_id)
+    return rjwt.Actor(actor_id, alg=alg)
 
 
 def mint_rjwt_token(

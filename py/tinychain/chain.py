@@ -4,6 +4,7 @@ from .collection.btree import BTree
 from .collection.table import Table
 from .state import GetOpRef
 from .state.base import State
+from .state.value import Link
 from .uri import URI
 
 
@@ -22,5 +23,5 @@ class Sync:
         return GetOpRef(str(self.__uri__), self.collection._declaration())
 
     def _bind(self, path):
-        form = {path: []} if path.startswith("$") else GetOpRef(path, None)
+        form = {path: []} if path.startswith("$") else Link(path)
         return type(self.collection)(form)

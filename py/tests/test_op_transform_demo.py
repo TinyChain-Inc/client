@@ -4,7 +4,6 @@ import pathlib
 
 import tinychain as tc
 import tinychain.testing as tc_testing
-
 from .support import install_token, require_cargo
 
 
@@ -101,32 +100,34 @@ def test_op_transform_autodiff_demo(tmp_path: pathlib.Path) -> None:
         data_dir=tmp_path,
         token=token,
     )
+    try:
+        for library in (A, C):
+            resp = tc.install(
+                library,
+                kernel=kernel,
+                data_dir=tmp_path,
+                token=token,
+            )
+            assert resp.status == 204
 
-    for library in (A, C):
-        resp = tc.install(
-            library,
-            kernel=kernel,
-            data_dir=tmp_path,
-            token=token,
-        )
-        assert resp.status == 204
+        with tc.backend(kernel):
+            double_nodes = tc_testing.run_with_timeout(20, lambda: c.reflected_form_size(op=double_op))
+            fanout_nodes = tc_testing.run_with_timeout(20, lambda: c.reflected_form_size(op=fanout_quad_op))
+            assert fanout_nodes > double_nodes
 
-    with tc.backend(kernel):
-        double_nodes = tc_testing.run_with_timeout(20, lambda: c.reflected_form_size(op=double_op))
-        fanout_nodes = tc_testing.run_with_timeout(20, lambda: c.reflected_form_size(op=fanout_quad_op))
-        assert fanout_nodes > double_nodes
+            primal = tc_testing.run_with_timeout(20, lambda: a.double(x=7))
+            assert primal == 14
 
-        primal = tc_testing.run_with_timeout(20, lambda: a.double(x=7))
-        assert primal == 14
+            grad = tc_testing.run_with_timeout(20, lambda: c.autodiff_linear_demo(op=double_op, x=7))
+            assert grad == 2
 
-        grad = tc_testing.run_with_timeout(20, lambda: c.autodiff_linear_demo(op=double_op, x=7))
-        assert grad == 2
+            chain_primal = tc_testing.run_with_timeout(20, lambda: a.triple_chain(x=7))
+            assert chain_primal == 21
 
-        chain_primal = tc_testing.run_with_timeout(20, lambda: a.triple_chain(x=7))
-        assert chain_primal == 21
+            chain_grad = tc_testing.run_with_timeout(20, lambda: c.autodiff_chain_demo(op=triple_chain_op, x=7))
+            assert chain_grad == 3
 
-        chain_grad = tc_testing.run_with_timeout(20, lambda: c.autodiff_chain_demo(op=triple_chain_op, x=7))
-        assert chain_grad == 3
-
-        fanout_grad = tc_testing.run_with_timeout(20, lambda: c.autodiff_fanout_demo(op=fanout_quad_op, x=7))
-        assert fanout_grad == 28
+            fanout_grad = tc_testing.run_with_timeout(20, lambda: c.autodiff_fanout_demo(op=fanout_quad_op, x=7))
+            assert fanout_grad == 28
+    finally:
+        kernel.shutdown()

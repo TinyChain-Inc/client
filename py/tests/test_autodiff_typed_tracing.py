@@ -4,6 +4,7 @@ import gc
 
 import numpy as np
 import pytest
+
 import tinychain as tc
 from tinychain.autodiff import (
     AddOperator,
@@ -420,13 +421,12 @@ def test_inactive_operations_preserve_symbolic_form(operation, expected) -> None
     assert get_active_builder() is None
 
 
-def test_inactive_mean_return_type_and_transpose_view_metadata() -> None:
+def test_inactive_mean_return_type_and_transpose_operation() -> None:
     x = _symbolic_tensor("x")
     mean = x.mean([0, 1])
     transposed = x.transpose([1, 0])
     assert isinstance(mean, tc.state.Scalar)
-    assert [op.kind for op in transposed.view_spec().ops] == ["transpose"]
-    assert transposed.view_spec().ops[0].permutation == (1, 0)
+    assert _json(transposed) == {"$x/transpose": [[1, 0]]}
 
 
 def test_inactive_transpose_allows_runtime_permutation() -> None:
@@ -637,3 +637,23 @@ def test_duplicate_wrt_is_rejected_with_named_role() -> None:
 
     with pytest.raises(ValueError, match="duplicate.*weights"):
         trace.vjp(output, wrt=[weights, weights])
+
+
+def test_autodiff_owns_lexical_bindings_for_chained_transpose():
+    with TensorGraphBuilder() as trace:
+        x = trace.input("x", dtype="f64", shape=(2, 3))
+        output = x.transpose([1, 0]).transpose([1, 0]) + x
+    graph = trace.build(outputs=output)
+    assert [type(node.operator) for node in graph.nodes] == [TransposeOperator, TransposeOperator, AddOperator]
+    assert graph.nodes[1].input_value_ids == [graph.nodes[0].output_value_id]
+    assert graph.nodes[2].input_value_ids[0] == graph.nodes[1].output_value_id
+    assert _json(output) == {"$_tmp1/add": {"r": {"$x": []}}}
+
+
+def test_autodiff_intermediate_names_do_not_shadow_inputs():
+    with TensorGraphBuilder() as trace:
+        source = trace.input("_tmp0", dtype="f64", shape=(2, 3))
+        result = source.transpose([1, 0]).transpose([1, 0])
+    assert _json(result) == {"$_tmp1/transpose": [[1, 0]]}
+    nodes = trace.build(outputs=result).nodes
+    assert nodes[1].input_value_ids == [nodes[0].output_value_id]

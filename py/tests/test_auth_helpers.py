@@ -14,15 +14,12 @@ class _Signed:
 
 
 class _Actor:
-    calls: list[tuple[str, object]] = []
+    calls: list[tuple[object, ...]] = []
 
-    def __init__(self, actor_id: str):
+    def __init__(self, actor_id: str, alg: str | None = None):
         self.actor_id = actor_id
-
-    @classmethod
-    def new_falcon512(cls, actor_id: str):
-        cls.calls.append(("falcon", actor_id))
-        return cls(actor_id)
+        if alg is not None:
+            self.calls.append(("new", alg, actor_id))
 
     @classmethod
     def with_keypair(cls, actor_id: str, key: bytes, alg: str):
@@ -63,7 +60,7 @@ def test_mint_rjwt_token_uses_falcon_by_default(monkeypatch):
         ttl_secs=300,
     )
 
-    assert _Actor.calls == [("falcon", "example-admin")]
+    assert _Actor.calls == [("new", "falcon512", "example-admin")]
     assert token.host == "https://api.tctest.net"
     assert token.actor_id == "example-admin"
     assert token.public_key_b64 == base64.b64encode(b"public").decode("ascii")

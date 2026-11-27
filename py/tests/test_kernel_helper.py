@@ -28,6 +28,13 @@ def _use_kernel_handle(monkeypatch, handle: type) -> None:
     )
 
 
+def _materialized_definition(request) -> dict:
+    handle = request[3]
+    assert isinstance(handle, tc_local.backend().StateHandle)
+    identity, definition = handle.value()
+    return {identity: definition}
+
+
 def test_with_library_passes_only_the_canonical_literal(tmp_path, monkeypatch):
     class FakeKernelHandle:
         calls: list[tuple[object | None, str | None, str | None]] = []
@@ -55,8 +62,7 @@ def test_with_library_passes_only_the_canonical_literal(tmp_path, monkeypatch):
     assert isinstance(tc.kernel.with_library(A(), data_dir=tmp_path, token=_TOKEN), FakeKernelHandle)
     token, data_dir, workspace = FakeKernelHandle.calls.pop()
     literal = library_definition(A())
-    identity, definition = next(iter(literal.items()))
-    assert json.loads(FakeKernelHandle.request[3]) == [tc.Link(identity).to_json(), definition]
+    assert _materialized_definition(FakeKernelHandle.request) == literal
     assert token is _TOKEN
     assert data_dir == str(tmp_path)
     assert workspace == str(tmp_path.with_name(f"{tmp_path.name}-workspace"))
@@ -71,7 +77,7 @@ def test_with_library_compiles_authority_into_dependency_reference(tmp_path, mon
             return cls()
 
         def dispatch(self, request):
-            type(self).definition = json.loads(request[3])
+            type(self).definition = _materialized_definition(request)
 
     _use_kernel_handle(monkeypatch, FakeKernelHandle)
 
@@ -127,8 +133,8 @@ def test_with_library_installs_classes_before_linking_the_library(tmp_path, monk
     tc.kernel.with_library(Geometry(), data_dir=tmp_path, token=_TOKEN)
 
     assert [request[1] for request in FakeKernelHandle.requests] == ["/class", "/lib"]
-    library_put = json.loads(FakeKernelHandle.requests[-1][3])
-    assert library_put[1]["point"] == {Point.class_id().path: []}
+    library_put = _materialized_definition(FakeKernelHandle.requests[-1])
+    assert next(iter(library_put.values()))["point"] == Point.class_id().path
 
 
 def test_with_library_rejects_dependency_override_argument(tmp_path):

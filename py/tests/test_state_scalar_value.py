@@ -1,20 +1,60 @@
 import json
 
-import tinychain as tc
 import pytest
 
+import tinychain as tc
 
-def test_value_roundtrip_typed_maps():
-    v = tc.Number(7)
-    assert tc.state.Value.from_json(v.to_json()).to_json() == v.to_json()
 
-    s = tc.String("x")
-    assert tc.state.Value.from_json(s.to_json()).to_json() == s.to_json()
+@pytest.mark.parametrize("literal", [{}, {"value": 7}, [], [7]])
+@pytest.mark.parametrize("control", ["cond", "while"])
+def test_control_result_typing_preserves_reference(literal, control):
+    boxed = tc.state.autobox(literal)
+    if control == "cond":
+        reference = tc.state.Cond(tc.state.IdRef("condition"), boxed, boxed)
+    else:
+        callback = tc.state.autobox(tc.state.PostOpDef([("result", tc.state.id("state"))]))
+        reference = tc.state.While(callback, callback, boxed)
 
-    n = tc.state.Null()
-    assert tc.state.Value.from_json(n.to_json()).to_json() == n.to_json()
-    assert isinstance(n, tc.state.Null)
-    assert isinstance(tc.state.Value.from_json(None), tc.state.Null)
+    result = tc.state.autobox(reference)
+    assert type(result) is type(boxed)
+    assert tc.state.form_of(result) is reference
+
+    decoded = tc.state.Scalar.from_json(result.to_json())
+    assert isinstance(tc.state.form_of(decoded), type(reference))
+
+    with pytest.raises(TypeError, match="lexical Context"):
+        result.len()
+
+    with tc.scoped_context() as cxt:
+        length = result.len()
+
+    (name, value), = cxt.form()
+    assert tc.state.form_of(value) is reference
+    assert tc.state.form_of(length).subject == f"${name}/len"
+
+
+@pytest.mark.parametrize("items", [[], [1], [1, 2], [1, 2, 3], [[1, 2], [3]]])
+def test_explicit_value_tuples_preserve_scalar_kind_and_materialize_as_lists(items):
+    from tinychain.codec import decode_payload
+
+    payload = {str(tc.URI(tc.state.value.Tuple)): items}
+    scalar = tc.state.Scalar.from_json(payload)
+    assert isinstance(tc.state.form_of(scalar), tc.state.value.Tuple)
+    assert decode_payload(payload) == items
+    assert decode_payload({"row": payload}) == {"row": items}
+    with pytest.raises(ValueError):
+        tc.state.TCRef.from_json(payload)
+
+
+def test_explicit_literal_links_preserve_reserved_paths():
+    from tinychain.codec import decode_payload
+
+    for cls in (tc.state.value.Tuple, tc.state.OpDef, tc.state.TCRef):
+        path = str(tc.URI(cls))
+        payload = {str(tc.URI(tc.state.Link)): path}
+        scalar = tc.state.Scalar.from_json(payload)
+        assert isinstance(tc.state.form_of(scalar), tc.state.Link)
+        assert decode_payload(payload) == path
 
 
 def test_value_bool_decodes_as_number():
@@ -43,6 +83,7 @@ def test_value_subtype_constructors_and_from_json_types():
     assert isinstance(tc.Map({"x": 1}), tc.Map)
     assert isinstance(tc.Tuple([1, 2]), tc.Tuple)
 
+    assert isinstance(tc.state.Value.from_json(None), tc.state.Null)
     assert isinstance(tc.state.Value.from_json(3), tc.Number)
     assert isinstance(tc.state.Value.from_json(True), tc.Number)
     assert isinstance(tc.state.Value.from_json({"x": 1}), tc.Map)
@@ -206,7 +247,7 @@ def test_value_type_uri_hierarchy_is_parent_appended():
     assert tc.state.Float.__uri__.path == tc.URI(tc.state.Number, "float").path
     assert tc.state.F32.__uri__.path == tc.URI(tc.state.Float, "32").path
     assert tc.state.Complex.__uri__.path == tc.URI(tc.state.Number, "complex").path
-    assert tc.state.C128.__uri__.path == tc.URI(tc.state.Complex, "128").path
+    assert tc.state.C128.__uri__.path == tc.URI(tc.state.Complex, "64").path
 
 
 def test_value_from_json_delegates_by_uri_to_concrete_subclass():
@@ -214,7 +255,7 @@ def test_value_from_json_delegates_by_uri_to_concrete_subclass():
     assert isinstance(f32, tc.state.F32)
     assert tc.state.form_of(f32) == 3.5
 
-    c128 = tc.state.Value.from_json({tc.state.C128.__uri__.path: 2 + 1j})
+    c128 = tc.state.Value.from_json({tc.state.C128.__uri__.path: [2, 1]})
     assert isinstance(c128, tc.state.C128)
     assert tc.state.form_of(c128) == (2 + 1j)
 
@@ -324,6 +365,6 @@ def test_autobox_numpy_array_to_tensor_state():
     assert isinstance(boxed, tc.Tensor)
     encoded = boxed.to_json()
     assert encoded == {
-        tc.URI(tc.Tensor).path: [[tc.URI(tc.Number, "float", "32").path, matrix.shape], [1.0, 2.0, 3.0, 4.0]]
+        tc.URI(tc.Tensor).path: [[tc.URI(tc.Number, "float", "32").path, list(matrix.shape)], [1.0, 2.0, 3.0, 4.0]]
     }
     assert isinstance(json.dumps(encoded), str)

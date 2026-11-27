@@ -4,7 +4,6 @@ import pathlib
 
 import tinychain as tc
 import tinychain.testing as tc_testing
-
 from .support import install_token, require_cargo
 
 
@@ -55,67 +54,88 @@ def test_op_reflection_analysis(tmp_path: pathlib.Path) -> None:
                 return {"max": max_out}
 
             @tc.post
-            def cyclomatic_depth(self, op: tc.state.OpDef) -> tc.Ref:
-                op_form = op.reflect_form()
-                state = {"items": op_form, "idx": 0, "todo": [], "max": 1}
-                while (len(state["items"]) > state["idx"]).logical_or(len(state["todo"]) > 0):
-                    has_items = len(state["items"]) > state["idx"]
-                    if has_items:
-                        node = state["items"][state["idx"]][1]
-                        depth = 0
-                        parts = node.ref_parts()
-                        has_children = len(parts) > 0
-                        tail = state["todo"][1:]
-                        children = []
-                        children_ok = False
-                        next_todo = state["todo"] + [[node, depth]]
-                        next_idx = state["idx"] + 1
-                        next_max = state["max"]
-                    else:
-                        node = state["todo"][0][0]
-                        depth = state["todo"][0][1]
-                        parts = node.ref_parts()
-                        has_children = len(parts) > 0
-                        tail = state["todo"][1:]
-                        if has_children:
-                            children = []
-                            children_ok = False
-                            next_todo = tail + [[parts[1], depth + 1], [parts[2], depth + 1]]
-                            if depth + 1 > state["max"]:
-                                next_max = depth + 1
-                            else:
-                                next_max = state["max"]
-                        else:
-                            children = node.reflect_scalars()
-                            children_ok = len(children) > 0
-                            if children_ok:
-                                next_todo = tail
-                                if depth + 1 > state["max"]:
-                                    next_max = depth + 1
-                                else:
-                                    next_max = state["max"]
-                            else:
-                                next_todo = tail
-                                next_max = state["max"]
-                        next_idx = state["idx"]
-                    state = {"items": state["items"], "idx": next_idx, "todo": next_todo, "max": next_max}
-                return {"max": state["max"]}
+            def reflection_push(self, walk: tc.Map) -> tc.Ref:
+                node = walk["items"][walk["idx"]][1]
+                todo = walk["todo"] + [[node, 0]]
+                return {"items": walk["items"], "idx": walk["idx"] + 1, "todo": todo, "max": walk["max"]}
 
             @tc.post
-            def nested_if_count(self, items: tc.state.Scalar) -> tc.Ref:
-                state = {"items": items, "count": 0}
-                while len(state["items"]) > 0:
-                    head = state["items"][0]
-                    rest = state["items"][1:]
-                    if head == 0:
-                        if state["count"] > 0:
-                            next_count = state["count"] + 1
-                        else:
-                            next_count = 1
+            def reflection_branch(self, walk: tc.Map) -> tc.Ref:
+                node = walk["todo"][0][0]
+                depth = walk["todo"][0][1]
+                parts = node.ref_parts()
+                tail = walk["todo"][1:]
+                todo = tail + [[parts[1], depth + 1], [parts[2], depth + 1]]
+                maximum = tc.state.cond(depth + 1 > walk["max"], depth + 1, walk["max"])
+                return {"items": walk["items"], "idx": walk["idx"], "todo": todo, "max": maximum}
+
+            @tc.post
+            def reflection_leaf(self, walk: tc.Map) -> tc.Ref:
+                node = walk["todo"][0][0]
+                depth = walk["todo"][0][1]
+                children = node.reflect_scalars()
+                tail = walk["todo"][1:]
+                candidate = tc.state.cond(depth + 1 > walk["max"], depth + 1, walk["max"])
+                maximum = tc.state.cond(len(children) > 0, candidate, walk["max"])
+                return {"items": walk["items"], "idx": walk["idx"], "todo": tail, "max": maximum}
+
+            @tc.post
+            def reflection_pop(self, cxt, walk: tc.Map) -> tc.Ref:
+                cxt.node = walk["todo"][0][0]
+                cxt.parts = cxt.node.ref_parts()
+                return tc.state.cond(
+                    cxt.parts.len() > 0,
+                    tc.state.PostOpRef(tc.URI(self, "reflection_branch").path, {"walk": walk}),
+                    tc.state.PostOpRef(tc.URI(self, "reflection_leaf").path, {"walk": walk}),
+                )
+
+            @tc.post
+            def reflection_step(self, cxt, walk: tc.Map) -> tc.Ref:
+                return tc.state.cond(
+                    walk["items"].len() > walk["idx"],
+                    tc.state.PostOpRef(tc.URI(self, "reflection_push").path, {"walk": walk}),
+                    tc.state.PostOpRef(tc.URI(self, "reflection_pop").path, {"walk": walk}),
+                )
+
+            @tc.post
+            def cyclomatic_depth(self, cxt, op: tc.state.OpDef) -> tc.Ref:
+                # Keep each ordinary operation within the shared structural bound.
+                @tc.post
+                def condition(state: tc.Map):
+                    return (state["items"].len() > state["idx"]).logical_or(state["todo"].len() > 0)
+
+                @tc.post
+                def step(state: tc.Map):
+                    return self.reflection_step(walk=state)
+
+                cxt.walk = tc.state.while_loop(
+                    condition, step, {"items": op.reflect_form(), "idx": 0, "todo": [], "max": 1}
+                )
+                return {"max": cxt.walk["max"]}
+
+            @tc.post
+            def nested_if_step(self, walk: tc.Map) -> tc.Ref:
+                if walk["items"][0] == 0:
+                    if walk["count"] > 0:
+                        next_count = walk["count"] + 1
                     else:
-                        next_count = state["count"]
-                    state = {"items": rest, "count": next_count}
-                return {"count": state["count"]}
+                        next_count = 1
+                else:
+                    next_count = walk["count"]
+                return {"items": walk["items"][1:], "count": next_count}
+
+            @tc.post
+            def nested_if_count(self, cxt, items: tc.state.Scalar) -> tc.Ref:
+                @tc.post
+                def condition(state: tc.Map):
+                    return state["items"].len() > 0
+
+                @tc.post
+                def step(state: tc.Map):
+                    return self.nested_if_step(walk=state)
+
+                cxt.counted = tc.state.while_loop(condition, step, {"items": items, "count": 0})
+                return {"count": cxt.counted["count"]}
 
             @tc.post
             def tuple_loop_supported(self, items: tc.Tuple) -> tc.Number:
@@ -142,31 +162,31 @@ def test_op_reflection_analysis(tmp_path: pathlib.Path) -> None:
         ])
 
         token = install_token(A.class_id().path, B.class_id().path, C.class_id().path)
-        kernel = tc.kernel.with_library(
+        with tc.kernel.with_library(
             c,
             data_dir=tmp_path,
             token=token,
-        )
+        ) as kernel:
 
-        for library in (A, B, C):
-            resp = tc.install(
-                library,
-                kernel=kernel,
-                data_dir=tmp_path,
-                token=token,
-            )
-            assert resp.status == 204
+            for library in (A, B, C):
+                resp = tc.install(
+                    library,
+                    kernel=kernel,
+                    data_dir=tmp_path,
+                    token=token,
+                )
+                assert resp.status == 204
 
-        with tc.backend(kernel):
-            depth_leaf = tc_testing.run_with_timeout(20, lambda: c.cyclomatic_depth(op=leaf_op))
-            assert depth_leaf["max"] == 1
-            depth_branch = tc_testing.run_with_timeout(20, lambda: c.cyclomatic_depth(op=branch_op))
-            assert depth_branch["max"] >= depth_leaf["max"]
-            nested = tc_testing.run_with_timeout(20, lambda: c.nested_if_count(items=[0, 1, 0, 0]))
-            assert nested["count"] == 3
-            tuple_loop = tc_testing.run_with_timeout(20, lambda: c.tuple_loop_supported(items=[1, 2, 7]))
-            assert tuple_loop == 1
-            map_loop = tc_testing.run_with_timeout(20, lambda: c.map_loop_supported(items={"b": 1, "a": 2}))
-            assert map_loop == "ok"
+            with tc.backend(kernel):
+                depth_leaf = tc_testing.run_with_timeout(20, lambda: c.cyclomatic_depth(op=leaf_op))
+                assert depth_leaf["max"] == 1
+                depth_branch = tc_testing.run_with_timeout(20, lambda: c.cyclomatic_depth(op=branch_op))
+                assert depth_branch["max"] >= depth_leaf["max"]
+                nested = tc_testing.run_with_timeout(20, lambda: c.nested_if_count(items=[0, 1, 0, 0]))
+                assert nested["count"] == 3
+                tuple_loop = tc_testing.run_with_timeout(20, lambda: c.tuple_loop_supported(items=[1, 2, 7]))
+                assert tuple_loop == 1
+                map_loop = tc_testing.run_with_timeout(20, lambda: c.map_loop_supported(items={"b": 1, "a": 2}))
+                assert map_loop == "ok"
 
     tc_testing.run_with_timeout(45, _run)

@@ -55,6 +55,12 @@ providers before IR emission. It never rebinds or repoints a `Context` name.
 Nested graph callbacks may capture enclosing providers but may not shadow them;
 the emitted `OpDef` is validated against the canonical lexical-scope contract.
 
+Control result typing retains the control reference inside its result wrapper;
+inferred shapes never replace execution with a literal. Chained operations bind
+the control's result in the lexical Context. Generated Context names share one
+counter across the authoring tree, including bindings added after nested
+operations are built.
+
 The transform preserves annotations, defaults, documentation, and source
 location where practical. Error messages identify the unsupported construct but
 must not depend on runtime-global state.

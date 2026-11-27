@@ -7,6 +7,11 @@ from ...uri import URI
 class Collection(State):
     """A native TinyChain collection literal, reference, or lazy view."""
 
+    def to_json(self) -> object:
+        from ... import _native
+
+        return _native.Codec().wire_object(self._form)
+
     def _declaration(self):
         from ..scalar import form_of
         from ..scalar.refs import GetOpRef

@@ -99,9 +99,23 @@ class Table(Collection):
         return self._get("select", autobox(columns), rtype=Table)
 
     def where(self, **bounds: object) -> "Table":
-        if not bounds:
-            return self
-        return self._post(params={name: _bound(bound) for name, bound in bounds.items()}, rtype=Table)
+        """Select rows; update/truncate address this Table with these bounds.
+
+        The returned native view is read-only. Further selections, ordering,
+        and projection do not compose another writable selector.
+        """
+        parent = self
+        bounds = {name: _bound(bound) for name, bound in bounds.items()}
+        selector = autobox(list(bounds.items()))
+
+        class Selection(Table):
+            def update(self, **values: object) -> Scalar:
+                return parent._put(autobox(values), key=selector, rtype=Scalar)
+
+            def truncate(self) -> Scalar:
+                return parent._delete(key=selector, rtype=Scalar)
+
+        return self._post(params=bounds, rtype=Selection)
 
     def insert(self, key: object, values: object = ()) -> Scalar:
         return self._put(

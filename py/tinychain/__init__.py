@@ -4,7 +4,15 @@ from .autodiff.callsite import grad
 from .library import Library, delete, get, install, post, put
 from .service import Service
 from . import chain, service
-from .classdef import Class, ClassError, InvalidClassParent, MissingClassMember, UnsupportedClassOverride, class_definition, validate_class_definition
+from .classdef import (
+    Class,
+    ClassError,
+    InvalidClassParent,
+    MissingClassMember,
+    UnsupportedClassOverride,
+    class_definition,
+    validate_class_definition,
+)
 from .codec import decode_response_body
 from .executor import Executor, backend
 from .executor import execute as _dispatch_execute
@@ -12,7 +20,25 @@ from .opref import OpRef
 from . import opref
 from .ref import Ref
 from .collection import Tensor, concatenate, einsum, split, tile
-from .state.value import Bool, C64, C128, Complex, F32, F64, Float, I64, Integer, Link, Map, Null, Number, String, Tuple, U64
+from .state.value import (
+    Bool,
+    Bytes,
+    C64,
+    C128,
+    Complex,
+    F32,
+    F64,
+    Float,
+    I64,
+    Integer,
+    Link,
+    Map,
+    Null,
+    Number,
+    String,
+    Tuple,
+    U64,
+)
 from .uri import URI, authority, origin, uri
 from . import compute
 from . import collection
@@ -43,6 +69,7 @@ __all__ = [
     "opref",
     "Ref",
     "Bool",
+    "Bytes",
     "Null",
     "Link",
     "Number",

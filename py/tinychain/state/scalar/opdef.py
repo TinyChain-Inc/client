@@ -71,47 +71,15 @@ class OpDef:
         return Scalar(self).class_()
 
     def to_json(self) -> dict[str, object]:
-        raise NotImplementedError()
+        from ... import _native
+
+        return _native.to_wire(self)
 
     @staticmethod
     def from_json(obj: Any) -> "OpDef":
-        from . import _decode_form
+        from ... import _native
 
-        if not isinstance(obj, dict) or len(obj) != 1:
-            raise TypeError("expected an OpDef map")
-
-        (key, value), = obj.items()
-        if not isinstance(key, str):
-            raise TypeError("expected OpDef map key to be a string")
-
-        if key == str(URI(OpDef, "get")):
-            if not isinstance(value, list) or len(value) != 2:
-                raise TypeError("invalid GET opdef encoding")
-            key_name, form = value
-            if not isinstance(key_name, str):
-                raise TypeError("expected GET key name to be a string")
-            return GetOpDef(key_name, _decode_form(form))
-
-        if key == str(URI(OpDef, "put")):
-            if not isinstance(value, list) or len(value) != 3:
-                raise TypeError("invalid PUT opdef encoding")
-            key_name, value_name, form = value
-            if not isinstance(key_name, str) or not isinstance(value_name, str):
-                raise TypeError("expected PUT key/value names to be strings")
-            return PutOpDef(key_name, value_name, _decode_form(form))
-
-        if key == str(URI(OpDef, "post")):
-            return PostOpDef(_decode_form(value))
-
-        if key == str(URI(OpDef, "delete")):
-            if not isinstance(value, list) or len(value) != 2:
-                raise TypeError("invalid DELETE opdef encoding")
-            key_name, form = value
-            if not isinstance(key_name, str):
-                raise TypeError("expected DELETE key name to be a string")
-            return DeleteOpDef(key_name, _decode_form(form))
-
-        raise TypeError("unexpected OpDef map key")
+        return _native.Codec().opdef_from_wire(obj)
 
 
 class GetOpDef(OpDef):
@@ -134,9 +102,9 @@ class GetOpDef(OpDef):
         return self._form
 
     def to_json(self) -> dict[str, object]:
-        from . import _encode_form
+        from ... import _native
 
-        return {str(URI(OpDef, "get")): [self.key, _encode_form(self.form)]}
+        return _native.to_wire(self)
 
 
 class PutOpDef(OpDef):
@@ -160,9 +128,9 @@ class PutOpDef(OpDef):
         return self._form
 
     def to_json(self) -> dict[str, object]:
-        from . import _encode_form
+        from ... import _native
 
-        return {str(URI(OpDef, "put")): [self.key, self.value, _encode_form(self.form)]}
+        return _native.to_wire(self)
 
 
 class PostOpDef(OpDef):
@@ -181,9 +149,9 @@ class PostOpDef(OpDef):
         return self._form
 
     def to_json(self) -> dict[str, object]:
-        from . import _encode_form
+        from ... import _native
 
-        return {str(URI(OpDef, "post")): _encode_form(self.form)}
+        return _native.to_wire(self)
 
 
 class DeleteOpDef(OpDef):
@@ -206,6 +174,6 @@ class DeleteOpDef(OpDef):
         return self._form
 
     def to_json(self) -> dict[str, object]:
-        from . import _encode_form
+        from ... import _native
 
-        return {str(URI(OpDef, "delete")): [self.key, _encode_form(self.form)]}
+        return _native.to_wire(self)

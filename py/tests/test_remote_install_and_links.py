@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import pytest
+
 import tinychain as tc
 
 
@@ -154,12 +155,26 @@ def test_string_value_render_is_the_only_value_render_surface():
     assert not hasattr(tc.Number(1), "render")
 
 
-def test_host_rejects_client_transaction_controls():
+def test_host_rejects_client_transaction_controls(monkeypatch):
+    calls = []
+
+    def fake_request(method, url, *, data=None, headers=None):
+        calls.append((method, url))
+        return _Response()
+
+    monkeypatch.setattr("tinychain.host.requests.request", fake_request)
     host = tc.Host("https://testnet.example")
     greeter = Greeter()
 
     with pytest.raises(ValueError, match="transaction controls"):
         host.url(greeter, "hello", txn_id="caller-owned")
 
-    with pytest.raises(ValueError, match="transaction controls"):
-        host.request("POST", "/lib?txn_id=caller-owned")
+    for target in ("/lib?txn_id=caller-owned", "https://testnet.example/lib?TXN_ID=caller-owned"):
+        with pytest.raises(ValueError, match="transaction controls"):
+            host.request("POST", target)
+    assert calls == []
+
+    literal = tc.URI("state", "literal?txn_id=caller-owned")
+    assert host.request("POST", literal) is None
+    assert calls == [("POST", host.link(literal).absolute())]
+    assert "%3F" in calls[0][1]

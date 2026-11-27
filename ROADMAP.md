@@ -14,8 +14,8 @@ required to make `client/` self-contained.
 
 From a standalone `client` checkout, users should be able to:
 
-- Install and use the pure-Python client (`py/`) with no Rust toolchain.
-- Optionally build and install `tinychain-local` (`rust/`) via `maturin`
+- Install the Python client and its native core from wheels with no Rust toolchain.
+- Build `tinychain-local` (`rust/`) via `maturin`, optionally enabling `local-host`,
   without requiring a parent runtime repository layout.
 
 ## Current blockers
@@ -50,8 +50,8 @@ From a standalone `client` checkout, users should be able to:
      against a runtime).
 
 4. Add minimal CI coverage for the split
-   - Pure-Python lint/test path for `py/`.
-   - Optional `maturin` build path for `rust/` gated on Rust + Python
+   - Python lint/test path with the native scalar core.
+   - `maturin` build paths for core and `local-host`, gated on Rust + Python
      toolchains.
    - Verify import ergonomics remain stable (`import tinychain as tc` with and
      without the optional local backend installed).

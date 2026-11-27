@@ -1,33 +1,24 @@
-import pytest
-
 import tinychain as tc
 import tinychain.testing as tc_testing
-
-from .support import install_token
+from .support import install_token, require_cargo
 
 
 def test_http_host_materializes_library_runtime_ref(tmp_path, monkeypatch):
-    if not tc_testing.cargo_available():
-        pytest.skip("`cargo` not found; install Rust tooling to run this test")
+    require_cargo()
     monkeypatch.setenv("TC_DATA_DIR", str(tmp_path / "remote-data"))
     monkeypatch.setenv("TC_WORKSPACE", str(tmp_path / "remote-workspace"))
 
     actor_id = "example-admin"
     secret_key_b64 = tc.auth.generate_actor_secret(actor_id)
 
-    try:
-        proc, addr = tc_testing.start_rust_example(
-            "http_rpc_native_host",
-            args=(
-                "--bind=127.0.0.1:0",
-                f"--actor-id={actor_id}",
-                f"--secret-key-b64={secret_key_b64}",
-            ),
-        )
-    except RuntimeError as err:
-        if "Operation not permitted" in str(err):
-            pytest.skip("sandbox does not permit launching local Rust host example")
-        raise
+    proc, addr = tc_testing.start_rust_example(
+        "http_rpc_native_host",
+        args=(
+            "--bind=127.0.0.1:0",
+            f"--actor-id={actor_id}",
+            f"--secret-key-b64={secret_key_b64}",
+        ),
+    )
     try:
         class AuthContext(tc.Library):
             publisher = "example-devco"

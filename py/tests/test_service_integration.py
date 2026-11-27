@@ -1,12 +1,13 @@
-from dataclasses import asdict
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import time
+from dataclasses import asdict
+from pathlib import Path
 
 import pytest
+
 import tinychain as tc
 
 
@@ -19,6 +20,9 @@ def test_service_install_mutate_restart(tmp_path, transport):
     env = dict(os.environ, PYTHONPATH=os.pathsep.join([
         str(Path(__file__).resolve().parents[1]), os.environ.get("PYTHONPATH", ""),
     ]))
+    # This subprocess also guards against oversized request polling frames.
+    # An inherited stack override must not hide regressions on ordinary workers.
+    env.pop("RUST_MIN_STACK", None)
     for phase in ("write", "read"):
         if phase == "read":
             # Default transaction TTL (3s) plus clock-skew grace (3s): startup

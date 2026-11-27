@@ -33,4 +33,4 @@ npm run test:browser
 ```
 
 For detailed test-layer guidance, see
-[`client/web/TESTING.md`](/home/haydn/Documents/tcv2/client/web/TESTING.md).
+[`client/web/TESTING.md`](../../TESTING.md).

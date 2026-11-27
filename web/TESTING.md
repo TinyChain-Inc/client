@@ -46,9 +46,6 @@ Everything:
 npm run test:all
 ```
 
-GitHub CI runs the same full suite in
-[`client-web.yml`](/home/haydn/Documents/tcv2/.github/workflows/client-web.yml).
-
 ## Browser test prerequisites
 
 The browser test uses `@playwright/test` and requires a local browser install:
@@ -60,7 +57,7 @@ npx playwright install chromium
 If your environment cannot run browsers (restricted CI/sandbox), skip
 `test:browser` and run it in a nightly or pre-release validation job instead.
 
-Playwright uses [`playwright.config.mjs`](/home/haydn/Documents/tcv2/client/web/playwright.config.mjs)
+Playwright uses [`playwright.config.mjs`](playwright.config.mjs)
 with a managed `webServer` command so browser tests no longer need custom
 process/port orchestration scripts.
 

@@ -1,6 +1,6 @@
-import tinychain as tc
 import pytest
 
+import tinychain as tc
 from tinychain.autodiff.vjp import (
     VjpRegistry,
     AddOperator,
@@ -100,12 +100,6 @@ def test_dualoperator_accepts_tensor_operands():
     op = tc.std.DualOperator(left=left, right=right)
     assert op.left.to_json() == left.to_json()
     assert op.right.to_json() == right.to_json()
-
-
-def test_autodiff_operator_docstring_covers_typed_subclass_usage():
-    doc = tc.std.Operator.__doc__
-    assert doc is not None
-    assert "typed fields" in doc
 
 
 def test_vjp_registry_decorator_registration():

@@ -9,83 +9,53 @@ from ..uri import URI
 
 
 class Value(Scalar):
-    __slots__ = ("_value",)
+    __slots__ = ()
 
     __uri__: URI = URI(State, "scalar", "value")
 
     def __init__(self, value: None | bool | int | float | complex | str | dict[str, "Value"] | list["Value"] = None):
         super().__init__(value)
-        self._value = value
 
     def to_json(self) -> object:
-        raise TypeError(f"{type(self).__name__}.to_json must be implemented by a concrete Value subclass")
+        from .. import _native
+
+        return _native.value_to_wire(self)
 
     @staticmethod
     def from_json(obj: Any) -> "Value":
-        if obj is None:
-            return Null()
-        if isinstance(obj, bool):
-            return Number(obj)
-        if isinstance(obj, (int, float)):
-            return Number(obj)
-        if isinstance(obj, str):
-            return String(obj)
-        if isinstance(obj, list):
-            return Tuple(obj)
+        from .. import _native
 
-        if isinstance(obj, dict) and len(obj) == 1:
-            (key, value), = obj.items()
-            if isinstance(key, str):
-                value_type = _value_class_for_uri(key)
-                if value_type is not None:
-                    return value_type._from_json(value)
-
-            if isinstance(key, str) and (key.startswith("/") or "://" in key):
-                if value != []:
-                    raise TypeError("expected link value to be an empty list")
-                return Link(key)
-
-        if isinstance(obj, dict):
-            return Map(obj)
-
-        raise TypeError(f"cannot decode Value from {type(obj).__name__}")
-
-    @classmethod
-    def _from_json(cls, obj: Any) -> "Value":
-        raise TypeError("Value.from_json is not implemented for the base class")
+        return _native.Codec().value_from_wire(obj)
 
 
-def _iter_value_subclasses(base: type[Value]) -> Iterator[type[Value]]:
-    for subclass in base.__subclasses__():
-        yield subclass
-        yield from _iter_value_subclasses(subclass)
-
-
-def _value_class_for_uri(uri_path: str) -> type[Value] | None:
-    if uri_path == str(URI(Value)):
-        return Value
-
-    for value_type in _iter_value_subclasses(Value):
-        if str(URI(value_type)) == uri_path:
-            return value_type
-
-    return None
-
-
-def _decode_value_item(obj: object) -> Value:
+def _construct_value(obj: object) -> Value:
+    # Native construction is distinct from decoding untyped wire text.
     if isinstance(obj, Value):
         return obj
-
-    return Value.from_json(obj)
-
-
-def _encode_value_item(value: Value) -> object:
-    return value.to_json()
+    if obj is None:
+        return Null()
+    if isinstance(obj, URI):
+        return Link(obj)
+    if isinstance(obj, bool):
+        return Bool(obj)
+    if isinstance(obj, (int, float)):
+        return Number(obj)
+    if isinstance(obj, complex):
+        return Complex(obj)
+    if isinstance(obj, str):
+        return String(obj)
+    if isinstance(obj, bytes):
+        return Bytes(obj)
+    if isinstance(obj, dict):
+        return Map(obj)
+    if isinstance(obj, (list, tuple)):
+        return Tuple(obj)
+    raise TypeError(f"cannot construct Value from {type(obj).__name__}")
 
 
 def form_of(value: "Value | object") -> object:
-    if isinstance(value, Value):
-        return value._value
+    if isinstance(value, State):
+        return value._form
     return value
 
 
@@ -97,13 +67,6 @@ class Null(Value):
     def __init__(self):
         super().__init__(None)
 
-    def to_json(self) -> object:
-        return None
-
-    @classmethod
-    def _from_json(cls, obj: Any) -> "Null":
-        return cls()
-
 
 class Link(Value):
     __slots__ = ()
@@ -114,16 +77,19 @@ class Link(Value):
         if not isinstance(value, (URI, str)):
             raise TypeError("expected link value")
 
-        super().__init__(str(value))
+        from .. import _native
 
-    def to_json(self) -> object:
-        return {str(URI(Link)): str(form_of(self))}
+        super().__init__(_native.ScalarHandle.link(str(value)).link_text())
 
-    @classmethod
-    def _from_json(cls, obj: Any) -> "Link":
-        if not isinstance(obj, str):
-            raise TypeError("expected link value")
-        return cls(obj)
+
+class Bytes(Value):
+    __slots__ = ()
+    __uri__: URI = URI(Value, "bytes")
+
+    def __init__(self, value: bytes):
+        if not isinstance(value, bytes):
+            raise TypeError("expected bytes")
+        super().__init__(value)
 
 
 class String(Value):
@@ -175,15 +141,6 @@ class String(Value):
 
         return String(ref_form)
 
-    def to_json(self) -> object:
-        return form_of(self)
-
-    @classmethod
-    def _from_json(cls, obj: Any) -> "String":
-        if not isinstance(obj, str):
-            raise TypeError("expected string value")
-        return cls(obj)
-
 
 def _is_literal_render_value(value: object) -> bool:
     return isinstance(value, (str, bool, int, float, URI))
@@ -212,13 +169,6 @@ class Number(Value):
 
         super().__init__(value)
         object.__setattr__(self, "op", None)
-
-    def to_json(self) -> object:
-        return form_of(self)
-
-    @classmethod
-    def _from_json(cls, obj: Any) -> "Number":
-        return cls(obj)
 
     def _scalar(self):
         from .scalar import autobox
@@ -287,7 +237,7 @@ class Number(Value):
 class Integer(Number):
     __slots__ = ()
 
-    __uri__: URI = URI(Number, "integer")
+    __uri__: URI = URI(Number, "int")
 
     def __init__(self, value: int | object):
         op = _as_opref(value)
@@ -438,13 +388,13 @@ class Complex(Number):
 class I64(Integer):
     __slots__ = ()
 
-    __uri__: URI = URI(Integer, "i64")
+    __uri__: URI = URI(Integer, "64")
 
 
 class U64(Integer):
     __slots__ = ()
 
-    __uri__: URI = URI(Integer, "u64")
+    __uri__: URI = URI(Number, "uint", "64")
 
     def __init__(self, value: int | object):
         super().__init__(value)
@@ -471,13 +421,13 @@ class F64(Float):
 class C64(Complex):
     __slots__ = ()
 
-    __uri__: URI = URI(Complex, "64")
+    __uri__: URI = URI(Complex, "32")
 
 
 class C128(Complex):
     __slots__ = ()
 
-    __uri__: URI = URI(Complex, "128")
+    __uri__: URI = URI(Complex, "64")
 
 
 # Bool literals use the canonical Number representation.
@@ -503,7 +453,7 @@ class Map(Value):
         for key, item in value.items():
             if not isinstance(key, str):
                 raise TypeError("expected map key to be a string")
-            decoded[key] = _decode_value_item(item)
+            decoded[key] = _construct_value(item)
 
         super().__init__(decoded)
         object.__setattr__(self, "op", None)
@@ -536,17 +486,6 @@ class Map(Value):
         assert isinstance(value_form, dict)
         return value_form.items()
 
-    def to_json(self) -> object:
-        value_form = form_of(self)
-        assert isinstance(value_form, dict)
-        return {key: _encode_value_item(item) for key, item in value_form.items()}
-
-    @classmethod
-    def _from_json(cls, obj: Any) -> "Map":
-        if not isinstance(obj, dict):
-            raise TypeError("expected map value")
-        return cls(obj)
-
 
 class Tuple(Value):
     __slots__ = ("op",)
@@ -563,7 +502,7 @@ class Tuple(Value):
         if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
             raise TypeError("expected tuple value")
 
-        super().__init__([_decode_value_item(item) for item in value])
+        super().__init__([_construct_value(item) for item in value])
         object.__setattr__(self, "op", None)
 
     def __iter__(self) -> Iterator[Value]:
@@ -586,17 +525,6 @@ class Tuple(Value):
             raise TypeError("cannot index a deferred Tuple without execution")
         assert isinstance(value_form, list)
         return value_form[index]
-
-    def to_json(self) -> object:
-        value_form = form_of(self)
-        assert isinstance(value_form, list)
-        return [_encode_value_item(item) for item in value_form]
-
-    @classmethod
-    def _from_json(cls, obj: Any) -> "Tuple":
-        if not isinstance(obj, list):
-            raise TypeError("expected tuple value")
-        return cls(obj)
 
 
 def _as_opref(value: object) -> object | None:
