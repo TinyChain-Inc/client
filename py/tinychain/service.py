@@ -40,7 +40,7 @@ class Service(Library):
             from .state.value import Link
 
             value = Link(value.link().absolute())
-        return autobox(value).to_json()
+        return autobox(value)
 
     @classmethod
     def _members(cls):

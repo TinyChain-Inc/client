@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import pathlib
+
 import pytest
 
 import tinychain as tc
-
 from .support import require_tinychain_local
 
 
@@ -40,21 +40,23 @@ def test_framework_auth_context_available_in_local_and_native_routes(tmp_path: p
     data_dir = tmp_path / "tc-data"
     data_dir.mkdir(parents=True, exist_ok=True)
     kernel = tc.kernel.with_library(a, data_dir=data_dir, token=token)
+    try:
+        with tc.backend(kernel, token=token):
+            direct_ctx = tc.execute(tc.auth.context())
+            native_ctx = a.auth_context()
+            assert isinstance(direct_ctx, dict)
+            assert isinstance(native_ctx, dict)
+            assert direct_ctx["principal"].endswith(f"::{ACTOR_ID}")
+            assert native_ctx["principal"] == direct_ctx["principal"]
 
-    with tc.backend(kernel, token=token):
-        direct_ctx = tc.execute(tc.auth.context())
-        native_ctx = a.auth_context()
-        assert isinstance(direct_ctx, dict)
-        assert isinstance(native_ctx, dict)
-        assert direct_ctx["principal"].endswith(f"::{ACTOR_ID}")
-        assert native_ctx["principal"] == direct_ctx["principal"]
+            with tc.backend(kernel, token=token, mode="deferred"):
+                deferred_ctx = a.auth_context()
 
-        with tc.backend(kernel, token=token, mode="deferred"):
-            deferred_ctx = a.auth_context()
+            assert isinstance(deferred_ctx, tc.Ref)
+            assert tc.execute(deferred_ctx)["principal"] == direct_ctx["principal"]
 
-        assert isinstance(deferred_ctx, tc.Ref)
-        assert tc.execute(deferred_ctx)["principal"] == direct_ctx["principal"]
-
-    with tc.backend(kernel):
-        with pytest.raises(RuntimeError, match="missing authenticated request context"):
-            tc.execute(tc.auth.context())
+        with tc.backend(kernel):
+            with pytest.raises(RuntimeError, match="missing authenticated request context"):
+                tc.execute(tc.auth.context())
+    finally:
+        kernel.shutdown()

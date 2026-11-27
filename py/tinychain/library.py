@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import inspect
-import json
 import pathlib
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional, get_args, get_origin, get_type_hints
 
@@ -34,8 +34,14 @@ from .state import (
     scalar_for_hint,
     tuple_of as scalar_tuple_of,
 )
-from .state.value import Bool, Link as ValueLink, Map, Number, String, Tuple, Value
-from .uri import URI, _segment, validate_publisher, validate_resource_path, validate_version
+from .state.value import Bool, Map, Number, String, Tuple, Value
+from .uri import (
+    URI,
+    _segment,
+    validate_publisher,
+    validate_resource_path,
+    validate_version,
+)
 
 
 _INJECTED_ROUTE_PARAM_NAMES = {"cxt", "ctx", "txn"}
@@ -645,7 +651,7 @@ class Library:
 
     @staticmethod
     def _encode_member(value):
-        return value.to_json() if isinstance(value, OpDef) else value
+        return value
 
     @classmethod
     def _members(cls):
@@ -658,7 +664,8 @@ class Library:
             name = declared.class_id().path.strip("/").split("/")[-2]
             if name in members:
                 raise ValueError(f"duplicate Library member {name!r}")
-            members[name] = {str(declared.class_id()): []}
+            from .state.value import Link
+            members[name] = Link(declared.class_id())
         for name, attr in vars(cls).items():
             if isinstance(attr, Route):
                 if name in members:
@@ -695,6 +702,13 @@ def _to_opref(value: object) -> Optional[OpRef[Any]]:
 
 def compile_ir(library: Library | type[Library]) -> dict:
     """Compile a Library directly into its canonical one-entry literal."""
+
+    from . import _native
+
+    return _native.Codec().wire_object(_definition_form(library))
+
+
+def _definition_form(library: Library | type[Library]) -> dict:
 
     library_cls = _library_class(library)
     _validate_library_class(library_cls)
@@ -906,27 +920,27 @@ def install(
     if _bearer_token(token) is None and remote is None:
         raise ValueError("expected `token` for library installs")
 
-    definition = library_definition(library)
-    from .classdef import _CLASS_ROOT_URI, class_definition
-    classes = [class_definition(cls) for cls in (getattr(library_cls, "classes", ()) or ())]
+    definition = _definition_form(library)
+    from .classdef import _CLASS_ROOT_URI
+    classes = [cls._definition_form() for cls in (getattr(library_cls, "classes", ()) or ())]
 
     if remote is not None:
         for class_body in classes:
             _submit_remote_definition(remote, _CLASS_ROOT_URI.path, class_body, token=token)
         return _submit_remote_definition(remote, library_cls._root.path, definition, token=token)
 
-    kernel = _kernel_for_library_install(kernel=kernel, data_dir=data_dir, token=token)
-    bearer_token = _bearer_token(token)
-    if bearer_token is None:
-        raise ValueError("expected `token` for library installs")
-    for class_body in classes:
-        _submit_local_definition(
-            kernel,
-            _CLASS_ROOT_URI.path,
-            class_body,
-            bearer_token=bearer_token,
-        )
-    return _submit_local_definition(kernel, library_cls._root.path, definition, bearer_token=bearer_token)
+    with _kernel_for_library_install(kernel=kernel, data_dir=data_dir, token=token) as kernel:
+        bearer_token = _bearer_token(token)
+        if bearer_token is None:
+            raise ValueError("expected `token` for library installs")
+        for class_body in classes:
+            _submit_local_definition(
+                kernel,
+                _CLASS_ROOT_URI.path,
+                class_body,
+                bearer_token=bearer_token,
+            )
+        return _submit_local_definition(kernel, library_cls._root.path, definition, bearer_token=bearer_token)
 
 
 def library_definition(library: Library | type[Library]) -> dict:
@@ -946,21 +960,27 @@ def _submit_remote_definition(
     return host.request("PUT", root, body=definition)
 
 
+@contextmanager
 def _kernel_for_library_install(
     *,
     kernel: object | None,
     data_dir: pathlib.Path | None,
     token: object | None,
-) -> object:
+) -> Iterator[object]:
     if kernel is not None:
-        return kernel
+        yield kernel
+        return
 
     if data_dir is None:
         raise ValueError("expected either `kernel` or `data_dir`")
 
     from . import _local
 
-    return _local.local_kernel(data_dir=str(data_dir), token=token)
+    kernel = _local.local_kernel(data_dir=str(data_dir), token=token)
+    try:
+        yield kernel
+    finally:
+        kernel.shutdown()
 
 
 def _header_value(response: object, name: str) -> str | None:
@@ -976,17 +996,17 @@ def _header_value(response: object, name: str) -> str | None:
 
 
 def _submit_local_definition(kernel: object, root: str, definition: dict, *, bearer_token: str) -> object:
-    from . import _local
+    from . import _local, _native
 
     if len(definition) != 1:
         raise ValueError("an application definition must contain exactly one URI")
     identity, body = next(iter(definition.items()))
-    body = json.dumps([ValueLink(identity).to_json(), body], separators=(",", ":"))
+    body = _local.backend().StateHandle.from_definition(identity, _native.lower(body))
     request = _local.kernel_request(
         "PUT",
         root,
         [("authorization", f"Bearer {bearer_token}"), ("content-type", "application/json")],
-        _local.state_handle(body),
+        body,
     )
     return kernel.dispatch(request)
 
@@ -1002,20 +1022,20 @@ def _install_wasm_library(
     if bearer_token is None:
         raise ValueError("expected `token` for WASM installs")
 
-    kernel = _kernel_for_library_install(
+    with _kernel_for_library_install(
         kernel=kernel,
         data_dir=data_dir,
         token=token,
-    )
-    module = wasm_path.read_bytes()
-    if not module:
-        raise RuntimeError(f"WASM binary {wasm_path} is empty")
-    from . import _local
+    ) as kernel:
+        module = wasm_path.read_bytes()
+        if not module:
+            raise RuntimeError(f"WASM binary {wasm_path} is empty")
+        from . import _local
 
-    request = _local.kernel_request(
-        "PUT",
-        _LIB_ROOT_URI.path,
-        [("authorization", f"Bearer {bearer_token}"), ("content-type", "application/wasm")],
-        _local.state_handle(module),
-    )
-    return kernel.dispatch(request)
+        request = _local.kernel_request(
+            "PUT",
+            _LIB_ROOT_URI.path,
+            [("authorization", f"Bearer {bearer_token}"), ("content-type", "application/wasm")],
+            _local.state_handle(module),
+        )
+        return kernel.dispatch(request)

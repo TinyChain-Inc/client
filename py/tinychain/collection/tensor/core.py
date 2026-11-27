@@ -1,44 +1,88 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from numbers import Number as NumberABC
-from typing import Literal
 
 from ...uri import URI
 from ...state.collection import Collection
 from ...state.scalar import (
     Bool,
     Comparable,
-    IdRef,
     Number,
     Scalar,
     Tuple,
     autobox,
-    tcref_form_of,
 )
 from ...state.value import Number as ValueNumber
 from ...autodiff.tracing import record_operation
-from ._common import infer_broadcast_axes, normalize_permutation, normalize_shape, params, reduce_args
-from ._wire import encode_view_schema
-from .backend import DenseTensor, TensorBackend, TensorWireTensorBackend
+from ._common import params, reduce_args
 from .routes import TENSOR_CLASS_URI, tensor_route
-from .schema import TensorStorageLayout, TensorStorageSchema, TensorViewSchema
-from .view_ops import BroadcastViewOp, ReshapeViewOp, SliceViewOp, TensorViewOp, TransposeViewOp
-from .view_spec import TensorViewSpec
 
-_F32_DTYPE_URI = URI(ValueNumber, "float", "32")
-_F64_DTYPE_URI = URI(ValueNumber, "float", "64")
-_U64_DTYPE_URI = URI(ValueNumber, "uint", "64")
+_DTYPE_URIS = {
+    f"{short}{bits}": str(URI(ValueNumber, family, str(bits)))
+    for short, family, widths in (
+        ("i", "int", (8, 16, 32, 64)),
+        ("u", "uint", (8, 16, 32, 64)),
+        ("f", "float", (32, 64)),
+        ("c", "complex", (32, 64)),
+    )
+    for bits in widths
+}
+_DTYPES_BY_URI = {uri: dtype for dtype, uri in _DTYPE_URIS.items()}
+_DTYPE_ALIASES = {
+    f"{family}{dtype[1:]}": dtype
+    for dtype in _DTYPE_URIS
+    for family in ({"i": "int", "u": "uint", "f": "float", "c": "complex"}[dtype[0]],)
+}
+
+
+def _normalize_dtype(dtype: str) -> str:
+    dtype = _DTYPES_BY_URI.get(dtype, dtype.strip().lower())
+    dtype = _DTYPE_ALIASES.get(dtype, dtype)
+    if dtype not in _DTYPE_URIS:
+        raise TypeError(f"unsupported tensor dtype {dtype}")
+    return dtype
+
+
+def _decode_number(dtype: str, value: object) -> int | float | complex:
+    if dtype.startswith("c"):
+        if not isinstance(value, list) or len(value) != 2:
+            raise TypeError("complex Tensor values must be [real, imaginary]")
+        return complex(float(value[0]), float(value[1]))
+    return float(value) if dtype.startswith("f") else int(value)
+
+
+def _encode_number(value: int | float | complex) -> object:
+    return [value.real, value.imag] if isinstance(value, complex) else value
+
+
+def _is_sparse(values: list) -> bool:
+    return not values or (
+        isinstance(values[0], list) and bool(values[0]) and isinstance(values[0][0], list)
+    )
+
+
+def _validate_shape(shape):
+    shape = list(shape)
+    if not shape or len(shape) > 4096 or any(
+        type(dim) is not int or not 0 < dim < 2**64 for dim in shape
+    ):
+        raise ValueError("Tensor shape must contain at most 4096 positive u64 dimensions")
+    size = 1
+    for dim in shape:
+        size *= dim
+    if size >= 2**64:
+        raise ValueError("Tensor logical size exceeds u64")
+    return shape, size
 
 
 class Tensor(Collection, Comparable):
     """TinyChain tensor.
 
     A tensor may be symbolic (backed by an IR ref/op) or materialized (backed by
-    eager backend data). User code should not need to distinguish those cases.
+    a validated native payload). User code should not need to distinguish those cases.
     """
 
-    __slots__ = ("_native", "_view_ops", "_subject_root", "_view_ops_materialized")
+    __slots__ = ()
 
     __uri__: URI = TENSOR_CLASS_URI
 
@@ -47,9 +91,41 @@ class Tensor(Collection, Comparable):
         cls,
         dtype: str,
         shape: list[int] | tuple[int, ...],
-        values: list[int | float] | tuple[int | float, ...],
+        values: list[int | float | complex] | tuple[int | float | complex, ...],
     ) -> "Tensor":
-        return cls(native=DenseTensor.new(dtype, shape, values))
+        dtype = _normalize_dtype(dtype)
+        if dtype.startswith("c"):
+            values = [complex(value) for value in values]
+        shape, size = _validate_shape(shape)
+        if len(values) != size:
+            raise ValueError(f"dense Tensor shape requires {size} values, found {len(values)}")
+        return cls({str(TENSOR_CLASS_URI): [[_DTYPE_URIS[dtype], shape], [_encode_number(value) for value in values]]})
+
+    @classmethod
+    def sparse(
+        cls,
+        dtype: str,
+        shape: list[int] | tuple[int, ...],
+        entries: list[tuple[list[int] | tuple[int, ...], int | float | complex]],
+    ) -> "Tensor":
+        """Construct a tensor from ordered nonzero entries with implicit zeros."""
+        dtype = _normalize_dtype(dtype)
+        shape, _ = _validate_shape(shape)
+        values = []
+        previous = None
+        for coord, value in entries:
+            coord = list(coord)
+            if len(coord) != len(shape) or any(type(i) is not int or not 0 <= i < dim for i, dim in zip(coord, shape)):
+                raise ValueError("sparse Tensor coordinate is outside its shape")
+            if previous is not None and previous >= coord:
+                raise ValueError("sparse Tensor coordinates must be ordered and unique")
+            if value == 0:
+                raise ValueError("sparse Tensor entries must be nonzero")
+            previous = coord
+            if dtype.startswith("c"):
+                value = complex(value)
+            values.append([coord, _encode_number(value)])
+        return cls({str(TENSOR_CLASS_URI): [[_DTYPE_URIS[dtype], shape], values]})
 
     @classmethod
     def _from_payload(cls, payload: object) -> "Tensor":
@@ -65,155 +141,22 @@ class Tensor(Collection, Comparable):
         ):
             raise TypeError("invalid Tensor payload")
 
-        dtype = {
-            str(_F32_DTYPE_URI): "f32",
-            str(_F64_DTYPE_URI): "f64",
-            str(_U64_DTYPE_URI): "u64",
-        }.get(meta[0])
+        dtype = _DTYPES_BY_URI.get(meta[0])
         if dtype is None:
             raise TypeError(f"unsupported tensor dtype {meta[0]}")
-        cast = float if dtype.startswith("f") else int
-        return cls.dense(dtype, [int(dim) for dim in meta[1]], [cast(value) for value in values])
-
-    def __init__(
-        self,
-        form: object = None,
-        *,
-        native: object = None,
-        view_ops: tuple[TensorViewOp, ...] = (),
-        subject_root: str | None = None,
-        view_ops_materialized: bool | None = None,
-    ):
-        if native is not None and form is not None:
-            raise TypeError("Tensor accepts either native data or symbolic form")
-        super().__init__(form)
-        self._native = native
-        self._view_ops = view_ops
-        if view_ops_materialized is not None:
-            self._view_ops_materialized = view_ops_materialized
-        else:
-            self._view_ops_materialized = native is not None
-
-        if subject_root is not None:
-            self._subject_root = subject_root
-        elif form is not None:
-            ref_form = tcref_form_of(form)
-            self._subject_root = ref_form.key() if isinstance(ref_form, IdRef) else None
-        else:
-            self._subject_root = None
-
-    def _tensor_post(
-        self,
-        operator_segment: str,
-        params: dict[str, object],
-        *,
-        rtype,
-    ):
-        return self._post(operator_segment, params, rtype=rtype)
-
-    @property
-    def native(self) -> object | None:
-        return self._native
-
-    @property
-    def view_ops(self) -> tuple[TensorViewOp, ...]:
-        return self._view_ops
-
-    def _append_view_op(self, op: TensorViewOp, result: "Tensor") -> "Tensor":
-        result._view_ops = self._view_ops + (op,)
-        result._subject_root = self._subject_root
-        result._view_ops_materialized = False
-        return result
-
-    def view_spec(self) -> TensorViewSpec:
-        return TensorViewSpec(ops=self._view_ops)
-
-    def to_view_schema(self, *, base_shape: object | None = None) -> TensorViewSchema:
-        if base_shape is None:
-            inferred = self._native_attr("shape")
-            if inferred is None:
-                raise TypeError("base_shape is required for symbolic tensors")
-            base_shape = inferred
-
-        return self.view_spec().to_view_schema(base_shape=base_shape)
-
-    def to_storage_schema(
-        self,
-        *,
-        base_shape: object | None = None,
-        dtype: str = "f32",
-        layout: Literal["dense", "sparse"] = "dense",
-        sparse_axis: int | None = None,
-    ) -> TensorStorageSchema:
-        if base_shape is None:
-            inferred = self._native_attr("shape")
-            if inferred is None:
-                raise TypeError("base_shape is required for symbolic tensors")
-            base_shape = inferred
-
-        normalized = normalize_shape(base_shape)
-        if normalized is None:
-            raise TypeError("base_shape must be an iterable of integer dimensions")
-        if not normalized:
-            raise ValueError("base_shape must not be empty")
-
-        layout_schema = TensorStorageLayout(kind=layout, sparse_axis=sparse_axis)
-        return TensorStorageSchema(dtype=dtype, shape=normalized, layout=layout_schema)
-
-
-    def _transform_get(self, method: str, arg: object) -> "Tensor":
-        if self._subject_root is None:
-            return self._get(method, autobox(arg), rtype=Tensor)
-
-        return Tensor._get_ref(f"{self._subject_root}/{method}", autobox(arg))
-
-    def _native_transform(self, method: str, *args: object) -> object | None:
-        if self._native is None:
-            return None
-
-        if isinstance(self._native, TensorBackend):
-            op = {
-                "transpose": TransposeViewOp(kind="transpose", permutation=normalize_permutation(args[0] if args else None)),
-                "broadcast": BroadcastViewOp(kind="broadcast", shape=normalize_shape(args[0] if args else ()) or (), broadcast_axes=None),
-                "reshape": ReshapeViewOp(kind="reshape", shape=normalize_shape(args[0] if args else ()) or ()),
-                "slice": SliceViewOp(kind="slice", bounds=args[0] if args else None),
-            }.get(method)
-
-            if op is not None:
-                return self._native.apply_view_op(op)
-
-        native_method = getattr(self._native, method, None)
-        if native_method is None or not callable(native_method):
-            return None
-
-        return native_method(*args)
-
-    def _native_attr(self, name: str) -> object | None:
-        if self._native is None:
-            return None
-        attr = getattr(self._native, name)
-        return attr() if callable(attr) else attr
-
-    def _apply_view_transform(
-        self,
-        *,
-        method: str,
-        arg: object,
-        op: TensorViewOp,
-        symbolic_builder: Callable[[], "Tensor"] | None = None,
-    ) -> "Tensor":
-        native = self._native_transform(method, arg)
-        if native is not None:
-            return Tensor(native=native, view_ops=self._view_ops + (op,), view_ops_materialized=True)
-
-        result = symbolic_builder() if symbolic_builder is not None else self._transform_get(method, arg)
-        return self._append_view_op(op, result)
+        if not _is_sparse(values):
+            return cls.dense(dtype, meta[1], [_decode_number(dtype, value) for value in values])
+        entries = []
+        for entry in values:
+            if not (isinstance(entry, list) and len(entry) == 2 and isinstance(entry[0], list)):
+                raise TypeError("sparse Tensor entries must be [coordinate, value]")
+            entries.append((entry[0], _decode_number(dtype, entry[1])))
+        return cls.sparse(dtype, meta[1], entries)
 
     @property
     def dtype(self) -> object:
-        dtype = self._native_attr("dtype")
-        if dtype is not None:
-            return dtype
+        if isinstance(self._form, dict) and str(TENSOR_CLASS_URI) in self._form:
+            return _DTYPES_BY_URI[self._form[str(TENSOR_CLASS_URI)][0][0]]
         return self._post("dtype", rtype=Scalar)
 
     @property
@@ -222,11 +165,8 @@ class Tensor(Collection, Comparable):
 
     @property
     def shape(self) -> object:
-        shape = self._native_attr("shape")
-        if shape is not None:
-            if isinstance(self._native, DenseTensor):
-                return list(shape)
-            return shape
+        if isinstance(self._form, dict) and str(TENSOR_CLASS_URI) in self._form:
+            return list(self._form[str(TENSOR_CLASS_URI)][0][1])
         return self._post("shape", rtype=Tuple)
 
     @property
@@ -239,27 +179,22 @@ class Tensor(Collection, Comparable):
     def any(self) -> Bool:
         return self._post("any", rtype=Bool)
 
-    def broadcast(self, shape: object) -> "Tensor":
-        normalized_shape = normalize_shape(shape)
-        source_shape = self._native_attr("shape")
-        broadcast_axes = (
-            infer_broadcast_axes(source_shape, normalized_shape)
-            if normalized_shape is not None
-            else None
-        )
-        op = BroadcastViewOp(
-            kind="broadcast",
-            shape=normalized_shape or (),
-            broadcast_axes=broadcast_axes,
-        )
+    def as_dense(self) -> "Tensor":
+        """Include implicit zeros in operations which require a dense result."""
+        return self._get("as_dense", rtype=Tensor)
 
-        return self._apply_view_transform(method="broadcast", arg=shape, op=op)
+    def broadcast(self, shape: object) -> "Tensor":
+        return self._get("broadcast", autobox(shape), rtype=Tensor)
 
     def cast(self, number_type: object) -> "Tensor":
         return self._get("cast", autobox(number_type), rtype=Tensor)
 
     def copy(self) -> "Tensor":
         return Tensor._post_ref(tensor_route("copy_from"), {"tensor": self})
+
+    def exp(self) -> "Tensor":
+        """Exponentiate dense values; convert sparse inputs with ``as_dense`` first."""
+        return self._post("exp", {}, rtype=Tensor)
 
     def expand_dims(self, axes: object = None) -> "Tensor":
         return self._get("expand_dims", autobox(axes), rtype=Tensor)
@@ -310,24 +245,24 @@ class Tensor(Collection, Comparable):
         return self._post("product", reduce_args(axes, keepdims), rtype=Scalar)
 
     def reshape(self, shape: object) -> "Tensor":
-        op = ReshapeViewOp(kind="reshape", shape=normalize_shape(shape) or ())
-
-        return self._apply_view_transform(method="reshape", arg=shape, op=op)
+        return self._get("reshape", autobox(shape), rtype=Tensor)
 
     def slice(self, bounds: object) -> "Tensor":
-        op = SliceViewOp(kind="slice", bounds=bounds)
+        """Select values; ``write`` addresses this Tensor with the same bounds.
 
-        def _symbolic_slice() -> "Tensor":
-            if self._subject_root is None:
-                return self._get(key=autobox(bounds), rtype=Tensor)
-            return Tensor._get_ref(self._subject_root, autobox(bounds))
+        The returned native view is read-only. Further selections or transforms
+        address that view, so their writes are rejected by the host.
+        """
+        parent = self
+        bounds = autobox(bounds)
 
-        return self._apply_view_transform(
-            method="slice",
-            arg=bounds,
-            op=op,
-            symbolic_builder=_symbolic_slice,
-        )
+        class Selection(Tensor):
+            __slots__ = ()
+
+            def write(self, value: object) -> Tensor:
+                return parent._put(autobox(value), key=bounds, rtype=Tensor)
+
+        return self._get(key=bounds, rtype=Selection)
 
     def std(self, axes: object = None, keepdims: bool = False) -> Scalar:
         """Returns Scalar. Autodiff (VJP) for reductions is unsupported in Phase 1."""
@@ -338,42 +273,16 @@ class Tensor(Collection, Comparable):
         return self._post("sum", reduce_args(axes, keepdims), rtype=Scalar)
 
     def transpose(self, permutation: object = None) -> "Tensor":
-        op = TransposeViewOp(kind="transpose", permutation=normalize_permutation(permutation))
-        result = self._apply_view_transform(method="transpose", arg=permutation, op=op)
+        result = self._get("transpose", autobox(permutation), rtype=Tensor)
         record_operation("transpose", (self,), result, {"permutation": permutation})
         return result
-
-    def materialize_view_spec(self) -> "Tensor":
-        """Apply the current view spec through the canonical backend wire hook."""
-        if self._native is None or not isinstance(self._native, TensorWireTensorBackend):
-            return self
-
-        if self._view_ops_materialized:
-            return self
-
-        spec = self.view_spec()
-        if not spec.ops:
-            return self
-
-        base_shape = self._native_attr("shape")
-        if base_shape is None:
-            return self
-        wire = encode_view_schema(spec.to_view_schema(base_shape=base_shape))
-        native = self._native.apply_view_wire(wire)
-
-        return Tensor(
-            native=native,
-            view_ops=self._view_ops,
-            subject_root=self._subject_root,
-            view_ops_materialized=True,
-        )
 
     def write(self, value: object) -> "Tensor":
         return self._put(autobox(value), rtype=Tensor)
 
     def matmul(self, other: object) -> "Tensor":
         right = autobox(other)
-        result = self._tensor_post("matmul", {"r": right}, rtype=Tensor)
+        result = self._post("matmul", {"r": right}, rtype=Tensor)
         record_operation("matmul", (self, other), result)
         return result
 
@@ -381,7 +290,7 @@ class Tensor(Collection, Comparable):
         return self._binary_tensor("and", other)
 
     def logical_not(self) -> "Tensor":
-        result = self._tensor_post("not", {}, rtype=Tensor)
+        result = self._post("not", {}, rtype=Tensor)
         return result
 
     def logical_or(self, other: object) -> "Tensor":
@@ -402,7 +311,7 @@ class Tensor(Collection, Comparable):
     def _binary_tensor(self, operator_segment: str, other: object) -> "Tensor":
         left = self
         right = autobox(other)
-        return left._tensor_post(operator_segment, {"r": right}, rtype=Tensor)
+        return left._post(operator_segment, {"r": right}, rtype=Tensor)
 
     def __add__(self, other: object) -> "Tensor":
         result = self._binary_tensor("add", other)
@@ -445,35 +354,28 @@ class Tensor(Collection, Comparable):
         raise TypeError(f"unsupported Tensor reverse division operand {type(other).__name__}")
 
     @property
+    def _payload(self):
+        if isinstance(self._form, dict) and str(TENSOR_CLASS_URI) in self._form:
+            return self._form[str(TENSOR_CLASS_URI)]
+        raise AttributeError("Tensor payload requires a materialized client value")
+
+    @property
+    def layout(self) -> str:
+        return "sparse" if _is_sparse(self._payload[1]) else "dense"
+
+    @property
+    def entries(self) -> list[tuple[list[int], int | float | complex]]:
+        """Return the stored entries of a materialized sparse Tensor."""
+        if self.layout != "sparse":
+            raise AttributeError("Tensor entries require a materialized sparse value")
+        return [(list(coord), _decode_number(self.dtype, value)) for coord, value in self._payload[1]]
+
+    @property
     def values(self) -> object:
-        native = self._native_attr("values")
-        if native is None:
-            raise AttributeError("symbolic Tensor has no materialized values")
-        if isinstance(self._native, DenseTensor):
-            return list(native)
-        return native
-
-    def to_json(self) -> object:
-        if self._native is None:
-            return super().to_json()
-
-        dtype_text = str(self.dtype)
-        normalized = dtype_text.strip().lower()
-        dtype = {
-            "f32": str(_F32_DTYPE_URI),
-            "float32": str(_F32_DTYPE_URI),
-            "f64": str(_F64_DTYPE_URI),
-            "float64": str(_F64_DTYPE_URI),
-            "u64": str(_U64_DTYPE_URI),
-            "uint64": str(_U64_DTYPE_URI),
-        }.get(normalized, dtype_text)
-
-        return {
-            str(TENSOR_CLASS_URI): [
-                [dtype, self.shape],
-                self.values,
-            ]
-        }
+        """Return stored values; sparse values exclude implicit zeros."""
+        if self.layout == "sparse":
+            return [value for _, value in self.entries]
+        return [_decode_number(self.dtype, value) for value in self._payload[1]]
 
 
 __all__ = ["Tensor"]

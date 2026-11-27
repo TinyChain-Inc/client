@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
+
 import tinychain as tc
 from tinychain.library import library_definition
 
@@ -199,3 +200,13 @@ def test_library_literal_results_and_construction_validation_are_unchanged(monke
     Invalid()  # Class declarations are validated when compiling, not constructing.
     with pytest.raises(TypeError, match="Class subclasses"):
         library_definition(Invalid)
+
+
+def test_bound_service_collection_uses_a_canonical_link_subject():
+    from tinychain.state.value import Link
+
+    instance = Example()
+    address = str(instance.id().child("data"))
+    assert isinstance(tc.state.form_of(instance.data), Link)
+    assert instance.data.to_json() == Link(address).to_json()
+    assert tc.state.form_of(instance.data.count()).subject == address + "/count"

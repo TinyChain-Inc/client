@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import importlib
-import importlib.util
 import sys
 from typing import Any
 
 
 def is_available() -> bool:
-    return (
-        sys.modules.get("tinychain_local") is not None
-        or importlib.util.find_spec("tinychain_local") is not None
-    )
+    module = sys.modules.get("tinychain_local")
+    if module is None:
+        try:
+            module = importlib.import_module("tinychain_local")
+        except ImportError:
+            return False
+    return hasattr(module, "KernelHandle")
 
 
 def backend() -> Any:
@@ -28,7 +30,10 @@ def backend() -> Any:
 
 
 def kernel_handle() -> Any:
-    return backend().KernelHandle
+    local = backend()
+    if not hasattr(local, "KernelHandle"):
+        raise ImportError("build tinychain-local with the local-host feature for local execution")
+    return local.KernelHandle
 
 
 def kernel_request(*args: object) -> Any:

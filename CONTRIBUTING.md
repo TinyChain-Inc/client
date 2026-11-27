@@ -24,8 +24,8 @@ client directory rather than expanding this top-level guide.
 
 ## Style and quality gates
 
-- Follow the shared repository style guide in
-  [`CODE_STYLE.md`](/home/haydn/Documents/tcv2/CODE_STYLE.md).
+- Follow the repository-local [ownership rules](AGENTS.md) and the affected
+  client's guide.
 - Keep changes minimal and avoid adding fallback or transitional code paths.
 - Validate only the relevant client surfaces you changed (for example:
   `client/web` uses `npm run test:all`, `client/py` uses `pytest`).
@@ -35,7 +35,9 @@ client directory rather than expanding this top-level guide.
 - Update the affected client README when behavior, configuration, or API shape
   changes.
 - Keep examples aligned with production behavior and avoid stale fallback
-  guidance.
+  guidance. Python Service ownership and support status belong in
+  [SERVICE_PARITY.md](py/SERVICE_PARITY.md); preserve owner-targeted selection
+  writes and runtime rejection of mutations through returned views.
 
 ## Rights and licensing
 

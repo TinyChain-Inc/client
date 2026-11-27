@@ -28,7 +28,9 @@ def with_library(
     Create a local kernel and install a Library or Service definition.
 
     Dependency authorities are part of the references compiled into that
-    definition; no adapter-local routing table is constructed.
+    definition; no adapter-local routing table is constructed. Use the returned
+    kernel as a context manager, or call shutdown() after consuming or dropping
+    unfinished results.
     """
     from . import _local
 
@@ -40,5 +42,9 @@ def with_library(
     kernel = _local.kernel_handle().local(
         data_dir=str(data_dir), workspace=str(workspace), token=token
     )
-    install(library, kernel=kernel, token=token)
+    try:
+        install(library, kernel=kernel, token=token)
+    except BaseException:
+        kernel.shutdown()
+        raise
     return kernel

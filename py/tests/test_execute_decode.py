@@ -1,17 +1,8 @@
 from __future__ import annotations
 
-import json
-
 import pytest
+
 import tinychain as tc
-
-
-class _Value:
-    def __init__(self, payload: object):
-        self._payload = payload
-
-    def to_json(self) -> str:
-        return json.dumps(self._payload)
 
 
 class _Body:
@@ -19,7 +10,7 @@ class _Body:
         self._payload = payload
 
     def value(self):
-        return _Value(self._payload)
+        return self._payload
 
 
 class _Response:
@@ -120,7 +111,7 @@ def test_execute_decodes_f64_tensor_when_available(monkeypatch):
 def test_execute_rejects_unknown_tensor_dtype(monkeypatch):
     payload = {
         tc.URI("state", "collection", "tensor").path: [
-            [tc.URI("state", "scalar", "value", "number", "int", "64").path, [2]],
+            [tc.URI("state", "scalar", "value", "number", "int", "128").path, [2]],
             [1, 2],
         ]
     }

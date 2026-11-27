@@ -157,12 +157,17 @@ class Class(State):
 
     @classmethod
     def definition(cls) -> dict[str, object]:
+        from . import _native
+
+        return _native.Codec().wire_object(cls._definition_form())
+
+    @classmethod
+    def _definition_form(cls) -> dict[str, object]:
+        from .state.value import Link
+
         return {str(cls.class_id()): {
-            "parent": str(cls.parent_id()),
-            "prototype": {
-                name: value.to_json() if hasattr(value, "to_json") else value
-                for name, value in cls.prototype().items()
-            },
+            "parent": Link(cls.parent_id()),
+            "prototype": cls.prototype(),
         }}
 
     @classmethod

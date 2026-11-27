@@ -15,32 +15,9 @@ def _sorted_items(obj: Mapping[str, Any]) -> list[tuple[str, Any]]:
 
 
 def _json_of(form: object) -> object:
-    from ..value import Value
+    from ... import _native
 
-    if isinstance(form, (OpRef, OpDef, After, Cond, While, ForEach)):
-        return form.to_json()
-    if isinstance(form, Value):
-        op = getattr(form, "op", None)
-        if op is not None and not isinstance(op, OpRef):
-            raise TypeError("runtime requests must be lowered by the Library compiler")
-        return form.to_json()
-    if isinstance(form, IdRef):
-        return {form.key(): []}
-    if isinstance(form, Scalar):
-        return _json_of(form_of(form))
-    if isinstance(form, TCRef):
-        ref_form = form_of(form)
-        if ref_form is form:
-            return form.to_json()
-        return _json_of(ref_form)
-    if isinstance(form, Mapping):
-        return {k: _json_of(v) for k, v in _sorted_items(form)}
-    if isinstance(form, Sequence) and not isinstance(form, (str, bytes, bytearray)):
-        return [_json_of(v) for v in form]
-    if form is None or isinstance(form, (bool, int, float, str)):
-        return form
-
-    raise TypeError(f"cannot encode form of type {type(form).__name__}")
+    return _native.to_wire(form)
 
 
 def autobox(obj: object) -> State:
@@ -88,62 +65,26 @@ def autobox(obj: object) -> State:
     if isinstance(obj, (list, tuple)):
         return tuple_of([autobox(v) for v in obj])
 
-    value_obj = Value.from_json(obj)
+    from ..value import _construct_value
+
+    value_obj = _construct_value(obj)
     return _scalar_like(value_obj, value=value_obj)
 
 
 def _tensor_from_native(obj: object) -> "State | None":
-    # Treat numpy-like dense arrays as Tensor-native inputs.
+    # NumPy arrays become ordinary canonical Tensor literals.
     module = type(obj).__module__
     if not (module == "numpy" or module.startswith("numpy.")):
         return None
 
-    if not hasattr(obj, "shape") or not hasattr(obj, "dtype"):
+    from numpy import ndarray
+
+    if not isinstance(obj, ndarray):
         return None
 
     from ...collection.tensor import Tensor
 
-    return Tensor(native=_NumpyTensorNative(obj))
-
-
-class _NumpyTensorNative:
-    __slots__ = ("_array",)
-
-    def __init__(self, array: object):
-        self._array = array
-
-    @property
-    def dtype(self) -> object:
-        return getattr(self._array, "dtype")
-
-    @property
-    def shape(self) -> object:
-        return getattr(self._array, "shape")
-
-    @property
-    def values(self) -> object:
-        ravel = getattr(self._array, "ravel", None)
-        if callable(ravel):
-            flat = ravel()
-            tolist = getattr(flat, "tolist", None)
-            if callable(tolist):
-                return tolist()
-
-        tolist = getattr(self._array, "tolist", None)
-        if callable(tolist):
-            return _flatten_dense_values(tolist())
-
-        raise TypeError("numpy-like tensor value must expose ravel/tolist")
-
-
-def _flatten_dense_values(value: object) -> list[object]:
-    if isinstance(value, list):
-        flat: list[object] = []
-        for item in value:
-            flat.extend(_flatten_dense_values(item))
-        return flat
-
-    return [value]
+    return Tensor.dense(str(obj.dtype), list(obj.shape), obj.ravel().tolist())
 
 
 def _is_string_scalar(obj: object) -> bool:
@@ -299,45 +240,6 @@ def _scalar_like(
     return scalar
 
 
-def _typed_template(value: Scalar) -> Scalar:
-    constructors: dict[type[Scalar], type[Scalar]] = {
-        Number: Number,
-        Bool: Bool,
-        Tuple: Tuple,
-        Map: Map,
-        String: String,
-        Numeric: Numeric,
-        Iterable: Iterable,
-        Comparable: Comparable,
-    }
-    scalar_type = constructors.get(type(value), Scalar)
-    return scalar_type()
-
-
-def _merge_map_shape(left: Mapping[str, Scalar] | None, right: Mapping[str, Scalar] | None) -> Mapping[str, Scalar] | None:
-    if left is None or right is None:
-        return None
-
-    merged: dict[str, Scalar] = {}
-    for key in left.keys() & right.keys():
-        lv = left[key]
-        rv = right[key]
-        merged[key] = _typed_template(lv) if type(lv) is type(rv) else Scalar()
-
-    return merged if merged else None
-
-
-def _merge_tuple_shape(left: Sequence[Scalar] | None, right: Sequence[Scalar] | None) -> Sequence[Scalar] | None:
-    if left is None or right is None:
-        return None
-
-    merged: list[Scalar] = []
-    for lv, rv in zip(left, right):
-        merged.append(_typed_template(lv) if type(lv) is type(rv) else Scalar())
-
-    return merged if merged else None
-
-
 def _typed_from_ref_like(ref: TCRef, exemplar: Scalar) -> Scalar:
     exemplar_form = form_of(exemplar)
     if isinstance(exemplar_form, OpDef):
@@ -349,12 +251,8 @@ def _typed_from_ref_like(ref: TCRef, exemplar: Scalar) -> Scalar:
     if isinstance(exemplar, String):
         return String(ref)
     if isinstance(exemplar, Map):
-        if isinstance(exemplar_form, Mapping):
-            return Map(dict(exemplar_form))
         return Map(ref)
     if isinstance(exemplar, Tuple):
-        if isinstance(exemplar_form, Sequence) and not isinstance(exemplar_form, (str, bytes, bytearray)):
-            return Tuple(list(exemplar_form))
         return Tuple(ref)
     if isinstance(exemplar, Numeric):
         return Symbol(ref)
@@ -371,26 +269,6 @@ def _typed_from_cond(cond_ref: Cond) -> Scalar:
     ref = cond_ref
 
     if type(then_value) is type(else_value):
-        if isinstance(then_value, Map) and isinstance(else_value, Map):
-            then_form = form_of(then_value)
-            else_form = form_of(else_value)
-            merged = _merge_map_shape(
-                then_form if isinstance(then_form, Mapping) else None,
-                else_form if isinstance(else_form, Mapping) else None,
-            )
-            if merged is not None:
-                return Map(dict(merged))
-            return Map(ref)
-        if isinstance(then_value, Tuple) and isinstance(else_value, Tuple):
-            then_form = form_of(then_value)
-            else_form = form_of(else_value)
-            merged = _merge_tuple_shape(
-                then_form if isinstance(then_form, Sequence) and not isinstance(then_form, (str, bytes, bytearray)) else None,
-                else_form if isinstance(else_form, Sequence) and not isinstance(else_form, (str, bytes, bytearray)) else None,
-            )
-            if merged is not None:
-                return Tuple(list(merged))
-            return Tuple(ref)
         return _typed_from_ref_like(ref, then_value)
 
     return Iterable(ref)
@@ -524,7 +402,9 @@ class Scalar(State):
         super().__init__(form)
 
     def to_json(self) -> object:
-        return _json_of(form_of(self))
+        from ... import _native
+
+        return _native.to_wire(self)
 
     def _reflect(self, subject: str, payload_key: str, payload_value: object, *, rtype: type["Scalar"]) -> "Scalar":
         return rtype._post_ref(subject, {payload_key: payload_value})
@@ -546,40 +426,9 @@ class Scalar(State):
 
     @staticmethod
     def from_json(obj: Any) -> "Scalar":
-        from ..value import Value
+        from ... import _native
 
-        if obj is None or isinstance(obj, (bool, int, float, str)):
-            value = Value.from_json(obj)
-            return _scalar_like(value, value=value)
-
-        if isinstance(obj, list):
-            return tuple_of([Scalar.from_json(v) for v in obj])
-
-        if isinstance(obj, dict):
-            if not obj:
-                return map_of({})
-
-            if len(obj) == 1:
-                (key, _), = obj.items()
-                if isinstance(key, str) and key.startswith(str(URI(OpDef))):
-                    return Scalar(OpDef.from_json(obj))
-
-            # Decode TCRef/OpRef maps before generic Value maps to avoid
-            # treating single-entry refs (e.g. {"$id": []}) as plain maps.
-            if len(obj) == 1:
-                if _looks_like_tcref_map(obj):
-                    return Scalar(TCRef.from_json(obj))
-
-            # Try to decode as a Value-typed map.
-            try:
-                value = Value.from_json(obj)
-                return _scalar_like(value, value=value)
-            except (TypeError, ValueError):
-                pass
-
-            return map_of({k: Scalar.from_json(v) for k, v in _sorted_items(obj)})
-
-        raise TypeError(f"cannot decode Scalar from {type(obj).__name__}")
+        return _native.Codec().scalar_from_wire(obj)
 
 
 # Import ref types after Scalar is defined so TCRef can subclass Scalar without a cycle.
@@ -592,7 +441,6 @@ from .refs import (
     PostOpRef,
     TCRef,
     While,
-    _looks_like_tcref_map,
     tcref_form_of,
 )
 
@@ -1000,25 +848,6 @@ class String(Comparable):
 
     def __radd__(self, other: object) -> "String":
         return cast(String, _reverse_post_call(self, other, method="concat", rtype=String, chain_type=String))
-
-
-def _encode_form(form: Sequence[tuple[str, Scalar]]) -> list[list[object]]:
-    return [[name, scalar.to_json()] for name, scalar in form]
-
-
-def _decode_form(raw: Any) -> list[tuple[str, Scalar]]:
-    if not isinstance(raw, list):
-        raise TypeError("expected OpDef form to be a list")
-
-    out: list[tuple[str, Scalar]] = []
-    for item in raw:
-        if not isinstance(item, (list, tuple)) or len(item) != 2:
-            raise TypeError("expected OpDef form entries to be [id, scalar]")
-        name, scalar = item
-        if not isinstance(name, str):
-            raise TypeError("expected OpDef form id to be a string")
-        out.append((name, Scalar.from_json(scalar)))
-    return out
 
 
 def _iter_scalar_nodes(root: Scalar) -> Iterator[Scalar]:

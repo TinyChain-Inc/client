@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import pathlib
 import os
+import pathlib
 import subprocess
+
 import pytest
 
 import tinychain as tc
@@ -13,7 +14,7 @@ REPO_ROOT = tc_testing.repo_root()
 
 def require_cargo() -> None:
     if not tc_testing.cargo_available():
-        pytest.skip("`cargo` not found")
+        pytest.fail("`cargo` not found; install Rust tooling to run these tests")
 
 
 def require_tinychain_local(*, require_library_definition: bool = False):
@@ -100,7 +101,4 @@ def ensure_wasm_example_built(example_name: str) -> pathlib.Path:
 def install_token(*lib_paths: str) -> tc.auth.SignedBearerToken:
     host = os.environ.get("TC_TOKEN_HOST", "http://127.0.0.1:8702")
     actor_id = os.environ.get("TC_ACTOR_ID", "example-admin")
-    try:
-        return tc.auth.mint_rjwt_token(host=host, actor_id=actor_id, libs=lib_paths)
-    except RuntimeError as err:
-        pytest.skip(str(err))
+    return tc.auth.mint_rjwt_token(host=host, actor_id=actor_id, libs=lib_paths)

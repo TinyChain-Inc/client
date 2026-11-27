@@ -35,17 +35,11 @@ def _sorted_items(obj: Mapping[str, Any]) -> list[tuple[str, Any]]:
     return sorted(obj.items(), key=lambda kv: kv[0])
 
 
-def _looks_like_tcref_map(obj: Mapping[str, object]) -> bool:
-    if len(obj) != 1:
-        return False
-
-    (key, _value), = obj.items()
-    return isinstance(key, str) and (
-        key == str(URI(OpRef, "delete")) or key.startswith("/") or key.startswith("$")
-    )
-
-
 def _subject_str(subject: str | URI) -> str:
+    if isinstance(subject, Scalar):
+        from .._ops import subject_of
+
+        return subject_of(subject)
     return str(subject)
 
 
@@ -73,12 +67,9 @@ class TCRef(Scalar):
         return hash((type(self._form), self._form))
 
     def to_json(self) -> dict[str, object]:
-        from . import _json_of, form_of
+        from ... import _native
 
-        raw = _json_of(form_of(self))
-        if not isinstance(raw, dict):
-            raise TypeError("TCRef form must encode to a map")
-        return raw
+        return _native.to_wire(self)
 
     def requires(self, required: set[str]) -> None:
         from ..._lexical import requires
@@ -87,60 +78,9 @@ class TCRef(Scalar):
 
     @staticmethod
     def from_json(obj: Any) -> "TCRef":
-        from . import Scalar
+        from ... import _native
 
-        if not isinstance(obj, dict) or len(obj) != 1:
-            raise TypeError("expected a TCRef op map")
-
-        (key, value), = obj.items()
-        if not isinstance(key, str):
-            raise TypeError("expected TCRef map key to be a string")
-
-        if not _looks_like_tcref_map(obj):
-            raise TypeError("not a TCRef op map")
-
-        if key == str(URI(TCRef, "cond")):
-            if not isinstance(value, list) or len(value) != 3:
-                raise TypeError("invalid Cond ref encoding")
-            raw_cond, raw_then, raw_or_else = value
-            cond = TCRef.from_json(raw_cond)
-            return Cond(
-                cond,
-                Scalar.from_json(raw_then),
-                Scalar.from_json(raw_or_else),
-            )
-
-        if key == str(URI(TCRef, "after")):
-            if not isinstance(value, list) or len(value) != 2:
-                raise TypeError("invalid After ref encoding")
-            when, then = value
-            return After(Scalar.from_json(when), Scalar.from_json(then))
-
-        if key == str(URI(TCRef, "while")):
-            if not isinstance(value, list) or len(value) != 3:
-                raise TypeError("invalid While ref encoding")
-            cond, op, state = value
-            return While(
-                Scalar.from_json(cond),
-                Scalar.from_json(op),
-                Scalar.from_json(state),
-            )
-        if key == str(URI(TCRef, "for_each")):
-            if not isinstance(value, list) or len(value) != 3:
-                raise TypeError("invalid ForEach ref encoding")
-            items, op, item_name = value
-            if not isinstance(item_name, str):
-                raise TypeError("expected ForEach item_name to be a string")
-            return ForEach(
-                Scalar.from_json(items),
-                Scalar.from_json(op),
-                item_name,
-            )
-
-        if key.startswith("$") and isinstance(value, list) and not value:
-            return IdRef(key[1:])
-
-        return OpRef.from_json(obj)
+        return _native.Codec().ref_from_wire(obj)
 
 
 class OpRef(TCRef):
@@ -173,7 +113,9 @@ class OpRef(TCRef):
     __hash__ = object.__hash__
 
     def to_json(self) -> dict[str, object]:
-        raise NotImplementedError()
+        from ... import _native
+
+        return _native.to_wire(self)
 
     def requires(self, required: set[str]) -> None:
         from ..._lexical import requires
@@ -191,37 +133,12 @@ class OpRef(TCRef):
 
     @staticmethod
     def from_json(obj: Any) -> "OpRef":
-        from . import Scalar
+        from ... import _native
 
-        if not isinstance(obj, dict) or len(obj) != 1:
-            raise TypeError("expected an OpRef map")
-
-        (key, value), = obj.items()
-        if key == str(URI(OpRef, "delete")):
-            if not isinstance(value, list) or len(value) != 2:
-                raise TypeError("invalid DELETE opref encoding")
-            subject, raw_key = value
-            if not isinstance(subject, str):
-                raise TypeError("expected DELETE subject to be a string")
-            return DeleteOpRef(subject, Scalar.from_json(raw_key))
-
-        if not isinstance(key, str):
-            raise TypeError("expected OpRef subject key to be a string")
-
-        if isinstance(value, list):
-            if len(value) == 1:
-                return GetOpRef(key, Scalar.from_json(value[0]))
-            if len(value) == 2:
-                return PutOpRef(key, Scalar.from_json(value[0]), Scalar.from_json(value[1]))
-            raise TypeError("invalid opref params (expected 1 or 2 elements)")
-
-        if isinstance(value, dict):
-            params: dict[str, Scalar] = {}
-            for name, param_value in _sorted_items(value):
-                params[name] = Scalar.from_json(param_value)
-            return PostOpRef(key, params)
-
-        raise TypeError("invalid OpRef args (expected list or dict)")
+        value = _native.Codec().ref_from_wire(obj)
+        if not isinstance(value, OpRef):
+            raise TypeError("expected an operation reference")
+        return value
 
 
 class GetOpRef(OpRef):
@@ -246,7 +163,9 @@ class GetOpRef(OpRef):
         return [self._key.to_json()]
 
     def to_json(self) -> dict[str, object]:
-        return {self.subject: self.args}
+        from ... import _native
+
+        return _native.to_wire(self)
 
 
 class PutOpRef(OpRef):
@@ -272,7 +191,9 @@ class PutOpRef(OpRef):
         return [self._key.to_json(), self._value.to_json()]
 
     def to_json(self) -> dict[str, object]:
-        return {self.subject: self.args}
+        from ... import _native
+
+        return _native.to_wire(self)
 
 
 class PostOpRef(OpRef):
@@ -301,7 +222,9 @@ class PostOpRef(OpRef):
         return {key: value.to_json() for key, value in _sorted_items(self._params)}
 
     def to_json(self) -> dict[str, object]:
-        return {self.subject: self.args}
+        from ... import _native
+
+        return _native.to_wire(self)
 
 
 class DeleteOpRef(OpRef):
@@ -326,7 +249,9 @@ class DeleteOpRef(OpRef):
         return self._key.to_json()
 
     def to_json(self) -> dict[str, object]:
-        return {str(URI(OpRef, "delete")): [self.subject, self.args]}
+        from ... import _native
+
+        return _native.to_wire(self)
 
 
 class IdRef(TCRef):
@@ -367,12 +292,9 @@ class After(ControlRef):
         return hash((self.when, self.then))
 
     def to_json(self) -> dict[str, object]:
-        return {
-            str(URI(TCRef, "after")): [
-                self.when.to_json(),
-                self.then.to_json(),
-            ]
-        }
+        from ... import _native
+
+        return _native.to_wire(self)
 
     def requires(self, required: set[str]) -> None:
         from ..._lexical import requires
@@ -399,13 +321,9 @@ class While(ControlRef):
         return hash((self.cond, self.op, self.state))
 
     def to_json(self) -> dict[str, object]:
-        return {
-            str(URI(TCRef, "while")): [
-                self.cond.to_json(),
-                self.op.to_json(),
-                self.state.to_json(),
-            ]
-        }
+        from ... import _native
+
+        return _native.to_wire(self)
 
     def requires(self, required: set[str]) -> None:
         from ..._lexical import requires
@@ -432,13 +350,9 @@ class Cond(ControlRef):
         return hash((self.cond, self.then, self.or_else))
 
     def to_json(self) -> dict[str, object]:
-        return {
-            str(URI(TCRef, "cond")): [
-                self.cond.to_json(),
-                self.then.to_json(),
-                self.or_else.to_json(),
-            ]
-        }
+        from ... import _native
+
+        return _native.to_wire(self)
 
     def requires(self, required: set[str]) -> None:
         from ..._lexical import requires
@@ -465,13 +379,9 @@ class ForEach(ControlRef):
         return hash((self.items, self.op, self.item_name))
 
     def to_json(self) -> dict[str, object]:
-        return {
-            str(URI(TCRef, "for_each")): [
-                self.items.to_json(),
-                self.op.to_json(),
-                self.item_name,
-            ]
-        }
+        from ... import _native
+
+        return _native.to_wire(self)
 
     def requires(self, required: set[str]) -> None:
         from ..._lexical import requires

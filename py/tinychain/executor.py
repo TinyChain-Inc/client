@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import contextvars
 from dataclasses import dataclass
 from typing import Any, Iterable, Optional, Protocol, cast
@@ -51,58 +50,16 @@ class _RemoteRoute:
     target: RequestTarget
 
 
-def _encode_json_body(value: Any) -> "object":
-    from . import _local
+def _local_body(value: Any) -> object:
+    from . import _local, _native
 
-    payload = json.dumps(_encode_payload(value), separators=(",", ":")).encode("utf-8")
-    if _local.is_available():
-        return _local.state_handle(payload)
-    return payload
+    return _local.backend().StateHandle.from_authoring(_native.local_input(value))
 
 
 def _encode_payload(value: Any) -> Any:
-    from .state import (
-        IdRef,
-        OpDef,
-        OpRef as StateOpRef,
-        Scalar,
-        TCRef,
-        While,
-        autobox,
-    )
-    from .state.value import Value
-    from .uri import URI
+    from . import _native
 
-    if hasattr(value, "__tc_route__") and hasattr(value, "__tc_instance__"):
-        route = value.__tc_route__
-        instance = value.__tc_instance__
-        return autobox(route.opdef(instance)).to_json()
-
-    if isinstance(
-        value,
-        (
-            Scalar,
-            Value,
-            TCRef,
-            While,
-            IdRef,
-            OpDef,
-            StateOpRef,
-            URI,
-        ),
-    ):
-        return autobox(value).to_json()
-
-    if isinstance(value, (list, tuple)):
-        return [_encode_payload(item) for item in value]
-
-    if isinstance(value, dict):
-        return {key: _encode_payload(item) for key, item in value.items()}
-
-    if hasattr(value, "to_json"):
-        return value.to_json()
-
-    return value
+    return _native.Codec().wire_object(value)
 
 
 @dataclass(slots=True)
@@ -153,7 +110,7 @@ class Executor:
         if self.kernel is None:
             raise RuntimeError("no local kernel configured for dispatch; set `kernel=` in tc.backend(...)")
 
-        request_body = None if body is None else (_encode_json_body(body) if not hasattr(body, "value") else body)
+        request_body = None if body is None else (_local_body(body) if not hasattr(body, "value") else body)
         request = _local.kernel_request(method, path, self._merge_headers(headers), request_body)
         return self.kernel.dispatch(request)
 
@@ -219,10 +176,9 @@ def _encode_body(body: Any) -> "object":
     if isinstance(body, (bytes, bytearray)):
         from . import _local
 
-        if _local.is_available():
-            return _local.state_handle(bytes(body))
+        return _local.state_handle(bytes(body))
 
-    return _encode_json_body(body)
+    return _local_body(body)
 
 
 def _kernel_dispatch(kernel: object, method: str, path: str, headers, body) -> object:

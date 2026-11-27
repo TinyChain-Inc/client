@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from typing import Iterable, Optional
+from urllib.parse import quote, unquote
 
 @dataclass(frozen=True, slots=True, init=False)
 class URI:
@@ -72,7 +73,7 @@ class URI:
         resolved_host = inherited_host if host is None else host
         resolved_port = inherited_port if port is None else port
 
-        object.__setattr__(self, "path", resolved_path)
+        object.__setattr__(self, "path", _canonical_path(resolved_path))
         object.__setattr__(self, "scheme", resolved_scheme)
         object.__setattr__(self, "host", resolved_host)
         object.__setattr__(self, "port", resolved_port)
@@ -155,11 +156,26 @@ class URI:
 def _segment(label: str, value: str) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError(f"{label} must be a non-empty string")
-    if "/" in value:
-        raise ValueError(f"{label} must not contain '/'")
+    if "/" in value or "\\" in value:
+        raise ValueError(f"{label} must not contain a path separator")
     if value in (".", ".."):
         raise ValueError(f"{label} must not be '.' or '..'")
-    return value
+    if any(ord(char) < 32 or char.isspace() for char in value):
+        raise ValueError(f"{label} must not contain whitespace or control characters")
+    return quote(value, safe="-._~")
+
+
+def _canonical_path(path: str) -> str:
+    if not path or path == "/":
+        return path
+    if not path.startswith("/"):
+        raise ValueError("URI.path must start with '/'")
+    if re.search(r"%(?![0-9a-fA-F]{2})", path):
+        raise ValueError("invalid URI path escape")
+    return "/" + "/".join(
+        _segment("path", unquote(segment, errors="strict"))
+        for segment in path[1:].split("/")
+    )
 
 
 # Canonical grammar for ``Library.resource_name``: lowercase ASCII alphanumeric

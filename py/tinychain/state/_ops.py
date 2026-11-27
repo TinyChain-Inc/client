@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from ..uri import URI, uri
+
 from .scalar.refs import (
-    Cond,
-    ForEach,
+    ControlRef,
     IdRef,
     OpRef,
     TCRef,
-    While,
 )
 
 
@@ -33,21 +31,20 @@ def _stage_subject(owner: object) -> str | None:
 
 
 def _subject_from_candidate(candidate: object, owner: object) -> str | None:
-    if not isinstance(candidate, OpRef):
+    if not isinstance(candidate, (OpRef, ControlRef)):
         return None
-    subject = candidate.subject
-
     staged = _stage_subject(owner)
-    return staged if staged is not None else subject
+    if staged is None:
+        raise TypeError("an intermediate operation requires a lexical Context; use scoped_context() or bind its result")
+    return staged
 
 
 def _state_subject(owner: object, form: object) -> str:
     from .scalar import form_of
+    from .value import Link
 
-    if isinstance(form, OpRef):
-        subject = _subject_from_candidate(form, owner)
-        if subject is not None:
-            return subject
+    if isinstance(form, Link):
+        return str(form_of(form))
 
     subject = _subject_from_candidate(form, owner)
     if subject is not None:
@@ -61,13 +58,6 @@ def _state_subject(owner: object, form: object) -> str:
         subject = _subject_from_candidate(ref_form, owner)
         if subject is not None:
             return subject
-
-        if isinstance(ref_form, Cond):
-            return str(URI(TCRef, "cond"))
-        if isinstance(ref_form, While):
-            return str(URI(TCRef, "while"))
-        if isinstance(ref_form, ForEach):
-            return str(URI(TCRef, "for_each"))
 
     if isinstance(form, Mapping) and len(form) == 1:
         (key, _value), = form.items()

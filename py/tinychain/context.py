@@ -103,9 +103,15 @@ class Context:
         if bound is not None:
             return bound
         prefix = _validate_id(prefix)
+        owner = self
+        while owner._parent is not None:
+            owner = owner._parent
+
         while True:
-            name = f"{prefix}{self._counter}"
-            self._counter += 1
+            # Generated names must also avoid bindings added to an enclosing
+            # operation after a nested operation has been constructed.
+            name = f"{prefix}{owner._counter}"
+            owner._counter += 1
             if not self._contains_visible(name):
                 return self.bind(name, value)
 

@@ -9,16 +9,33 @@ edition = "2024"
 name = "tinychain_local"
 crate-type = ["cdylib"]
 
+[features]
+default = []
+local-host = ["dep:tinychain", "dep:tc-state", "dep:rjwt", "dep:umask"]
+
 [dependencies]
 pyo3 = { version = "0.29", features = ["macros", "extension-module"] }
-tinychain = { path = "../../tc-server", default-features = false, features = ["http-client", "wasm"] }
+tinychain = { path = "../../tc-server", optional = true, default-features = false, features = ["http-client", "http2", "wasm"] }
 base64 = "0.22"
 destream_json = { path = "../../deps/destream_json", default-features = false }
+destream = { path = "../../deps/destream" }
+bytes = "1"
+uuid = "1"
+number-general = { path = "../../deps/number-general", default-features = false }
 futures = "0.3"
+get-size = "0.1"
 pathlink = { path = "../../deps/pathlink" }
-rjwt = { package = "rjwt", path = "../../deps/rjwt/rjwt-core" }
+rjwt = { package = "rjwt", path = "../../deps/rjwt/rjwt-core", optional = true }
 tc-error = { path = "../../tc-error" }
 tc-ir = { path = "../../tc-ir" }
 tc-value = { path = "../../tc-value" }
+tc-state = { path = "../../tc-state", optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
-umask = "2.1"
+umask = { version = "2.1", optional = true }
+
+# Host invariant failures must terminate even detached Tokio tasks.
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"

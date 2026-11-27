@@ -1,8 +1,9 @@
 # TinyChain Python Client
 
 The Python client provides symbolic TinyChain values, application authoring,
-deferred graph construction, HTTP access, and an optional in-process PyO3
-backend. All backends use the same application definitions and native request
+deferred graph construction, HTTP access, and an optional in-process host.
+The required `tinychain_local` extension supplies the shared Rust value and IR
+codecs even for HTTP-only clients. All backends use the same application definitions and native request
 semantics; Python does not own transaction lifecycle or server routing.
 
 ## Install and test
@@ -10,12 +11,15 @@ semantics; Python does not own transaction lifecycle or server routing.
 From the client repository root:
 
 ```bash
-python -m pip install -r py/requirements.txt
+python -m pip install maturin
+python -m maturin develop --manifest-path rust/Cargo.toml
+python -m pip install -e py
 python -m pytest py/tests
 ```
 
-The `tinychain_local` extension is owned by `client/rust`. From the runtime
-workspace, build and install it with:
+The extension builds only the native scalar core by default, without the server,
+HTTP, or WASM runtime. Enable `--features local-host` to build the embedded host.
+From the runtime workspace, build and install that configuration with:
 
 ```bash
 scripts/install_tc_server_python.sh
@@ -23,6 +27,26 @@ scripts/install_tc_server_python.sh
 
 Tests which require local execution must fail if that extension is unavailable;
 they must not silently switch to HTTP or a mock backend.
+
+Python retains its authoring wrappers. Boundaries lower them once into native
+values and IR; local execution passes those values directly. `from_json` accepts
+wire objects through native `destream` decoding, and `to_json` explicitly
+materializes wire objects. Neither method uses a JSON text round trip to validate
+or construct expressions. Native codecs own type tags and invocation syntax.
+
+Bare valid HTTP/HTTPS or hostless Link text decodes as a Link. Constructing a
+Python `String` keeps String semantics; its encoder escapes URI-shaped text with
+the String type tag. Known type paths take precedence over invocation subjects;
+calls targeting native `/state/...` paths use explicit operation-reference tags.
+Old URI-keyed Link maps are unsupported; recreate development data using them.
+
+Each native materialization has a finite byte budget (64 MiB by default) and
+inherits the owning Rust structural depth limit. `Codec(max_bytes=...)` configures
+standalone conversions; `Host(max_materialization_bytes=...)` reuses its codec
+for request encoding and scalar response projection. Collection responses retain
+their existing collection-owned materialization behavior; admission to a local
+transaction delegates validation and allocation to the native collection owner.
+These budgets do not make the existing HTTP response reader streaming.
 
 ## Mental model
 
@@ -36,6 +60,9 @@ Use TinyChain operations for deferred comparisons, and use `form_of(...)` only
 when tooling or tests need to inspect canonical in-memory structure.
 Serialization is reserved for HTTP, persistence, WASM, or explicit Python
 materialization; local PyO3 calls pass native State handles.
+Response materialization decodes explicit Value tuple tags into ordinary Python
+lists and literal Link values into strings, including links naming reserved type
+paths. Symbolic reference data retains its reference wrapper.
 
 The implemented top-level namespaces are:
 
@@ -47,13 +74,44 @@ The implemented top-level namespaces are:
 
 See the [Service example](examples/service.md) and
 [Service behavior](SERVICE_PARITY.md) for authoring and local/HTTP persistence.
-Standalone named collection hosting, damaged-storage repair, and persistent
-Tensor storage are not implemented.
+Standalone named collection hosting is unsupported. Native storage supports
+persistent dense and sparse Tensors, but Python's `tc.chain.Sync` currently accepts
+only BTree and Table declarations; `Sync(Tensor)` declarations are not implemented.
+Tensor literals and native Tensor operations remain available; see the
+[Service authoring limits](SERVICE_PARITY.md).
+
+Sparse Tensor values use ordinary implicit zeros, including in reductions. Operations
+which change that zero background require explicit dense conversion; for example,
+`x.as_dense().exp()` includes ones at coordinates omitted by sparse storage.
+The conversion is lazy and retains the source.
 
 Collection inserts are write operations: `tree.insert(row)` and
 `table.insert(key, values)` emit PUT and return a `Scalar` effect. Table insertion
 rejects an existing key; use `table.upsert(key, values)` to replace one. Sequence
 a write before a read with `tc.after(tree.insert(["key"]), tree.count())`.
+
+Every application mutation of a persistent mutable collection must pass through
+its owning Chain, which records accepted mutations for recovery. Returned views
+are read-only, including full selections and identity transforms. Tensor
+`tensor.slice(bounds).write(value)` and Table
+`table.where(column=bound).update(column=value)` / `.truncate()` send a mutation
+to the original owner with that selector. Further selection, ordering, projection,
+or transformation does not compose writable selectors; combine bounds at the
+owner instead. Explicit copies have independent storage and may be mutated.
+
+Python uses the same `Tensor` and `Table` wrappers for owner references and views.
+There is no separate read-only Python type: the host rejects writes to views when
+an expression executes. A selection convenience changes the mutation's target;
+it does not make the returned view writable. For example, inside a decorated
+method with `tensor` and `table` referring to owners:
+
+| Expression | Target and result |
+| --- | --- |
+| `tensor.slice([1, (1, 3)]).write(9)` | Writes to the Tensor owner with the slice bounds. |
+| `tensor.slice([1, (1, 3)]).transpose([0]).write(9)` | Targets a read-only view; execution rejects it, even though this transpose is an identity. |
+| `table.where(key=slice(1, 3)).update(value=11)` | Updates the Table owner with the selected range. |
+| `table.where(key=5).truncate()` | Deletes matching rows through the Table owner. |
+| `table.where(key=slice(1, 3)).where(key=1).update(value=99)` | Targets the first read-only selection; execution rejects it. |
 
 ## URI construction
 
@@ -67,6 +125,9 @@ Application classes expose their validated identity through `class_id()`, and
 is the explicit constructor for boundary code. These builders reject invalid or
 reserved segments before a request is sent. Authority-qualified URIs select a
 remote host; path-only application URIs select the active local backend.
+URI builders treat child names as literal identifier text and escape each segment
+once. Parsing decodes canonical URI text once, preserving Unicode and literal
+percent names. Symbolic references remain a separate IR representation.
 
 ## Author a Library
 
@@ -120,6 +181,11 @@ Supply `kernel=` for in-process execution. Authority-qualified references use
 HTTP when the active executor resolves them remotely. `tc.execute`,
 `tc.Host.execute`, and `tc.Host.request` are lower-level tools for explicit
 plans and transport integrations; they are not parallel application runtimes.
+
+Use an embedded `KernelHandle` as a context manager, or call `shutdown()` before
+releasing its runtime or reopening storage. Consume or drop native results first;
+see the [Service example](examples/service.md) and
+[embedded lifecycle](../rust/README.md#embedded-lifecycle).
 
 Python code never mints a transaction ID, commits, rolls back, or rewrites a
 protocol claim. Those operations belong to the host and the most-specific
@@ -190,9 +256,25 @@ and canonical IR; it does not persist request descriptors or transport headers.
 
 ## Tensor and autodiff surface
 
+Tensor methods use the shared State operation builders. Intermediate operations
+retain their operands through lexical Context bindings: Library authoring and
+TensorGraphBuilder supply those contexts, and manual composition uses
+`with tc.scoped_context() as cxt:`. Chaining an unbound intermediate outside an
+authoring context raises an explicit error. Materialized payloads occupy the
+same State form as other client values; there is no separate Tensor view backend
+or view-schema compiler.
+
 `tc.Tensor` is the backend-neutral symbolic Tensor wrapper. Its operators and
 methods compile to native collection routes; client APIs do not expose storage
-engine names.
+engine names. `Tensor.dense(dtype, shape, values)` creates a materialized dense
+value; `Tensor.sparse(dtype, shape, entries)` accepts ordered, unique, nonzero
+`(coordinate, value)` entries. Both wire schemas contain dtype and shape.
+Sparse contents are a sequence of coordinate/value pairs.
+Sparse `.values` contains
+only nonzero values and `.entries`
+includes their coordinates, so a large logical shape does not allocate implicit
+zeros. The ten real dtypes are supported; complex values require a host built
+with complex Tensor support.
 
 `tc.grad(...)` is an experimental call-site transform over canonical route IR.
 Autodiff route discovery, dependency analysis, lowering, tracing, and derivative
@@ -219,6 +301,11 @@ planned compiler or optimizer work belongs in the roadmap, not this README.
 
 Remote responses decode once at the transport boundary. Native local responses
 remain backed by Rust State handles until Python requests materialization.
+`StateHandle.value()` materializes Python wire objects directly under a finite
+budget; it does not produce JSON text. HTTP alone encodes its JSON byte stream.
+Even after projection, native handles and their clones retain transaction storage
+ownership. Fixed expiry rejects reuse; finalization waits for their release.
+Drop unused handles to avoid indefinitely delaying oldest-first cleanup.
 Collection streams stay lazy; convenience APIs must not turn an unknown-length
 result into an eager list or hidden prefetch queue.
 
@@ -230,10 +317,5 @@ client to select a transaction outcome.
 
 - [Autograph contract](DESIGN_AUTOGRAPH.md)
 - [Class authoring contract](CLASS_PARITY.md)
+- [Service authoring contract](SERVICE_PARITY.md)
 - [Python contributor rules](AGENTS.md)
-
-The following superproject documents are non-normative integration context:
-
-- [Workspace architecture](https://github.com/TinyChain-Inc/tcv2/blob/main/ARCHITECTURE.md)
-- [Transaction protocol](https://github.com/TinyChain-Inc/tcv2/blob/main/docs/protocol/transactions.md)
-- [Backpressure contract](https://github.com/TinyChain-Inc/tcv2/blob/main/BACKPRESSURE.md)

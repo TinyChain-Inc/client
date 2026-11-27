@@ -9,7 +9,7 @@ It consumes the local `client/js` package as `@tinychain/js` via
 
 Runtime requirement: Node.js `20.x` only. Older Node releases are unsupported.
 
-Canonical example entry: [`examples/express-rn-ssr/README.md`](/home/haydn/Documents/tcv2/client/web/examples/express-rn-ssr/README.md).
+Canonical example entry: [`examples/express-rn-ssr/README.md`](examples/express-rn-ssr/README.md).
 Build scripts default to that example source root; override with
 `TC_WEB_APP_SOURCE_ROOT` only when testing alternate entrypoints.
 
@@ -84,7 +84,9 @@ bundled code.
 
 ## Environment Variables
 
-Use [`client/web/.env.example`](/home/haydn/Documents/tcv2/client/web/.env.example) as the baseline contract.
+The [server configuration](src/server/index.mts) defines supported variables and
+defaults. Set overrides in the process environment or its working directory's
+`.env` file.
 
 - Server-only: `TC_TINYCHAIN_SERVER_TOKEN` and any privileged credentials.
 - Browser-safe: `TC_PUBLIC_*` values only.
@@ -93,12 +95,11 @@ Use [`client/web/.env.example`](/home/haydn/Documents/tcv2/client/web/.env.examp
 
 ## Run And Build Commands
 
-From [`client/web/examples/express-rn-ssr/package.json`](/home/haydn/Documents/tcv2/client/web/examples/express-rn-ssr/package.json):
+From [`client/web/examples/express-rn-ssr/package.json`](examples/express-rn-ssr/package.json):
 
 ```bash
 # from repo root
 # requires Node.js 20.x
-cp client/web/.env.example client/web/.env
 cd client/web/examples/express-rn-ssr
 npm run bootstrap
 npm run dev     # watch/rebuild server + client bundles
@@ -111,7 +112,7 @@ npm run test:browser   # optional Playwright smoke test
 ## Testing
 
 Detailed test guidance (unit/integration/browser) lives in
-[`TESTING.md`](/home/haydn/Documents/tcv2/client/web/TESTING.md).
+[`TESTING.md`](TESTING.md).
 
 Run with plain Node tooling:
 

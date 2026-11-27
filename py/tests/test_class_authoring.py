@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+
 import tinychain as tc
 
 
@@ -55,15 +56,16 @@ def test_class_construction_and_bound_methods_are_one_deferred_plan():
             translated = point.translate(dx=1, dy=2)
     assert isinstance(translated, tc.Map)
     assert translated.op.to_json() == {"$_tmp0/translate": {"dx": 1, "dy": 2}}
-    with tc.backend(mode="deferred"):
+    with tc.backend(mode="deferred"), tc.scoped_context():
         assert isinstance(point.label(), tc.String)
 
 
 def test_class_inherited_data_and_missing_member_are_typed():
     point = NamedPoint()
-    assert point.dimensions.to_json() == {
-        f"{NamedPoint.class_id().path}/dimensions": [None]
-    }
+    with tc.scoped_context() as context:
+        dimensions = point.dimensions
+    assert dimensions.to_json() == {"$_tmp0/dimensions": [None]}
+    assert context.value("_tmp0").to_json() == point.to_json()
     with pytest.raises(tc.MissingClassMember, match="unknown"):
         point.unknown
 
@@ -95,8 +97,8 @@ def test_library_manifest_links_separately_installed_classes():
     manifest = compile_ir(Geometry)
     members = manifest[Geometry.class_id().path]
     assert set(members) == {"point", "named-point"}
-    assert next(iter(members["point"])) == Point.class_id().path
-    assert next(iter(members["named-point"])) == NamedPoint.class_id().path
+    assert members["point"] == Point.class_id().path
+    assert members["named-point"] == NamedPoint.class_id().path
 
     class Collision(Geometry):
         @tc.get

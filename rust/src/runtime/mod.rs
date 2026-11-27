@@ -1,9 +1,12 @@
 use pyo3::prelude::PyAnyMethods;
 
+mod authoring;
 mod kernel;
 mod state_handle_conversions;
 mod types;
 mod wire;
+
+pub(super) use crate::codec::wait;
 
 pub(super) fn tc_error(err: tc_error::TCError) -> pyo3::PyErr {
     let exception = pyo3::exceptions::PyRuntimeError::new_err(err.message().to_string());
@@ -25,20 +28,11 @@ pub use kernel::register_python_api;
 fn runtime() -> std::io::Result<std::sync::Arc<tokio::runtime::Runtime>> {
     tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
-        .thread_stack_size(16 * 1024 * 1024)
         .enable_all()
         .build()
         .map(std::sync::Arc::new)
 }
 
-fn wait<F>(runtime: &tokio::runtime::Runtime, future: F) -> F::Output
-where
-    F: std::future::Future + Send + 'static,
-    F::Output: Send + 'static,
-{
-    let (send, receive) = std::sync::mpsc::sync_channel(1);
-    runtime.spawn(async move {
-        let _ = send.send(future.await);
-    });
-    pyo3::Python::attach(|py| py.detach(move || receive.recv().expect("PyO3 runtime task")))
-}
+#[cfg(test)]
+#[path = "../../tests/unit/runtime.rs"]
+mod tests;

@@ -9,12 +9,12 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyModule, PyType};
 
-use super::state_handle_conversions::{request_body_bytes, state_from_handle};
+use crate::{HostStorage, Kernel};
+use super::state_handle_conversions::decode_body;
 use super::types::{
     PyKernelConfig, PyKernelRequest, PyResponse, PyStateHandle, apply_config_overrides,
 };
 use super::wire::py_bearer_token;
-use crate::{HostStorage, Kernel};
 
 fn py_token(token: &Bound<'_, PyAny>) -> PyResult<(String, Link, crate::auth::Actor)> {
     use std::str::FromStr;
@@ -63,14 +63,16 @@ fn python_kernel_builder_with_config(
     trusted_actor: Option<(Link, crate::auth::Actor)>,
     runtime: &tokio::runtime::Runtime,
 ) -> PyResult<Kernel> {
-    let data_dir = config.data_dir.clone();
+    let data_dir = config.data_dir;
     let host_id: tc_ir::Id = config
         .host_id
         .parse()
         .map_err(|error| PyValueError::new_err(format!("invalid host identity: {error}")))?;
-    let workspace = config.workspace.clone().ok_or_else(|| {
+
+    let workspace = config.workspace.ok_or_else(|| {
         PyValueError::new_err("workspace is required for a local TinyChain kernel")
     })?;
+
     let data_dir = data_dir.ok_or_else(|| {
         PyValueError::new_err("data_dir is required for a local TinyChain kernel")
     })?;
@@ -85,10 +87,10 @@ fn python_kernel_builder_with_config(
                 .load_or_create_protocol_authority(&host_id, host)
                 .await?;
             Ok::<_, tc_error::TCError>((application_roots, workspace, protocol, protocol_actor))
-        })
+        })?
         .map_err(super::tc_error)?;
 
-    let resources = crate::HostResources::new(config.limits.clone()).map_err(super::tc_error)?;
+    let resources = crate::HostResources::new(config.limits).map_err(super::tc_error)?;
     let gateway = crate::http_client::HttpGateway::new();
     let host: Link = "/host".parse().expect("host URI");
     let keyring = crate::auth::KeyringActorResolver::default();
@@ -114,47 +116,29 @@ fn python_kernel_builder_with_config(
         bootstrap,
         bootstrap_required: false,
     };
-    super::wait(
-        runtime,
-        Kernel::new(services, workspace, config.limits.transaction_ttl),
-    )
-    .map_err(super::tc_error)
+
+    super::wait(runtime, Kernel::new(services, workspace))?.map_err(super::tc_error)
 }
 
 #[pyclass(name = "KernelHandle", from_py_object)]
+#[derive(Clone)]
 pub struct KernelHandle {
     inner: Arc<Kernel>,
     runtime: Arc<tokio::runtime::Runtime>,
-    config: PyKernelConfig,
-}
-
-impl Clone for KernelHandle {
-    fn clone(&self) -> Self {
-        Self {
-            inner: Arc::clone(&self.inner),
-            runtime: Arc::clone(&self.runtime),
-            config: self.config.clone(),
-        }
-    }
 }
 
 impl KernelHandle {
-    fn from_kernel(
-        kernel: Kernel,
-        config: PyKernelConfig,
-        runtime: Arc<tokio::runtime::Runtime>,
-    ) -> Self {
+    fn from_kernel(kernel: Kernel, runtime: Arc<tokio::runtime::Runtime>) -> Self {
         Self {
             inner: Arc::new(kernel),
             runtime,
-            config,
         }
     }
 
-    fn wait<F>(&self, fut: F) -> F::Output
+    fn wait<F>(&self, fut: F) -> PyResult<F::Output>
     where
-        F: std::future::Future + Send + 'static,
-        F::Output: Send + 'static,
+        F: std::future::Future + Send,
+        F::Output: Send,
     {
         super::wait(&self.runtime, fut)
     }
@@ -176,17 +160,15 @@ impl KernelHandle {
             ..PyKernelConfig::default()
         };
         let config = apply_config_overrides(config, request_ttl_secs, max_request_bytes_unauth);
-        let runtime = super::runtime().expect("tokio runtime");
-        let kernel = python_kernel_builder_with_config(config.clone(), None, &runtime)?;
-        Ok(Self::from_kernel(kernel, config, runtime))
+        let runtime = super::runtime()
+            .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?;
+
+        let kernel = python_kernel_builder_with_config(config, None, &runtime)?;
+        Ok(Self::from_kernel(kernel, runtime))
     }
 
-    /// Construct a local kernel handle with no Python service handlers
-    /// installed.
-    ///
-    /// This is intended for tooling/tests which only need the Rust `/lib` and
-    /// `/healthz` handlers (e.g. WASM installs into a local `data_dir`)
-    /// without providing Python callbacks.
+    /// Construct a local kernel using native application handlers.
+    /// Call shutdown before releasing its runtime or reopening its storage.
     #[classmethod]
     #[pyo3(signature = (data_dir=None, workspace=None, token=None, request_ttl_secs=None, max_request_bytes_unauth=None))]
     pub fn local(
@@ -203,124 +185,81 @@ impl KernelHandle {
             ..PyKernelConfig::default()
         };
         let config = apply_config_overrides(config, request_ttl_secs, max_request_bytes_unauth);
-        let runtime = super::runtime().expect("tokio runtime");
+        let runtime = super::runtime()
+            .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?;
+
         let trusted = token
             .map(py_token)
             .transpose()?
             .map(|(_, host, actor)| (host, actor));
-        let kernel = python_kernel_builder_with_config(config.clone(), trusted, &runtime)?;
-        Ok(Self::from_kernel(kernel, config, runtime))
+
+        let kernel = python_kernel_builder_with_config(config, trusted, &runtime)?;
+        Ok(Self::from_kernel(kernel, runtime))
     }
 
     pub fn dispatch(&self, request: PyKernelRequest) -> PyResult<PyResponse> {
-        let method = request.method_enum();
-        let raw_path = request.path_owned();
-        let body_is_none = request.body().is_none();
         let bearer = py_bearer_token(&request);
-        let kernel = Arc::clone(&self.inner);
-        let guard = self
-            .wait(async move {
-                kernel
-                    .begin_request(method, &raw_path, body_is_none, bearer)
-                    .await
-            })
+        let PyKernelRequest {
+            method,
+            path: raw_path,
+            headers,
+            body,
+        } = request;
+
+        let body_is_none = body.is_none();
+        let request = self
+            .wait(
+                self.inner
+                    .begin_request(method, &raw_path, body_is_none, bearer),
+            )?
             .map_err(super::tc_error)?;
-        {
-            let guard = *guard;
-            let contract = guard.body_contract();
-            let request_body = request.body();
-            let content_type = request.headers.iter().find_map(|(name, value)| {
-                name.eq_ignore_ascii_case("content-type")
-                    .then_some(value.as_str())
-            });
-            if matches!(contract, crate::BodyContract::Application { .. })
-                && !matches!(
-                    content_type,
-                    None | Some("application/json") | Some("application/wasm")
-                )
-            {
-                return Err(PyValueError::new_err(
-                    "unsupported application content type",
-                ));
-            }
-            let (body, _memory) = match contract {
-                crate::BodyContract::Application { max_bytes }
-                    if content_type == Some("application/wasm") =>
-                {
-                    let bytes = request_body_bytes(request_body)?;
-                    if bytes.is_empty() || bytes.len() > max_bytes {
-                        return Err(PyValueError::new_err("invalid WASM Library size"));
-                    }
-                    let permit = self
-                        .wait(guard.admit_application_memory(bytes.len()))
-                        .map_err(super::tc_error)?;
-                    (
-                        Some(crate::State::Tuple(vec![
-                            crate::State::None,
-                            crate::State::from(tc_value::Value::Bytes(bytes.into())),
-                        ])),
-                        Some(permit),
-                    )
-                }
-                crate::BodyContract::Application { max_bytes } => {
-                    if request_body.as_ref().is_some_and(PyStateHandle::is_native) {
-                        (
-                            state_from_handle(request_body, guard.txn().clone(), &self.runtime)?,
-                            None,
-                        )
-                    } else {
-                        let bytes = request_body_bytes(request_body)?;
-                        if bytes.len() > max_bytes {
-                            return Err(PyValueError::new_err(
-                                "application body exceeds its request bound",
-                            ));
-                        }
-                        let permit = self
-                            .wait(guard.admit_application_memory(bytes.len()))
-                            .map_err(super::tc_error)?;
-                        let input = futures::stream::iter([Ok::<_, std::io::Error>(bytes.into())]);
-                        // Installation carries a scalar definition, not a live
-                        // State: collection/Chain declarations must remain refs.
-                        let (key, definition): (tc_value::Value, tc_ir::Scalar) = self
-                            .wait(async move { destream_json::try_decode((), input).await })
-                            .map_err(|error| PyValueError::new_err(error.to_string()))?;
-                        (
-                            Some(crate::State::Tuple(vec![key.into(), definition.into()])),
-                            Some(permit),
-                        )
-                    }
-                }
-                _ => (
-                    state_from_handle(request_body, guard.txn().clone(), &self.runtime)?,
-                    None,
-                ),
-            };
-            let result = self.wait(guard.execute_bound(body));
-            match result {
-                Ok((_, _, guard))
-                    if matches!(contract, crate::BodyContract::Application { .. }) =>
-                {
-                    self.wait(guard.finish_success()).map_err(super::tc_error)?;
-                    Ok(PyResponse::new(204, None, None))
-                }
-                Ok((None, _, _guard)) => Ok(PyResponse::new(204, None, None)),
-                Ok((Some(state), _, guard)) => Ok(PyResponse::new(
-                    200,
-                    None,
-                    Some(PyStateHandle::from_terminal_state(
-                        state,
-                        guard,
-                        Arc::clone(&self.runtime),
-                    )),
+
+        let mut request = *request;
+        let content_type = headers.iter().find_map(|(name, value)| {
+            name.eq_ignore_ascii_case("content-type")
+                .then_some(value.as_str())
+        });
+
+        let (body, _memory) = decode_body(body, content_type, &mut request, &self.runtime)?;
+        let response = self
+            .wait(request.execute_bound(body))?
+            .map_err(super::tc_error)?;
+
+        match response {
+            Some((state, request)) => Ok(PyResponse::new(
+                200,
+                None,
+                Some(PyStateHandle::from_terminal_state(
+                    state,
+                    request,
+                    Arc::clone(&self.runtime),
                 )),
-                Err(error) => Err(super::tc_error(error)),
-            }
+            )),
+            None => Ok(PyResponse::new(204, None, None)),
         }
     }
 
+    /// Drain admitted requests and active finalization before runtime teardown.
+    /// Consume or drop unfinished result handles before calling this method.
+    pub fn shutdown(&self) -> PyResult<()> {
+        self.wait(self.inner.shutdown())
+    }
+
+    pub fn __enter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    pub fn __exit__(
+        &self,
+        _exception_type: &Bound<'_, PyAny>,
+        _exception: &Bound<'_, PyAny>,
+        _traceback: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        self.shutdown()
+    }
+
     pub fn healthz(&self) -> PyResult<()> {
-        let kernel = Arc::clone(&self.inner);
-        kernel
+        self.inner
             .health(crate::Method::Get)
             .map(|_| ())
             .map_err(super::tc_error)

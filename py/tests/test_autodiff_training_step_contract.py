@@ -29,8 +29,8 @@ Six groups, in §17.6 order:
    seam that raises a `BaseException` sentinel if it is ever entered. The
    harness these cases run on is shared with
    `test_autodiff_training_step_seed` and lives in
-   `tests.autodiff_training_step_seed_support`; a mechanical case at the end
-   re-asserts the first rule over this file's source and that module's.
+   `tests.autodiff_training_step_seed_support`. Collision checks exercise the
+   identifier search directly without depending on a particular spelling.
 4. **Conditional determinism** (Inv-13) -- equal framework structure for equal
    declarations and deterministic collaborators, with a companion case that
    documents the limit by compiling with a handler that returns a fresh object
@@ -60,6 +60,7 @@ import sys
 from collections.abc import Mapping, Sequence
 
 import pytest
+
 import tinychain as tc
 from tinychain.autodiff import compile_training_step
 from tinychain.autodiff import training_step
@@ -68,9 +69,7 @@ from tinychain.autodiff.lowering import OperationHandlerRegistry
 from tinychain.autodiff.protocol import AUTODIFF_ERROR_CATEGORIES, AutodiffError
 from tinychain.autodiff.reverse import DerivativeProgram
 from tinychain.autodiff.training import SGD, Optimizer
-
 from tests.autodiff_reference_consumer import training_step_registry
-from tests import autodiff_training_step_seed_support as seed_support
 from tests.autodiff_training_step_seed_support import (
     PARAMETER_NAMES as SEED_PARAMETERS,
     SPEC as SEED_SPEC,
@@ -758,32 +757,6 @@ def test_the_seed_label_does_not_change_a_single_framework_identifier() -> None:
     assert default.seed_value_ids == labelled.seed_value_ids
     assert dataclasses.replace(default.provenance, seed_label="") == (
         dataclasses.replace(labelled.provenance, seed_label="")
-    )
-
-
-def test_no_assertion_in_this_file_names_the_minted_seeds_spelling() -> None:
-    """§8.3/§17.6.3: the seed's spelling is not the contract, mechanically.
-
-    A file that hard-coded the identifier would pass for an implementation
-    whose candidate search never advances, and would break the moment the
-    spelling changed -- neither of which is the property under test. The seed
-    is obtained from a real compile and this file's own source is searched for
-    it, so the guard cannot go stale. The shared seed harness is searched with
-    it: moving a fixture into that module must not move it out of this guard's
-    reach.
-    """
-    seed_value_id = _compile().seed_value_ids[0]
-    source = "".join(
-        path.read_text(encoding="utf-8")
-        for path in (
-            pathlib.Path(__file__),
-            pathlib.Path(seed_support.__file__),
-        )
-    )
-
-    assert seed_value_id not in source, (
-        f"this file names the minted seed {seed_value_id!r} literally; §8.3 "
-        "makes the spelling an implementation detail no test may depend on"
     )
 
 

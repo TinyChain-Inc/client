@@ -154,41 +154,40 @@ def run_demo(
         data_dir = pathlib.Path(temp_dir) / "tc-data"
         data_dir.mkdir(parents=True, exist_ok=True)
 
-        kernel = tc.kernel.with_library(
+        with tc.kernel.with_library(
             a,
             data_dir=data_dir,
             token=runtime_token,
-        )
+        ) as kernel:
+            install = tc.install(
+                a,
+                wasm=wasm_path,
+                kernel=kernel,
+                token=install_token,
+            )
+            if install.status != 204:
+                raise RuntimeError(f"unexpected install status {install.status}")
 
-        install = tc.install(
-            a,
-            wasm=wasm_path,
-            kernel=kernel,
-            token=install_token,
-        )
-        if install.status != 204:
-            raise RuntimeError(f"unexpected install status {install.status}")
+            # Idiomatic mode: one backend context, route calls auto-execute.
+            with tc.backend(
+                kernel,
+                token=runtime_token,
+                mode="deferred",
+            ):
+                planned_remote = b.hello("World")
+                planned_local = a.from_b("World")
+                assert isinstance(planned_remote, tc.String)
+                assert isinstance(planned_local, tc.String)
+                assert tc.execute(planned_remote) == "Hello, World!"
+                assert tc.execute(planned_local) == "Hello, World!"
 
-        # Idiomatic mode: one backend context, route calls auto-execute.
-        with tc.backend(
-            kernel,
-            token=runtime_token,
-            mode="deferred",
-        ):
-            planned_remote = b.hello("World")
-            planned_local = a.from_b("World")
-            assert isinstance(planned_remote, tc.String)
-            assert isinstance(planned_local, tc.String)
-            assert tc.execute(planned_remote) == "Hello, World!"
-            assert tc.execute(planned_local) == "Hello, World!"
-
-        with tc.backend(
-            kernel,
-            token=runtime_token,
-        ):
-            print("route auth context:", a.auth_context())
-            print("auto remote call:", b.hello("World"))
-            print("auto local call:", a.from_b("World"))
+            with tc.backend(
+                kernel,
+                token=runtime_token,
+            ):
+                print("route auth context:", a.auth_context())
+                print("auto remote call:", b.hello("World"))
+                print("auto local call:", a.from_b("World"))
 
 
 def main(argv: Optional[list[str]] = None) -> int:

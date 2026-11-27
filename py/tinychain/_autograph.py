@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import copy
 import ast
+import copy
 import inspect
 import textwrap
 from dataclasses import dataclass
@@ -274,7 +274,7 @@ class _AutographTransformer(ast.NodeTransformer):
         cond = _replace_names(stmt.test, allowed, "_tc_autograph")
         then_expr = self._lower_if_return_expr(stmt.body[0], allowed)
         else_expr = self._lower_if_return_orelse(stmt.orelse, allowed)
-        return ast.Return(value=self._tc_cond(cond, then_expr, else_expr))
+        return ast.Return(value=self._capture_locals(self._tc_cond(cond, then_expr, else_expr)))
 
     def _lower_if_return_expr(self, stmt: ast.stmt, allowed: set[str]) -> ast.expr:
         if not isinstance(stmt, ast.Return):
@@ -297,10 +297,12 @@ class _AutographTransformer(ast.NodeTransformer):
             raise AutographControlFlowError("nested control flow is not supported in if branches")
 
         allowed = {*self._params, *self._locals}
-        map_expr, names = self._lower_if_map(stmt, allowed)
+        map_expr, names = self._lower_if_map(stmt, allowed, self._locals)
         return _IfAssignments(map_expr=map_expr, names=names)
 
-    def _lower_if_map(self, stmt: ast.If, allowed: set[str]) -> tuple[ast.expr, list[str]]:
+    def _lower_if_map(
+        self, stmt: ast.If, allowed: set[str], captures: set[str]
+    ) -> tuple[ast.expr, list[str]]:
         if _contains_disallowed_control(stmt.body):
             raise AutographControlFlowError("nested control flow is not supported in if branches")
         if not (len(stmt.orelse) == 1 and isinstance(stmt.orelse[0], ast.If)) and _contains_disallowed_control(
@@ -308,8 +310,8 @@ class _AutographTransformer(ast.NodeTransformer):
         ):
             raise AutographControlFlowError("nested control flow is not supported in if branches")
 
-        cond_expr = _replace_names(stmt.test, allowed, "_tc_autograph")
-        then_form, then_names = self._collect_if_branch_form(stmt.body, allowed)
+        cond_expr = self._capture_locals(_replace_names(stmt.test, allowed, "_tc_autograph"), captures)
+        then_form, then_names = self._collect_if_branch_form(stmt.body, allowed, captures)
 
         if not stmt.orelse:
             # No-else assignment sugar keeps existing bindings unchanged.
@@ -319,13 +321,13 @@ class _AutographTransformer(ast.NodeTransformer):
                 raise AutographAssignmentError(
                     f"if without else may only assign previously bound names: {missing_str}"
                 )
-            else_form = [(name, _id_call(name)) for name in then_names]
+            else_form = [(name, self._capture_locals(_id_call(name), captures)) for name in then_names]
             else_names = list(then_names)
         elif len(stmt.orelse) == 1 and isinstance(stmt.orelse[0], ast.If):
-            else_map_expr, else_names = self._lower_if_map(stmt.orelse[0], allowed)
+            else_map_expr, else_names = self._lower_if_map(stmt.orelse[0], allowed, captures)
             else_form = self._if_map_to_form(else_map_expr, else_names, allowed)
         else:
-            else_form, else_names = self._collect_if_branch_form(stmt.orelse, allowed)
+            else_form, else_names = self._collect_if_branch_form(stmt.orelse, allowed, captures)
 
         if set(then_names) != set(else_names):
             raise AutographAssignmentError("if branches must assign the same set of names")
@@ -340,7 +342,7 @@ class _AutographTransformer(ast.NodeTransformer):
         return map_expr, then_names
 
     def _collect_if_branch_form(
-        self, stmts: list[ast.stmt], allowed: set[str]
+        self, stmts: list[ast.stmt], allowed: set[str], captures: set[str]
     ) -> tuple[list[tuple[str, ast.expr]], list[str]]:
         if not stmts:
             raise AutographAssignmentError("if branches must assign at least one name")
@@ -357,14 +359,18 @@ class _AutographTransformer(ast.NodeTransformer):
                     name = target.id
                     if name in names:
                         raise AutographAssignmentError(f"duplicate assignment to {name} in branch")
-                    expr = _replace_names(stmt.value, bound, "_tc_autograph")
+                    expr = self._capture_locals(
+                        _replace_names(stmt.value, bound, "_tc_autograph"), captures - set(names)
+                    )
                     form.append((name, expr))
                     names.append(name)
                     bound.add(name)
                     continue
                 if isinstance(target, ast.Tuple) and all(isinstance(elt, ast.Name) for elt in target.elts):
                     temp_name = self._unique_temp_name("_if_tuple_", bound, names)
-                    value_expr = _replace_names(stmt.value, bound, "_tc_autograph")
+                    value_expr = self._capture_locals(
+                        _replace_names(stmt.value, bound, "_tc_autograph"), captures - set(names)
+                    )
                     form.append((temp_name, value_expr))
                     bound.add(temp_name)
                     for index, elt in enumerate(target.elts):
@@ -386,7 +392,7 @@ class _AutographTransformer(ast.NodeTransformer):
                     continue
                 raise AutographAssignmentError("if assignment branches must contain only simple assignments")
             if isinstance(stmt, ast.If):
-                map_expr, nested_names = self._lower_if_map(stmt, bound)
+                map_expr, nested_names = self._lower_if_map(stmt, bound, captures - set(names))
                 form.extend(self._if_map_to_form(map_expr, nested_names, bound, names))
                 continue
             raise AutographAssignmentError("if assignment branches must contain only assignments or if statements")
@@ -546,7 +552,7 @@ class _AutographTransformer(ast.NodeTransformer):
         )
 
         tmp_name = self._temp_name("_tmp_for_each")
-        return [self._bind_local(tmp_name, for_each_call)]
+        return [self._bind_local(tmp_name, self._capture_locals(for_each_call))]
 
     def _check_name_binding(self, name: str) -> None:
         if name in _RESERVED_NAMES:
@@ -679,16 +685,21 @@ class _AutographTransformer(ast.NodeTransformer):
             rename[name] = actual
             self._provider_ids.add(actual)
 
-        rewritten = [
-            (rename[name], _rename_local_refs(expr, rename))
-            for name, expr in items
-        ]
+        replacements = {name: _id_call(actual) for name, actual in rename.items()}
+        rewritten = [(rename[name], _replace_local_refs(expr, replacements)) for name, expr in items]
         return _opdef_post(rewritten)
+
+    def _capture_locals(self, expr: ast.expr, names: set[str] | None = None) -> ast.expr:
+        # Capture the actual SSA references held by Python locals. Nested
+        # operation providers retain their own lexical names.
+        names = self._locals if names is None else names
+        replacements = {name: ast.Name(id=name, ctx=ast.Load()) for name in names}
+        return _replace_local_refs(expr, replacements)
 
     def _lower_while_if_assignments(
         self, stmt: ast.If, allowed: set[str]
     ) -> list[tuple[str, ast.expr]]:
-        map_expr, names = self._lower_if_map(stmt, allowed)
+        map_expr, names = self._lower_if_map(stmt, allowed, set())
         bound = set(allowed)
         return self._if_map_to_form(map_expr, names, bound)
 
@@ -787,8 +798,8 @@ def _id_call(name: str) -> ast.Call:
     )
 
 
-def _rename_local_refs(expr: ast.expr, rename: dict[str, str]) -> ast.expr:
-    """Rename this form's references without entering nested lexical forms."""
+def _replace_local_refs(expr: ast.expr, replacements: dict[str, ast.expr]) -> ast.expr:
+    """Replace references while preserving nested lexical providers."""
 
     class _LocalRefRenamer(ast.NodeTransformer):
         def visit_Call(self, node: ast.Call) -> ast.AST:
@@ -805,7 +816,7 @@ def _rename_local_refs(expr: ast.expr, rename: dict[str, str]) -> ast.expr:
                     }
                     captured = {
                         name: actual
-                        for name, actual in rename.items()
+                        for name, actual in replacements.items()
                         if name not in nested_names
                     }
                     if captured:
@@ -815,7 +826,7 @@ def _rename_local_refs(expr: ast.expr, rename: dict[str, str]) -> ast.expr:
                                 and isinstance(item.body, ast.Tuple)
                                 and len(item.body.elts) == 2
                             ):
-                                item.body.elts[1] = _rename_local_refs(
+                                item.body.elts[1] = _replace_local_refs(
                                     item.body.elts[1], captured
                                 )
                 return node
@@ -828,9 +839,9 @@ def _rename_local_refs(expr: ast.expr, rename: dict[str, str]) -> ast.expr:
                 and len(node.args) == 1
                 and isinstance(node.args[0], ast.Constant)
                 and isinstance(node.args[0].value, str)
-                and node.args[0].value in rename
+                and node.args[0].value in replacements
             ):
-                node.args[0] = ast.Constant(value=rename[node.args[0].value])
+                return copy.deepcopy(replacements[node.args[0].value])
             return node
 
     return _LocalRefRenamer().visit(expr)

@@ -3,9 +3,9 @@ from __future__ import annotations
 import pathlib
 
 import pytest
+
 import tinychain as tc
 import tinychain.testing as tc_testing
-
 from tinychain.autodiff import (
     AddOperator,
     ArtifactError,
@@ -17,7 +17,11 @@ from tinychain.autodiff import (
     build_derivative_execution_library,
 )
 from tinychain.library import library_definition
-from tests.support import install_token, require_local_tensor_backend, require_tinychain_local
+from tests.support import (
+    install_token,
+    require_local_tensor_backend,
+    require_tinychain_local,
+)
 
 
 TIMEOUT_SECONDS = 5
@@ -134,7 +138,6 @@ def test_real_dispatcher_missing_value_uses_autodiff_error() -> None:
 
 
 def test_real_dispatcher_executes_installed_route_against_local_backend(tmp_path: pathlib.Path) -> None:
-    pytest.importorskip("tinychain_local")
     require_tinychain_local(require_library_definition=True)
     _, dense_f64 = require_local_tensor_backend()
     program = _program()
@@ -148,34 +151,37 @@ def test_real_dispatcher_executes_installed_route_against_local_backend(tmp_path
     )
     token = install_token(library_cls.class_id().path)
     kernel = tc.kernel.with_library(library_cls(), data_dir=tmp_path, token=token)
-    install_response = tc.install(library_cls, kernel=kernel, data_dir=tmp_path, token=token)
-    assert install_response.status == 204
-    library = library_cls()
-    route = getattr(library, getattr(library_cls, "__tc_derivative_route_name__"))
-    route_calls = 0
+    try:
+        install_response = tc.install(library_cls, kernel=kernel, data_dir=tmp_path, token=token)
+        assert install_response.status == 204
+        library = library_cls()
+        route = getattr(library, getattr(library_cls, "__tc_derivative_route_name__"))
+        route_calls = 0
 
-    def execute_route(call_values: dict[str, object]) -> object:
-        nonlocal route_calls
-        route_calls += 1
-        with tc.backend(kernel):
-            return route(**call_values)
+        def execute_route(call_values: dict[str, object]) -> object:
+            nonlocal route_calls
+            route_calls += 1
+            with tc.backend(kernel):
+                return route(**call_values)
 
-    dispatcher = DerivativeExecutionDispatcher(
-        route_executor=execute_route,
-        params=tuple(getattr(library_cls, "__tc_derivative_params__")),
-    )
+        dispatcher = DerivativeExecutionDispatcher(
+            route_executor=execute_route,
+            params=tuple(getattr(library_cls, "__tc_derivative_params__")),
+        )
 
-    seed = dense_f64([2], [1.0, 2.0])
-    other = dense_f64([2], [10.0, 20.0])
+        seed = dense_f64([2], [1.0, 2.0])
+        other = dense_f64([2], [10.0, 20.0])
 
-    result = tc_testing.run_with_timeout(
-        TIMEOUT_SECONDS,
-        lambda: dispatcher.execute(program, values={"seed": seed, "other": other}),
-    )
+        result = tc_testing.run_with_timeout(
+            TIMEOUT_SECONDS,
+            lambda: dispatcher.execute(program, values={"seed": seed, "other": other}),
+        )
 
-    (gradient,) = result.gradients
-    assert isinstance(gradient, tc.Tensor)
-    assert gradient.shape == [2]
-    assert gradient.values == [11.0, 22.0]
-    assert route_calls == 1
-    assert result.metadata == program.metadata
+        (gradient,) = result.gradients
+        assert isinstance(gradient, tc.Tensor)
+        assert gradient.shape == [2]
+        assert gradient.values == [11.0, 22.0]
+        assert route_calls == 1
+        assert result.metadata == program.metadata
+    finally:
+        kernel.shutdown()

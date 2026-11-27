@@ -56,15 +56,16 @@ from types import MappingProxyType
 
 import numpy as np
 import pytest
+
 import tinychain as tc
 from tinychain.autodiff import (
+    AutodiffError,
     TensorOperator,
     lower_derivative_program,
     lower_graph,
 )
 from tinychain.autodiff import training_step
 from tinychain.autodiff.training import SGD
-
 from tests.autodiff_reference_consumer import (
     recording_registry,
     training_step_registry,
@@ -405,19 +406,14 @@ def test_every_lowered_operation_carries_concrete_operator_instances():
 # --------------------------------------------------------------------------
 
 
-def test_the_canonical_loss_has_a_non_empty_capture_set():
+def test_every_capture_is_reachable_from_the_forward_programs_selected_outputs():
     record = compile_one_parameter()
+    values = concrete_inputs(with_bias=False)
 
     assert record.forward_capture_value_ids
     assert record.forward.selected_outputs == (
         record.loss_value_id,
     ) + record.forward_capture_value_ids
-
-
-def test_every_capture_is_reachable_from_the_forward_programs_selected_outputs():
-    record = compile_one_parameter()
-    values = concrete_inputs(with_bias=False)
-
     forward_outputs = run_forward(record, values)
 
     assert set(record.forward_capture_value_ids) <= set(forward_outputs)
@@ -482,6 +478,8 @@ def test_two_parameter_gradients_land_on_their_own_parameters():
 
     executed = execute_step(record, values, learning_rate=learning_rate)
 
+    assert values["w"].shape != values["b"].shape
+    assert tuple(compiled.name for compiled in record.parameters) == ("w", "b")
     expected_gradients = reference_gradients(values)
     for name in ("w", "b"):
         assert executed.gradients[name].shape == values[name].shape
@@ -498,34 +496,7 @@ def test_two_parameter_gradients_land_on_their_own_parameters():
             atol=TOLERANCE,
         )
 
-
-def test_the_two_parameter_pairing_assertion_has_teeth():
-    record = compile_two_parameters()
-    values = concrete_inputs(with_bias=True)
-    learning_rate = 0.05
-    executed = execute_step(record, values, learning_rate=learning_rate)
-    expected_gradients = reference_gradients(values)
-
-    # A swapped comparison must fail: if it did not, the pairing assertion
-    # above would hold for a compiler that routed the gradients backwards.
-    with pytest.raises(AssertionError):
-        np.testing.assert_allclose(
-            executed.gradients["w"],
-            expected_gradients["b"],
-            rtol=TOLERANCE,
-            atol=TOLERANCE,
-        )
-    with pytest.raises(AssertionError):
-        np.testing.assert_allclose(
-            executed.gradients["b"],
-            expected_gradients["w"],
-            rtol=TOLERANCE,
-            atol=TOLERANCE,
-        )
-
-    # And feeding a parameter's update the *other* parameter's gradient does
-    # not quietly produce a plausible number.
-    with pytest.raises(Exception):
+    with pytest.raises(AutodiffError) as excinfo:
         run_update(
             record.parameter("w"),
             parameter=values["w"],
@@ -533,15 +504,7 @@ def test_the_two_parameter_pairing_assertion_has_teeth():
             learning_rate=learning_rate,
         )
 
-
-def test_the_two_parameters_have_different_shapes():
-    # The premise the routing guard rests on: a swap is observable.
-    record = compile_two_parameters()
-
-    assert tuple(TWO_PARAMETER_INPUTS["w"]["shape"]) != tuple(
-        TWO_PARAMETER_INPUTS["b"]["shape"]
-    )
-    assert tuple(compiled.name for compiled in record.parameters) == ("w", "b")
+    assert excinfo.value.category == "handler_contract_violation"
 
 
 # --------------------------------------------------------------------------

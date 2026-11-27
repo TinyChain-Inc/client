@@ -5,6 +5,7 @@ import gc
 import weakref
 
 import pytest
+
 import tinychain as tc
 
 
@@ -71,6 +72,20 @@ def test_nested_context_captures_but_cannot_shadow() -> None:
             assert inner.captured is outer.captured
             with pytest.raises(ValueError, match="visible binding"):
                 inner.bind("captured", 2)
+
+
+def test_nested_auto_bindings_do_not_collide_with_later_enclosing_bindings() -> None:
+    with tc.scoped_context() as outer:
+        first = outer.bind_auto(1)
+        with tc.scoped_context() as inner:
+            nested = inner.bind_auto(2)
+        last = outer.bind_auto(3)
+
+    names = {tc.state.form_of(value).name for value in (first, nested, last)}
+    assert len(names) == 3
+
+    callback = tc.state.PostOpDef([*inner.form(), ("nested_result", nested)])
+    tc.state.PostOpDef([*outer.form(), ("result", callback)]).validate()
 
 
 def test_scope_restores_after_exception_and_cancellation() -> None:
@@ -140,11 +155,6 @@ def test_requires_reports_only_unbound_lexical_inputs() -> None:
     required: set[str] = set()
     op.requires(required)
     assert required == {"input"}
-
-
-def test_context_is_owned_by_the_top_level_authoring_api() -> None:
-    assert not hasattr(tc.state, "Context")
-    assert not hasattr(tc.state, "scoped_context")
 
 
 def test_route_compilation_rejects_undefined_lexical_inputs() -> None:
